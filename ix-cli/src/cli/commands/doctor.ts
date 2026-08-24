@@ -3,6 +3,8 @@ import chalk from "chalk";
 import { renderSection, renderSuccess, renderError } from "../ui.js";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
+import { resolveWorkspaceId } from "../bootstrap.js";
+import { resolveReadSystemId } from "../resolve.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join as pathJoin, win32 as winPath } from "node:path";
@@ -126,8 +128,27 @@ export function registerDoctorCommand(program: Command): void {
       // the second one was most of what `ix doctor` spent. Memoized rather than
       // hoisted so a run that never reaches those checks still never asks, and
       // so a failure is still reported per check rather than aborting both.
-      let statsOnce: Promise<any> | undefined;
-      const sharedStats = (): Promise<any> => (statsOnce ??= client.stats());
+      // Counting only the active scope makes the number correct and, on its own,
+      // less self-evident: "0 nodes" against a backend holding thousands reads
+      // as a broken install until it says whose nodes it counted. The scope
+      // travels with the count so the check explains itself.
+      let statsOnce: Promise<{ stats: any; scope: string }> | undefined;
+      const sharedStats = (): Promise<{ stats: any; scope: string }> => (statsOnce ??= (async () => {
+        // Scoped the same way `ix stats` scopes, because doctor disagreeing with
+        // stats about the size of the graph is the whole of #510. Not a
+        // tombstone fix: /v1/stats filters `deleted_rev == null` in every one of
+        // its queries, scoped or not, so deleted nodes were never in either
+        // count. What the unscoped call added was every *live* node belonging to
+        // some other workspace on the same backend, which is how a freshly
+        // reset workspace still looked like a 17k-node graph.
+        const systemId = await resolveReadSystemId(client);
+        const workspaceId = systemId ? undefined : resolveWorkspaceId();
+        const stats = await client.stats({ workspaceId, systemId });
+        // Undefined on both means no workspace is registered yet, and the
+        // request really was unscoped — say that rather than name a scope.
+        const scope = systemId ? "this system" : workspaceId ? "this workspace" : "all workspaces";
+        return { stats, scope };
+      })());
 
       const checks: Check[] = [
         {
@@ -147,9 +168,9 @@ export function registerDoctorCommand(program: Command): void {
           name: "Graph has nodes",
           run: async () => {
             try {
-              const s = await sharedStats();
-              const total = s.nodes?.total ?? 0;
-              return { ok: total > 0, detail: `${total} nodes` };
+              const { stats, scope } = await sharedStats();
+              const total = stats.nodes?.total ?? 0;
+              return { ok: total > 0, detail: `${total} nodes in ${scope}` };
             } catch (e: any) {
               return { ok: false, detail: e.message ?? "stats failed" };
             }
@@ -159,9 +180,9 @@ export function registerDoctorCommand(program: Command): void {
           name: "Graph has edges",
           run: async () => {
             try {
-              const s = await sharedStats();
-              const total = s.edges?.total ?? 0;
-              return { ok: total > 0, detail: `${total} edges` };
+              const { stats, scope } = await sharedStats();
+              const total = stats.edges?.total ?? 0;
+              return { ok: total > 0, detail: `${total} edges in ${scope}` };
             } catch (e: any) {
               return { ok: false, detail: e.message ?? "stats failed" };
             }
