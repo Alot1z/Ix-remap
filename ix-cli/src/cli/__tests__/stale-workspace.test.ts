@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { clearIngestMtimeCache, ingestMtimeCachePath, saveConfig } from "../config.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { persistIngestBaselineIfClean } from "../commands/ingest.js";
-import { detectStaleFiles, isFileStale } from "../stale.js";
+import { createStaleProbe, detectStaleFiles, hasCompletedMapBaseline, isFileStale } from "../stale.js";
 
 let home: string;
 let savedHome: string | undefined;
@@ -108,7 +108,19 @@ describe("workspace-scoped staleness", () => {
 
   it("returns the unmapped state when the workspace has no baseline", async () => {
     const root = path.join(home, "unmapped");
-    writeSource(root, "new.js", "export const value = 1;\n");
+    const filePath = writeSource(root, "new.js", "export const value = 1;\n");
+    saveConfig({
+      endpoint: "http://localhost:8090",
+      format: "text",
+      workspaces: [
+        {
+          workspace_id: "unmapped0001",
+          workspace_name: "unmapped",
+          root_path: root,
+          default: true,
+        },
+      ],
+    });
 
     expect(detectStaleFiles(root)).toEqual({
       mapCompleted: false,
@@ -117,6 +129,28 @@ describe("workspace-scoped staleness", () => {
       staleFiles: 0,
       sampleChangedFiles: [],
     });
+    // The workspace is unverified, but no individual file is known to have
+    // changed — the distinction this pair of assertions exists to pin down.
+    // Answering `true` here is what marked every file of a cloud-ingested or
+    // parse-error workspace as modified.
+    expect(hasCompletedMapBaseline(root)).toBe(false);
+    expect(isFileStale(filePath)).toBe(false);
+    expect(createStaleProbe()(filePath)).toBe(false);
+  });
+
+  it("reports a completed baseline as verified", async () => {
+    const root = path.join(home, "verified");
+    const filePath = writeSource(root, "verified.js", "export const value = 1;\n");
+    persistIngestBaselineIfClean(
+      root,
+      new Map([[filePath, fs.statSync(filePath).mtimeMs]]),
+      7,
+      0,
+      0,
+      new Date("2026-08-24T12:00:00.000Z"),
+    );
+
+    expect(hasCompletedMapBaseline(root)).toBe(true);
   });
 
   it("returns the unmapped state after an empty completed map invalidates a prior baseline", () => {
