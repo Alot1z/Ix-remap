@@ -1,0 +1,106 @@
+# nightly-doc-drift.yml — scheduled doc-drift report for the fork
+#
+# Runs doc-drift-report.sh AS a scheduled workflow (nightly, UTC 03:00) so the
+# fork's docs/README drift vs upstream is reported WITHOUT manual invocation.
+# Report surface: a single GitHub issue (created on first drift, updated in
+# place afterwards) — issues only, no code pushes, matching the current
+# authorization boundary.
+#
+# Staged 2026-09-02: this file is currently local-only (repo-fork/ is not yet
+# committed to Alot1z/Ix-remap). It activates as soon as the workflow file
+# lands in the fork repo's .github/workflows/.
+#
+# Works standalone: no dependency on the local scheduled-drift-check.sh or
+# doc-drift-report.sh (they are not in the pushed repo); the drift check here
+# is the same tree comparison (README.md + docs/ vs upstream).
+name: nightly-doc-drift
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-doc-drift
+  cancel-in-progress: true
+
+jobs:
+  drift-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Clone upstream (read-only reference)
+        uses: actions/checkout@v4
+        with:
+          repository: ix-infrastructure/Ix
+          ref: main
+          path: upstream
+
+      - name: Compare README + docs trees
+        id: drift
+        run: |
+          set +e
+          report=$(mktemp)
+          echo "Fork:  $(git rev-parse --short HEAD) @ $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$report"
+          echo "Upstream: $(git -C upstream rev-parse --short HEAD)" >> "$report"
+          echo >> "$report"
+          drift=0
+          for f in README.md; do
+            if [ -f "$f" ] && [ -f "upstream/$f" ] && ! diff -q "$f" "upstream/$f" >/dev/null 2>&1; then
+              drift=1
+              echo "[CHANGED] $f" >> "$report"
+            elif [ ! -f "$f" ] && [ -f "upstream/$f" ]; then
+              drift=1; echo "[MISSING] $f" >> "$report"
+            elif [ -f "$f" ] && [ ! -f "upstream/$f" ]; then
+              echo "[FORK-ONLY] $f" >> "$report"
+            fi
+          done
+          diff -rq docs upstream/docs > /tmp/tree-diff.txt 2>/dev/null
+          if [ -s /tmp/tree-diff.txt ]; then
+            drift=1
+            echo "--- docs/ tree ---" >> "$report"
+            head -30 /tmp/tree-diff.txt >> "$report"
+          fi
+          if [ $drift -eq 0 ]; then
+            echo "RESULT: CLEAN — no docs drift."
+            echo "CLEAN" > /tmp/drift-result.txt
+          else
+            echo "RESULT: DRIFT — fork docs are behind or changed vs upstream."
+            echo "DRIFT" > /tmp/drift-result.txt
+          fi
+          cp "$report" /tmp/drift-report.txt
+          cat /tmp/drift-report.txt
+
+      - name: Report drift as an issue (create or update in place)
+        if: steps.drift.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat /tmp/drift-report.txt)
+          STATE=$(cat /tmp/drift-result.txt)
+          TITLE="Doc drift (nightly)"
+          # find an existing open issue with this title
+          EXISTING=$(gh issue list --state open --search "in:title exact:DOC DRIFT (NIGHTLY)" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ "$STATE" = "CLEAN" ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "CLEAN on $(date -u +%Y-%m-%d) — closing."
+              echo "closed $EXISTING (drift resolved)"
+            else
+              echo "clean — no issue needed"
+            fi
+          else
+            if [ -n "$EXISTING" ]; then
+              gh issue edit "$EXISTING" --body "$BODY"
+              echo "updated $EXISTING"
+            else
+              gh issue create --title "$TITLE" --body "$BODY"
+            fi
+          fi
