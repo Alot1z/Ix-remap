@@ -1,0 +1,120 @@
+# upstream-docs-scan.yml — nightly docs/vs-implementation scan (report-only)
+#
+# Scans the fork's ix CLI commands + flags against its docs, logs the full
+# inventory + any NEW/STALE drift, and reports via a single issue. It NEVER
+# rewrites files: when the docs aren't fully updated, it only documents and
+# logs (per the "no changes unless fully rewritten" rule) — the issue is the
+# changelog a human/agent uses to actually sync or draft new-command docs.
+#
+# Designed to also run upstream (ix-infrastructure/Ix) as a "new function
+# commit workflow": same file, GH_TOKEN of a maintainer, and the issue lands
+# in the upstream repo for each new command/flag.
+name: upstream-docs-scan
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-docs-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Clone upstream (reference scan)
+        uses: actions/checkout@v4
+        with:
+          repository: ix-infrastructure/Ix
+          ref: main
+          path: upstream
+
+      - name: Run docs scan (fork)
+        id: scan-fork
+        run: |
+          node scripts/docs-scan.mjs --root . --json > /tmp/scan-fork.json
+          node scripts/docs-scan.mjs --root . --fail-on-drift > /tmp/scan-fork.txt || true
+          cat /tmp/scan-fork.txt
+
+      - name: Run docs scan (upstream)
+        id: scan-upstream
+        run: |
+          # Copy the scanner into the upstream clone so the same code measures both
+          cp scripts/docs-scan.mjs upstream/scripts-docs-scan.mjs
+          node upstream/scripts-docs-scan.mjs --root upstream --json > /tmp/scan-upstream.json || true
+
+      - name: Compose report
+        id: compose
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          node -e '
+            const fs = require("fs");
+            const f = JSON.parse(fs.readFileSync("/tmp/scan-fork.json", "utf8"));
+            const u = JSON.parse(fs.readFileSync("/tmp/scan-upstream.json", "utf8"));
+            const esc = (a) => (a && a.length ? a.join(", ") : "none");
+            const lines = [];
+            lines.push(`# IX docs scan — nightly report`);
+            lines.push(`_${new Date().toISOString()}_`);
+            lines.push(``);
+            lines.push(`## Fork (Alot1z/Ix-remap)`);
+            lines.push(`- Commands: ${f.source.commands} documented ${f.coverage.commands_documented}/${f.coverage.commands_total}`);
+            lines.push(`- Flags: ${f.source.flags} documented ${f.coverage.flags_documented}/${f.coverage.flags_total}`);
+            lines.push(`- NEW commands missing from docs: ${esc(f.NEW.commands)}`);
+            lines.push(`- NEW flags missing from docs: ${esc(f.NEW.flags)}`);
+            lines.push(`- STALE documented-but-unimplemented flags: ${esc(f.STALE.flags)}`);
+            lines.push(``);
+            lines.push(`## Upstream (ix-infrastructure/Ix)`);
+            lines.push(`- Commands: ${u.source ? u.source.commands : "?"} / flags: ${u.source ? u.source.flags : "?"}`);
+            lines.push(`- NEW commands: ${esc(u.NEW && u.NEW.commands)}`);
+            lines.push(`- NEW flags: ${esc(u.NEW && u.NEW.flags)}`);
+            lines.push(``);
+            lines.push(`## Log-only rule`);
+            lines.push(`This scan never modifies files. New commands/flags are logged here so docs can be synced or new-command docs drafted.`);
+            fs.writeFileSync("/tmp/docs-scan-report.md", lines.join("\n") + "\n");
+            const drift = (f.NEW.commands.length + f.NEW.flags.length + f.STALE.flags.length);
+            fs.writeFileSync("/tmp/docs-scan-drift.txt", String(drift));
+          '
+          cat /tmp/docs-scan-report.md
+
+      - name: File/update report issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat /tmp/docs-scan-report.md)
+          DRIFT=$(cat /tmp/docs-scan-drift.txt)
+          if [ "$DRIFT" = "0" ]; then
+            EXISTING=$(gh issue list --state open --search "in:title \"IX docs scan\"" --json number --jq '.[0].number' 2>/dev/null || true)
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "CLEAN on $(date -u +%Y-%m-%d) — closing."
+              echo "closed $EXISTING (drift resolved)"
+            else
+              echo "clean — no issue needed"
+            fi
+          else
+            EXISTING=$(gh issue list --state open --search "in:title \"IX docs scan\"" --json number --jq '.[0].number' 2>/dev/null || true)
+            if [ -n "$EXISTING" ]; then
+              gh issue edit "$EXISTING" --body "$BODY"
+              echo "updated $EXISTING (drift=$DRIFT)"
+            else
+              gh issue create --title "IX docs scan (nightly)" --body "$BODY"
+            fi
+          fi
+
+      - name: Upload raw scan JSONs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-scan-reports
+          path: /tmp/scan-*.json
