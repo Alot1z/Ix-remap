@@ -14,8 +14,12 @@
 //                                without a browser)
 //   network failure              warning (flaky CI network; not a fact)
 //
-// Skipped: fenced code blocks (illustrative URLs are not references),
-// localhost/127.0.0.1/0.0.0.0 (dev servers), mailto:, #anchors.
+// Skipped: localhost/127.0.0.1/0.0.0.0 (dev servers), mailto:, #anchors.
+// Fenced code blocks are scanned like prose: install instructions and
+// documented endpoints live in fences (docs/prerequisites.md carries the
+// egress allowlist entirely inside one), so dropping them hid exactly the
+// URLs that matter. Genuine illustrations that die get an allowlist entry,
+// and the stale-entry check removes it once the URL leaves the tree.
 //
 // Allowlist: only links known-dead with a tracked replacement. Keys are
 // normalized through the same URL normalization the extractor uses, so a
@@ -50,19 +54,6 @@ const ALLOW_NORM = new Map([...ALLOW].map(([k, reason]) => [normUrl(k), reason])
 
 function trackedFiles() {
   return execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
-}
-
-// Prose only: drop fenced code blocks (``` and ~~~), whose URLs are
-// illustrations, not references.
-function proseOf(text) {
-  const out = [];
-  let fence = null;
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*(```|~~~)/);
-    if (m) { fence = fence === m[1] ? null : m[1]; continue; }
-    if (!fence) out.push(line);
-  }
-  return out.join('\n');
 }
 
 function extractUrls(text) {
@@ -138,9 +129,8 @@ for (const file of mdFiles) {
   let text;
   try { text = await readFile(file, 'utf8'); } catch { warnings.push(`cannot read ${file}`); continue; }
   allContent += text + '\n';
-  const prose = proseOf(text);
 
-  for (const url of extractUrls(prose)) {
+  for (const url of extractUrls(text)) {
     checked++;
     const res = await probe(url);
     const allowed = ALLOW_NORM.has(normUrl(url));
@@ -151,7 +141,7 @@ for (const file of mdFiles) {
     }
   }
 
-  for (const target of extractRelativeTargets(prose)) {
+  for (const target of extractRelativeTargets(text)) {
     checked++;
     if (!targetExists(target, file)) {
       errors.push(`${target} (relative, in ${file})`);
