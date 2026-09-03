@@ -14,9 +14,13 @@
 # zero edits to this script. ~/.agents — the agents.md surface — is not an MCP
 # host, so the helper appends it as a documented supplement.
 #
-# A harness is "present" when its CLI is on PATH or its config directory
-# exists, so a GUI-only install is still found. Re-run after editing skills/ix
-# to update every installed copy.
+# Presence is decided by the helper (`--probe`): a harness is present when its
+# CLI is found or its config directory exists, so a GUI-only install is still
+# found. When toolscan (TOOLSCAN_PATH env or on PATH) is available, its
+# discovery output scans the common install roots beyond PATH; otherwise the
+# embedded PATH probe decides — toolscan is optional and purely additive, so
+# a clean machine behaves exactly the same. Re-run after editing skills/ix to
+# update every installed copy.
 #
 # Usage:
 #   bash scripts/install-skill.sh            # install to every harness found
@@ -53,17 +57,17 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-HELPER_OUT="$(node "$HELPER")" || {
+HELPER_OUT="$(node "$HELPER" --probe)" || {
   echo "error: harness registry helper failed — see its stderr above" >&2
   exit 1
 }
-IDS=() LABELS=() BINS=() CFGS=() DESTS=()
+IDS=() LABELS=() BINS=() CFGS=() DESTS=() PRESENT=()
 while IFS= read -r row; do
-  IFS='|' read -r id label bin cfg skill <<<"$row"
+  IFS='|' read -r id label bin cfg skill present <<<"$row"
   [ -z "$cfg" ] && { echo "error: harness '$id' has no config-dir convention" >&2; exit 1; }
   cfg="${cfg//\~/$HOME}"
   skill="${skill//\~/$HOME}"
-  IDS+=("$id"); LABELS+=("$label"); BINS+=("$bin"); CFGS+=("$cfg"); DESTS+=("$skill/ix")
+  IDS+=("$id"); LABELS+=("$label"); BINS+=("$bin"); CFGS+=("$cfg"); DESTS+=("$skill/ix"); PRESENT+=("$present")
 done <<<"$HELPER_OUT"
 
 if [ "${#IDS[@]}" = "0" ]; then
@@ -84,13 +88,13 @@ if [ "${#EXPLICIT[@]}" -gt 0 ]; then
   done
   want=" ${EXPLICIT[*]} "
   o_ids=("${IDS[@]}"); o_labels=("${LABELS[@]}"); o_bins=("${BINS[@]}")
-  o_cfgs=("${CFGS[@]}"); o_dests=("${DESTS[@]}")
-  IDS=(); LABELS=(); BINS=(); CFGS=(); DESTS=()
+  o_cfgs=("${CFGS[@]}"); o_dests=("${DESTS[@]}"); o_present=("${PRESENT[@]}")
+  IDS=(); LABELS=(); BINS=(); CFGS=(); DESTS=(); PRESENT=()
   for ((i = 0; i < ${#o_ids[@]}; i++)); do
     case "$want" in
       *" ${o_ids[$i]} "*)
         IDS+=("${o_ids[$i]}"); LABELS+=("${o_labels[$i]}"); BINS+=("${o_bins[$i]}")
-        CFGS+=("${o_cfgs[$i]}"); DESTS+=("${o_dests[$i]}") ;;
+        CFGS+=("${o_cfgs[$i]}"); DESTS+=("${o_dests[$i]}"); PRESENT+=("${o_present[$i]}") ;;
     esac
   done
 fi
@@ -100,7 +104,7 @@ installed=0
 conflicts=0
 for ((i = 0; i < ${#IDS[@]}; i++)); do
   id="${IDS[$i]}"; bin="${BINS[$i]}"; cfg="${CFGS[$i]}"; dest="${DESTS[$i]}"
-  if ! { [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1; } && [ ! -e "$cfg" ]; then
+  if [ "${PRESENT[$i]}" != "1" ]; then
     if [ -n "$bin" ]; then
       echo "skip: $id — no $bin CLI or config at $cfg"
     else

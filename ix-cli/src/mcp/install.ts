@@ -10,6 +10,7 @@ import {
   type McpHost,
   type Registration,
 } from "./hosts.js";
+import { discoverTools, type ToolDiscovery } from "./discovery.js";
 import { IX_MCP_OSS_TOOL_NAMES, IX_MCP_PRO_TOOL_NAMES } from "./server.js";
 import { detectPro } from "./runner.js";
 
@@ -53,6 +54,11 @@ export interface InstallOptions {
   dryRun?: boolean;
   /** Replace a name held by something else. Off by default: never clobber. */
   force?: boolean;
+  /**
+   * Tool discovery (toolscan when available, embedded checks otherwise).
+   * Injectable so tests can feed a fixed discovery.
+   */
+  discover?: () => Promise<ToolDiscovery>;
 }
 
 /**
@@ -146,8 +152,17 @@ function selectHosts(all: McpHost[], only?: string[]): McpHost[] {
   return all.filter((host) => only.includes(host.id));
 }
 
-/** Whether the host is present. Falls back to the PATH probe. */
-async function hostInstalled(host: McpHost): Promise<boolean> {
+/**
+ * Whether the host is present.
+ *
+ * The toolscan seam only ever adds evidence: a harness whose CLI toolscan
+ * found is present no matter what the embedded probe says. It never overrides
+ * a negative — a config-dir host (cursor, vscode, opencode) is present with
+ * no CLI on PATH, and toolscan's bounded scan can truncate — so the embedded
+ * check still runs whenever toolscan does not name the bin.
+ */
+async function hostInstalled(host: McpHost, discovery: ToolDiscovery): Promise<boolean> {
+  if (discovery.names.has(host.bin.toLowerCase())) return true;
   return host.detectInstalled ? host.detectInstalled() : isOnPath(host.bin);
 }
 
@@ -170,13 +185,14 @@ function noteFor(registration: Registration, detail?: string): string | undefine
 
 export async function runInstall(options: InstallOptions = {}): Promise<InstallReport> {
   const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
 
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
 
-    if (!(await hostInstalled(host))) {
+    if (!(await hostInstalled(host, discovery))) {
       reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
       continue;
     }
@@ -223,13 +239,16 @@ const DOCTOR_OUTCOME: Record<Registration, Outcome> = {
   unknown: "conflict",
 };
 
-export async function runDoctor(options: { hosts?: McpHost[]; only?: string[] } = {}): Promise<DoctorReport> {
+export async function runDoctor(
+  options: { hosts?: McpHost[]; only?: string[]; discover?: () => Promise<ToolDiscovery> } = {},
+): Promise<DoctorReport> {
   const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
-    if (!(await hostInstalled(host))) {
+    if (!(await hostInstalled(host, discovery))) {
       reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
       continue;
     }

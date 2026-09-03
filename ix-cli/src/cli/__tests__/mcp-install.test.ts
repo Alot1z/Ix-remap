@@ -123,6 +123,52 @@ describe("ix mcp install", () => {
     expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false });
   });
 
+  it("treats a host whose CLI toolscan found as installed, even off PATH", async () => {
+    // The bin is deliberately not on PATH; only the toolscan seam names it.
+    const host = fakeHost("found", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({
+        source: "toolscan",
+        names: new Set(["definitely-not-a-real-binary-xyz"]),
+        paths: new Map(),
+      }),
+    });
+
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+  });
+
+  it("falls back to the embedded probe when toolscan did not find the CLI", async () => {
+    // toolscan ran but only found `node`; the fake bin is not on PATH either.
+    const host = fakeHost("absent", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({ source: "toolscan", names: new Set(["node"]), paths: new Map() }),
+    });
+
+    // The seam is additive evidence only — a toolscan miss must not flip a
+    // genuinely absent host to installed.
+    expect(host.registerCalls).toBe(0);
+    expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false });
+  });
+
+  it("keeps the config-dir probe for hosts toolscan does not name", async () => {
+    // cursor-like: no CLI on PATH and toolscan did not find it, but the config
+    // dir exists — the host must still read as installed.
+    const host = fakeHost("cursor", "none", { detectInstalled: async () => true });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({ source: "toolscan", names: new Set(["claude"]), paths: new Map() }),
+    });
+
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+  });
+
   it("reports a failing host without aborting the rest", async () => {
     const hosts = [fakeHost("broken", "none", { fails: true }), fakeHost("fine", "none")];
 
