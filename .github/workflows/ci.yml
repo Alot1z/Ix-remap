@@ -346,14 +346,20 @@ jobs:
         env:
           HOME: /tmp/ix-harness-home
           HARNESS_HOME: /tmp/ix-harness-home
-          TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
         run: |
           set -euo pipefail
+          # This job runs in a container, where the github.workspace context
+          # resolves to the HOST path (/home/runner/work/...) that does not
+          # exist inside the container. Resolve fixtures against the step cwd
+          # (the checkout root) so the path is right on host and container.
+          FIXTURE="$PWD/.github/fixtures/harness-smoke"
+          test -f "$FIXTURE/claude" || { echo "fixture missing: $FIXTURE"; ls -la .github/fixtures/harness-smoke/ || true; exit 1; }
           rm -rf "$HOME"
           mkdir -p "$HOME/.local/bin"
           # Installed off PATH, exactly where toolscan's extra roots matter.
-          cp "${{ github.workspace }}/.github/fixtures/harness-smoke/claude" "$HOME/.local/bin/claude"
+          cp "$FIXTURE/claude" "$HOME/.local/bin/claude"
           chmod +x "$HOME/.local/bin/claude"
+          export TOOLSCAN_PATH="$FIXTURE/toolscan.mjs"
 
           rows=$(node ix-cli/scripts/skill-harnesses.mjs --probe)
           printf '%s\n' "$rows"
@@ -389,10 +395,15 @@ jobs:
         shell: bash
         env:
           HOME: /tmp/ix-harness-home
-          TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
         working-directory: ix-cli
         run: |
           set -euo pipefail
+          # Same container-path rationale as the step above: derive the fixture
+          # from the step cwd (this step runs in ix-cli) instead of the
+          # host-resolved github.workspace context.
+          FIXTURE="$(cd .. && pwd)/.github/fixtures/harness-smoke"
+          export TOOLSCAN_PATH="$FIXTURE/toolscan.mjs"
+          test -f "$TOOLSCAN_PATH" || { echo "toolscan fixture missing: $TOOLSCAN_PATH"; exit 1; }
           # --host restricts the registry the same way the old env fixture did;
           # an unknown id fails loudly, so a renamed host cannot pass silently.
           node dist/cli/main.js mcp install --host claude codex openclaw --dry-run --format json | tee /tmp/mcp-install.json
