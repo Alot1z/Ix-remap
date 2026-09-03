@@ -361,6 +361,7 @@ jobs:
           grep -Fq 'skip: openclaw' <<<"$install_out"
           test ! -e "$HOME/.claude/skills/ix"
       - name: Exercise ix mcp install dry-run with the same fixture
+        shell: bash
         env:
           HOME: /tmp/ix-harness-home
           HARNESS_HOSTS_FILE: ${{ github.workspace }}/.github/fixtures/harness-smoke/hosts.ts
