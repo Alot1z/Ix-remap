@@ -11,8 +11,13 @@
  * source), walks the same command/flag shape dump-cli-surface.mjs prints, and
  * compares both directions against the flag reference:
  *
+ *   - a registered command with no doc section          -> fail, named
  *   - a registered long flag with no doc row            -> fail, named
  *   - a doc row for a flag the CLI no longer registers  -> fail, named (stale)
+ *   - a doc section for a command that is gone          -> fail, named (stale)
+ *
+ * Both halves of #576 matter. Gating flags alone leaves every flagless command
+ * unreachable, and 14 of the 54 registered here have no long flag at all.
  *
  * Inactive while skills/ix/references/flags.md is absent: with zero coverage
  * the check would only report the whole command surface, so it exits 0 with a
@@ -108,10 +113,33 @@ for (const line of docLines) {
   }
 }
 
+const missingSections = []; // registered command with no doc section
 const missing = []; // registered flag with no doc row
 const stale = []; // doc row or section with no registered counterpart
+
+// #576 asks that a registered command *or* flag cannot merge without a doc
+// mention. Gating flags alone leaves the flagless commands unreachable: 14 of
+// the 54 registered here (`ix init`, the four `ix docker` subcommands, the
+// `ix config` family, `ix view stop|status`, `ix savings reset`, `ix mcp`,
+// `ix help`) carry no long flag at all, so nothing about them was ever
+// compared and a new one could merge with no section.
+//
+// Nothing is excluded. `--help` is skipped above because commander registers
+// it on every command; there is no command-side equivalent — `ix help
+// [topic]` is a real Ix command with real behaviour (`ix help workflows`,
+// `ix help advanced`, and the collapsed-plural forwarding of Ix-pro#103/#108),
+// registered by registerWorkflowsHelpCommand, and it deserves a section like
+// any other.
+for (const cmd of [...allCommands].sort()) {
+  if (!documented.has(cmd)) missingSections.push(cmd);
+}
+
 for (const [cmd, flags] of registered) {
-  const known = documented.get(cmd) ?? new Set();
+  // A command with no section at all is reported once, as the section it
+  // needs. Listing each of its flags as a separate missing row would bury the
+  // one edit that fixes them.
+  if (!documented.has(cmd)) continue;
+  const known = documented.get(cmd);
   for (const f of [...flags].sort()) {
     if (!known.has(f)) missing.push(`${f} (on ${cmd})`);
   }
@@ -129,18 +157,19 @@ for (const [cmd, flags] of documented) {
 }
 
 const totalFlags = [...registered.values()].reduce((n, s) => n + s.size, 0);
-if (missing.length === 0 && stale.length === 0) {
+if (missingSections.length === 0 && missing.length === 0 && stale.length === 0) {
   console.log(
-    `check-doc-parity: ${registered.size} commands, ${totalFlags} flags — ` +
+    `check-doc-parity: ${allCommands.size} commands, ${totalFlags} flags — ` +
       `parity with ${flagsDoc}`,
   );
   process.exit(0);
 }
 
+for (const c of missingSections) console.log(`missing doc section: ${c}`);
 for (const f of missing) console.log(`missing doc row: ${f}`);
 for (const f of stale) console.log(`stale doc row: ${f}`);
 console.log(
-  `check-doc-parity: ${missing.length} missing, ${stale.length} stale — ` +
-    `fix ${flagsDoc}`,
+  `check-doc-parity: ${missingSections.length} undocumented command(s), ` +
+    `${missing.length} missing flag row(s), ${stale.length} stale — fix ${flagsDoc}`,
 );
 process.exit(1);
