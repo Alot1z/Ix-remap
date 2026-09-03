@@ -28,7 +28,7 @@ export type Outcome =
   | "stale";
 
 /** Which probe decided a host's presence. */
-export type DetectionVia = "toolscan" | "path" | "config-dir" | "none";
+type DetectionVia = "toolscan" | "path" | "config-dir" | "none";
 
 export interface HostReport extends HostStatus {
   outcome: Outcome;
