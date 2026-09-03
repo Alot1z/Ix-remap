@@ -39,12 +39,30 @@ const repoRoot = join(here, "..", "..");
 const ossPath = join(here, "..", "dist", "cli", "register", "oss.js");
 const flagsDocDefault = join(repoRoot, "skills", "ix", "references", "flags.md");
 
-const docFlagIndex = process.argv.indexOf("--doc");
-const flagsDoc = docFlagIndex >= 0 ? process.argv[docFlagIndex + 1] : flagsDocDefault;
+/**
+ * Read `--name <value>` / `--name=<value>` from argv. A flag with no value —
+ * last argument, or followed by another flag — is a usage error, not a crash:
+ * `existsSync(undefined)` would throw a TypeError instead of telling the
+ * caller what to fix.
+ */
+const argValue = (name, fallback) => {
+  const eq = process.argv.find((a) => a.startsWith(`${name}=`));
+  if (eq !== undefined) return eq.slice(name.length + 1);
+  const i = process.argv.indexOf(name);
+  if (i < 0) return fallback;
+  const v = process.argv[i + 1];
+  if (v === undefined || v.startsWith("--")) {
+    process.stderr.write(`error: option '${name} <value>' argument missing\n`);
+    process.exit(1);
+  }
+  return v;
+};
+
+const flagsDoc = argValue("--doc", flagsDocDefault);
 
 if (!existsSync(flagsDoc)) {
   console.log(
-    "check-doc-parity: no flag reference at skills/ix/references/flags.md — " +
+    `check-doc-parity: no flag reference at ${flagsDoc} — ` +
       "gate inactive until the reference ships (#576, #578)",
   );
   process.exit(0);
