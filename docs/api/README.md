@@ -500,9 +500,9 @@ Record a decision.
 
 **Response** — `{ status, nodeId, rev }`.
 
-#### GET `/v1/decisions`
+#### POST `/v1/decisions`
 
-List decisions. **Query**: `limit`, `topic`. **Response** — array of `GraphNode`.
+List decisions. **Body**: `limit`, `topic`. **Response** — array of `GraphNode`.
 
 ### Patches & Provenance
 
