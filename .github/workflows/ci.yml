@@ -350,16 +350,30 @@ jobs:
 
           rows=$(node ix-cli/scripts/skill-harnesses.mjs --probe)
           printf '%s\n' "$rows"
-          grep -Fq 'claude|Claude Code|claude|~/.claude|~/.claude/skills|1' <<<"$rows"
-          grep -Fq 'codex|Codex CLI|codex|~/.codex|~/.codex/skills|0' <<<"$rows"
-          grep -Fq 'openclaw|OpenClaw|openclaw|~/.openclaw|~/.openclaw/skills|0' <<<"$rows"
+          grep -Fq 'claude|Claude Code|claude|~/.claude|~/.claude/skills|1|toolscan' <<<"$rows"
+          grep -Fq 'codex|Codex CLI|codex|~/.codex|~/.codex/skills|0|none' <<<"$rows"
+          grep -Fq 'openclaw|OpenClaw|openclaw|~/.openclaw|~/.openclaw/skills|0|none' <<<"$rows"
 
           install_out=$(bash scripts/install-skill.sh --dry-run)
           printf '%s\n' "$install_out"
           grep -Fq 'would install: /tmp/ix-harness-home/.claude/skills/ix' <<<"$install_out"
-          grep -Fq 'skip: codex' <<<"$install_out"
-          grep -Fq 'skip: openclaw' <<<"$install_out"
           test ! -e "$HOME/.claude/skills/ix"
+
+          shell_json=$(bash scripts/install-skill.sh --dry-run --json)
+          printf '%s\n' "$shell_json"
+          node -e '
+            const r = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+            const byId = new Map(r.hosts.map((h) => [h.id, h]));
+            const claude = byId.get("claude");
+            if (claude?.action !== "would-install") throw new Error("claude not would-install in shell report");
+            if (claude?.detectedVia !== "toolscan") throw new Error("claude detection source not toolscan in shell report");
+            if (!claude?.dest.endsWith("/.claude/skills/ix")) throw new Error("claude dest wrong: " + claude?.dest);
+            for (const id of ["codex", "openclaw"]) {
+              const h = byId.get(id);
+              if (h?.action !== "skip") throw new Error(id + " not skipped in shell report");
+              if (h?.detectedVia !== "none") throw new Error(id + " detection source not none in shell report");
+            }
+          ' <<<"$shell_json"
       - name: Exercise ix mcp install dry-run with the same fixture
         shell: bash
         env:

@@ -27,6 +27,7 @@
 #   bash scripts/install-skill.sh --dry-run  # show the targets, write nothing
 #   bash scripts/install-skill.sh --force    # overwrite a same-name foreign skill
 #   bash scripts/install-skill.sh claude codex  # explicit harness ids only
+#   bash scripts/install-skill.sh --dry-run --json  # machine-readable report (see below)
 
 set -euo pipefail
 
@@ -36,15 +37,23 @@ SRC="$ROOT/skills/ix"
 
 FORCE=0
 DRY_RUN=0
+JSON=0
 EXPLICIT=()
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --json) JSON=1 ;;
     -*) echo "error: unknown option $arg" >&2; exit 1 ;;
     *) EXPLICIT+=("$arg") ;;
   esac
 done
+
+# A machine-readable report replaces the human output: one object per harness
+# with the action this run takes (would-install | would-refuse | installed |
+# refused | skip) and `detectedVia` — the probe that decided presence
+# (toolscan | path | config-dir | none), mirroring `ix mcp install`'s report.
+# CI asserts the JSON fields instead of grepping the human lines.
 
 # --- Read the harness registry (hosts.ts via the helper, no built CLI) ------
 HELPER="$ROOT/ix-cli/scripts/skill-harnesses.mjs"
@@ -61,13 +70,13 @@ HELPER_OUT="$(node "$HELPER" --probe)" || {
   echo "error: harness registry helper failed — see its stderr above" >&2
   exit 1
 }
-IDS=() LABELS=() BINS=() CFGS=() DESTS=() PRESENT=()
+IDS=() LABELS=() BINS=() CFGS=() DESTS=() PRESENT=() VIAS=()
 while IFS= read -r row; do
-  IFS='|' read -r id label bin cfg skill present <<<"$row"
+  IFS='|' read -r id label bin cfg skill present via <<<"$row"
   [ -z "$cfg" ] && { echo "error: harness '$id' has no config-dir convention" >&2; exit 1; }
   cfg="${cfg//\~/$HOME}"
   skill="${skill//\~/$HOME}"
-  IDS+=("$id"); LABELS+=("$label"); BINS+=("$bin"); CFGS+=("$cfg"); DESTS+=("$skill/ix"); PRESENT+=("$present")
+  IDS+=("$id"); LABELS+=("$label"); BINS+=("$bin"); CFGS+=("$cfg"); DESTS+=("$skill/ix"); PRESENT+=("$present"); VIAS+=("$via")
 done <<<"$HELPER_OUT"
 
 if [ "${#IDS[@]}" = "0" ]; then
@@ -88,28 +97,36 @@ if [ "${#EXPLICIT[@]}" -gt 0 ]; then
   done
   want=" ${EXPLICIT[*]} "
   o_ids=("${IDS[@]}"); o_labels=("${LABELS[@]}"); o_bins=("${BINS[@]}")
-  o_cfgs=("${CFGS[@]}"); o_dests=("${DESTS[@]}"); o_present=("${PRESENT[@]}")
-  IDS=(); LABELS=(); BINS=(); CFGS=(); DESTS=(); PRESENT=()
+  o_cfgs=("${CFGS[@]}"); o_dests=("${DESTS[@]}"); o_present=("${PRESENT[@]}"); o_vias=("${VIAS[@]}")
+  IDS=(); LABELS=(); BINS=(); CFGS=(); DESTS=(); PRESENT=(); VIAS=()
   for ((i = 0; i < ${#o_ids[@]}; i++)); do
     case "$want" in
       *" ${o_ids[$i]} "*)
         IDS+=("${o_ids[$i]}"); LABELS+=("${o_labels[$i]}"); BINS+=("${o_bins[$i]}")
-        CFGS+=("${o_cfgs[$i]}"); DESTS+=("${o_dests[$i]}"); PRESENT+=("${o_present[$i]}") ;;
+        CFGS+=("${o_cfgs[$i]}"); DESTS+=("${o_dests[$i]}"); PRESENT+=("${o_present[$i]}"); VIAS+=("${o_vias[$i]}") ;;
     esac
   done
 fi
 
 # --- Install to every selected harness that is present -----------------------
+# DECISIONS accumulates one `id<TAB>action<TAB>dest<TAB>via` record per host so
+# the --json report can be emitted without re-deriving anything. Human lines
+# go through `say`, which is silent in --json mode so stdout stays parseable.
+say() {
+  [ "$JSON" = "1" ] || echo "$@"
+}
 installed=0
 conflicts=0
+DECISIONS=()
 for ((i = 0; i < ${#IDS[@]}; i++)); do
-  id="${IDS[$i]}"; bin="${BINS[$i]}"; cfg="${CFGS[$i]}"; dest="${DESTS[$i]}"
+  id="${IDS[$i]}"; bin="${BINS[$i]}"; cfg="${CFGS[$i]}"; dest="${DESTS[$i]}"; via="${VIAS[$i]}"
   if [ "${PRESENT[$i]}" != "1" ]; then
     if [ -n "$bin" ]; then
-      echo "skip: $id — no $bin CLI or config at $cfg"
+      say "skip: $id — no $bin CLI or config at $cfg"
     else
-      echo "skip: $id — no config at $cfg"
+      say "skip: $id — no config at $cfg"
     fi
+    DECISIONS+=("$id"$'\t'"skip"$'\t'""$'\t'"$via")
     continue
   fi
   if [ -e "$dest" ] && [ "$FORCE" != "1" ] && ! grep -qs '^name: ix$' "$dest/SKILL.md"; then
@@ -119,16 +136,19 @@ for ((i = 0; i < ${#IDS[@]}; i++)); do
     # prompt, no backup, and nothing in the output to say it had happened. The
     # check runs in dry-run too, so the preview and the real run agree.
     if [ "$DRY_RUN" = "1" ]; then
-      echo "would refuse: $dest — exists and is not an Ix skill install (use --force)"
+      say "would refuse: $dest — exists and is not an Ix skill install (use --force)"
+      DECISIONS+=("$id"$'\t'"would-refuse"$'\t'"$dest"$'\t'"$via")
     else
       echo "error: $dest exists and is not an Ix skill install." >&2
       echo "       Move it aside, or re-run with --force to overwrite it." >&2
+      DECISIONS+=("$id"$'\t'"refused"$'\t'"$dest"$'\t'"$via")
     fi
     conflicts=$((conflicts + 1))
     continue
   fi
   if [ "$DRY_RUN" = "1" ]; then
-    echo "would install: $dest"
+    say "would install: $dest"
+    DECISIONS+=("$id"$'\t'"would-install"$'\t'"$dest"$'\t'"$via")
     installed=$((installed + 1))
     continue
   fi
@@ -137,9 +157,25 @@ for ((i = 0; i < ${#IDS[@]}; i++)); do
     rm -rf "$dest"
   fi
   cp -R "$SRC" "$dest"
-  echo "Installed: $dest"
+  say "Installed: $dest"
+  DECISIONS+=("$id"$'\t'"installed"$'\t'"$dest"$'\t'"$via")
   installed=$((installed + 1))
 done
+
+if [ "$JSON" = "1" ]; then
+  printf '%s\n' "${DECISIONS[@]:-}" | IX_DRY_RUN="$DRY_RUN" node -e '
+    const lines = require("node:fs").readFileSync(0, "utf8").split("\n").filter(Boolean);
+    const hosts = lines.map((line) => {
+      const [id, action, dest, via] = line.split("\t");
+      return { id, action, dest: dest || null, detectedVia: via };
+    });
+    process.stdout.write(JSON.stringify({
+      dryRun: process.env.IX_DRY_RUN === "1",
+      hosts,
+    }, null, 2) + "\n");
+  '
+  exit 0
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
   echo

@@ -36,9 +36,15 @@
  * machine behaves exactly as before and CI never needs toolscan.
  *
  *   node scripts/skill-harnesses.mjs                  # default: the repo's hosts.ts
- *   node scripts/skill-harnesses.mjs --probe          # with a presence flag per row
+ *   node scripts/skill-harnesses.mjs --probe          # with presence + detection source per row
  *   HARNESS_HOSTS_FILE=P node scripts/skill-harnesses.mjs  # explicit file (tests)
  *   HARNESS_HOME=P node scripts/skill-harnesses.mjs --probe  # where ~ resolves (hermetic tests)
+ *
+ * `--probe` rows carry two extra fields: `present` (`1`/`0`) and `via` — the
+ * detection source that decided, mirroring the CLI report's `detectedVia`
+ * (toolscan | path | config-dir | none). install-skill.sh surfaces both in its
+ * machine-readable report so CI can assert *how* a harness was found, not
+ * just that it was.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -216,25 +222,28 @@ export function runToolscanOnce(resolve = resolveToolscan) {
 }
 
 /**
- * Whether one harness is present: the bin is found (via toolscan when
- * available, PATH otherwise) or the config directory exists — so a GUI-only
- * install is still found, and toolscan only ever adds evidence.
+ * Whether one harness is present, and which probe decided.
  *
- * `deps` injects the probe functions so tests stay hermetic; the defaults are
- * the real implementations (toolscan output when present, `where`/`which`,
- * and the filesystem).
+ * Precedence mirrors the CLI's `detectedVia` (install.ts): toolscan first
+ * (purely additive evidence — a harness its scan found is present no matter
+ * what the embedded probes say), then the bin on PATH, then the config
+ * directory (a GUI-only install is still found), else absent. `deps` injects
+ * the probe functions so tests stay hermetic; the defaults are the real
+ * implementations (toolscan output when present, `where`/`which`, and the
+ * filesystem).
  */
 export function probePresent(row, deps = {}) {
   const { toolscanNames = null, binOnPath: which = binOnPath, exists = existsSync } = deps;
   const binFound = toolscanNames ? toolscanNames.has(row.bin.toLowerCase()) : false;
-  const binPresent = binFound || which(row.bin);
+  if (binFound) return { present: true, via: "toolscan" };
+  if (which(row.bin)) return { present: true, via: "path" };
   // `~` resolves to the user's home — overridable through HARNESS_HOME so a
   // hermetic run can point it at an empty temp dir (install-skill.sh expands
   // `~` itself with $HOME for the destination paths; this override exists so
   // the presence decision agrees with that view on Windows, where node's
   // os.homedir() does not follow $HOME).
   const cfgExpanded = row.cfg.replace(/^~/, process.env.HARNESS_HOME || homedir());
-  return binPresent || exists(cfgExpanded);
+  return exists(cfgExpanded) ? { present: true, via: "config-dir" } : { present: false, via: "none" };
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -253,7 +262,8 @@ export function main(argv = process.argv.slice(2)) {
   const out = rows.map((row) => {
     const base = [row.id, row.label, row.bin, row.cfg, row.skill];
     if (!probe) return base.join("|");
-    return [...base, probePresent(row, { toolscanNames }) ? "1" : "0"].join("|");
+    const { present, via } = probePresent(row, { toolscanNames });
+    return [...base, present ? "1" : "0", via].join("|");
   });
   process.stdout.write(`${out.join("\n")}\n`);
 }

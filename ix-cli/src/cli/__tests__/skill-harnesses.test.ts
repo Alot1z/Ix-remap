@@ -35,7 +35,7 @@ describe("probePresent", () => {
       exists: () => false,
     });
 
-    expect(present).toBe(true);
+    expect(present).toEqual({ present: true, via: "toolscan" });
   });
 
   it("counts a harness present when its config dir exists, even with no CLI", () => {
@@ -46,7 +46,7 @@ describe("probePresent", () => {
       exists: (path) => path.endsWith(".gemini"),
     });
 
-    expect(present).toBe(true);
+    expect(present).toEqual({ present: true, via: "config-dir" });
   });
 
   it("counts a harness absent when neither toolscan, PATH, nor the config dir has it", () => {
@@ -56,7 +56,7 @@ describe("probePresent", () => {
       exists: () => false,
     });
 
-    expect(present).toBe(false);
+    expect(present).toEqual({ present: false, via: "none" });
   });
 
   it("falls back to the embedded PATH probe when toolscan is unavailable", () => {
@@ -66,7 +66,7 @@ describe("probePresent", () => {
       exists: () => false,
     });
 
-    expect(present).toBe(true);
+    expect(present).toEqual({ present: true, via: "path" });
   });
 
   it("matches toolscan names against the lowercased bin", () => {
@@ -77,7 +77,7 @@ describe("probePresent", () => {
       exists: () => false,
     });
 
-    expect(present).toBe(true);
+    expect(present).toEqual({ present: true, via: "toolscan" });
   });
 });
 

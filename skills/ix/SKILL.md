@@ -97,7 +97,7 @@ TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
   node ix-cli/scripts/skill-harnesses.mjs --probe
 ```
 
-`--probe` emits `id|label|bin|config-dir|skill-dir|present`, where `present` is `1` or `0`. `scripts/install-skill.sh --dry-run` consumes those rows and previews only present harnesses. `HARNESS_HOSTS_FILE` is available for clean-container tests; it restricts the CLI registry to the host IDs declared in the fixture and rejects unknown IDs.
+`--probe` emits `id|label|bin|config-dir|skill-dir|present|detectedVia`, where `present` is `1` or `0` and `detectedVia` names the probe that decided (`toolscan` | `path` | `config-dir` | `none`). `scripts/install-skill.sh --dry-run --json` emits the same per-harness view as machine-readable JSON: one object per host with `action` (`would-install` | `would-refuse` | `installed` | `refused` | `skip`), `dest`, and `detectedVia` — so CI can assert *how* a harness was found, not just that it was. `HARNESS_HOSTS_FILE` is available for clean-container tests; it restricts the CLI registry to the host IDs declared in the fixture and rejects unknown IDs.
 
 The install report's `--format json|llm` output carries `detectedVia` per host (`toolscan` | `path` | `config-dir` | `none`), so a consumer can see which probe decided presence — a host toolscan found reads `toolscan` even when its CLI also happens to be on PATH.
 
