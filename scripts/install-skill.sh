@@ -7,20 +7,21 @@
 # script probes for installed harnesses and deploys the same tree to each one
 # that is present.
 #
-# The harness table is NOT maintained here: it is derived from the
-# authoritative registry, ix-cli/src/mcp/hosts.ts (the same host list `ix mcp
-# install` drives), read by ix-cli/scripts/skill-harnesses.mjs. A harness
-# added to hosts.ts with a literal config target becomes installable here with
-# zero edits to this script. ~/.agents — the agents.md surface — is not an MCP
-# host, so the helper appends it as a documented supplement.
+# The harness table is NOT maintained here: it lives as an explicit, small
+# registry in ix-cli/scripts/skill-harnesses.mjs (claude, agents, codex,
+# cursor), where each entry's skill directory has been verified against the
+# harness's actual convention — Cursor reads ~/.cursor/skills-cursor, and
+# gemini/opencode/openclaw/vscode have no skills convention, so they are not
+# install targets. Adding a harness is a deliberate one-line edit there.
 #
 # Presence is decided by the helper (`--probe`): a harness is present when its
 # CLI is found or its config directory exists, so a GUI-only install is still
-# found. When toolscan (TOOLSCAN_PATH env or on PATH) is available, its
-# discovery output scans the common install roots beyond PATH; otherwise the
-# embedded PATH probe decides — toolscan is optional and purely additive, so
-# a clean machine behaves exactly the same. Re-run after editing skills/ix to
-# update every installed copy.
+# found. When TOOLSCAN_PATH is set (opt-in — this script never executes a
+# bare `toolscan` name from PATH), its discovery output scans the common
+# install roots beyond PATH; otherwise the embedded PATH probe decides —
+# toolscan is optional and purely additive, so a clean machine behaves
+# exactly the same. Re-run after editing skills/ix to update every installed
+# copy.
 #
 # Usage:
 #   bash scripts/install-skill.sh            # install to every harness found
@@ -174,14 +175,20 @@ if [ "$JSON" = "1" ]; then
       hosts,
     }, null, 2) + "\n");
   '
+  # Same agreement as the human dry-run: a would-refuse predicts the real
+  # run's exit 1.
+  [ "$conflicts" = "0" ] || exit 1
   exit 0
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo
-  echo "Dry run: $installed harness(es) would receive the skill."
-  exit 0
-fi
+    echo
+    echo "Dry run: $installed harness(es) would receive the skill."
+    # The preview and the real run must agree: a conflict in the real run
+    # exits 1, so a preview that predicts a refusal exits 1 too.
+    [ "$conflicts" = "0" ] || exit 1
+    exit 0
+  fi
 
 if [ "$installed" = "0" ] && [ "$conflicts" = "0" ]; then
   echo

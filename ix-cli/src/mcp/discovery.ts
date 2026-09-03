@@ -57,35 +57,24 @@ function execSpawnable(target: Spawnable): Promise<{ stdout: string }> {
   return execFileAsync(target.cmd, target.args, options);
 }
 
-/** Resolve the toolscan command: TOOLSCAN_PATH first, then PATH. */
-async function resolveToolscan(): Promise<Spawnable | null> {
+/**
+ * Resolve the toolscan command: `TOOLSCAN_PATH` only, never a bare-name PATH
+ * lookup.
+ *
+ * A PATH fallback would make `ix mcp install` execute *any* program named
+ * `toolscan` that an attacker can plant on PATH, and let its JSON decide
+ * which host config files get written — a widening this CLI deliberately
+ * avoids (the same care as the bounded-read and symlink work). Opt-in only:
+ * unset means no toolscan, and the embedded probes decide.
+ */
+export async function resolveToolscan(): Promise<Spawnable | null> {
   const explicit = process.env.TOOLSCAN_PATH?.trim();
-  if (explicit) {
-    // A script path runs under node (that is how this repo invokes toolscan);
-    // anything else is treated as an executable the user pointed at.
-    return /\.m?js$/i.test(explicit)
-      ? { cmd: process.execPath, args: [explicit] }
-      : { cmd: explicit, args: [] };
-  }
-
-  try {
-    const probe = process.platform === "win32" ? "where" : "which";
-    const { stdout } = await execFileAsync(probe, ["toolscan"], {
-      encoding: "utf8",
-      timeout: TOOLSCAN_TIMEOUT_MS,
-      windowsHide: true,
-    });
-    const first = stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-    if (!first) return null;
-    return /\.m?js$/i.test(first)
-      ? { cmd: process.execPath, args: [first] }
-      : { cmd: first, args: [] };
-  } catch {
-    return null;
-  }
+  if (!explicit) return null;
+  // A script path runs under node (that is how this repo invokes toolscan);
+  // anything else is treated as an executable the user pointed at.
+  return /\.m?js$/i.test(explicit)
+    ? { cmd: process.execPath, args: [explicit] }
+    : { cmd: explicit, args: [] };
 }
 
 /** Turn toolscan's JSON scan output into a name/path index. */
@@ -114,7 +103,7 @@ export function parseToolscanOutput(stdout: string): Pick<ToolDiscovery, "names"
 /**
  * Probe toolscan once and index what it found.
  *
- * Any failure — toolscan missing, unreadable, timed out, or emitting
+ * Any failure — TOOLSCAN_PATH unset, unreadable, timed out, or emitting
  * something that is not the scan shape — degrades to the embedded checks
  * rather than failing the install. A broken optional seam must never break
  * the command it augments.

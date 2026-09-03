@@ -52,20 +52,23 @@ again.
 
 ## Harness presence (hermetic reproduction)
 
-The installers use the shared registry in `ix-cli/src/mcp/hosts.ts`. The
-registry helper (`ix-cli/scripts/skill-harnesses.mjs --probe`) emits one row per
-registry host with a final `1` or `0` presence field. If `toolscan` is available,
-its discovery output is consumed as additive evidence for binaries installed
-outside `PATH`; otherwise the embedded `PATH` and config-directory probes decide.
+The skill installer reads the explicit harness table in
+`ix-cli/scripts/skill-harnesses.mjs` (claude, agents, codex, cursor — each
+entry's skills directory verified against what that harness actually reads;
+`ix mcp install` uses the separate MCP host registry in
+`ix-cli/src/mcp/hosts.ts`). The helper's `--probe` emits one row per harness
+with a `1`/`0` presence field and the detection source. When `TOOLSCAN_PATH`
+is set, its discovery output is consumed as additive evidence for binaries
+installed outside `PATH`; otherwise the embedded `PATH` and config-directory
+probes decide.
 
 Use these environment variables to reproduce the decision without using the
 real user configuration:
 
 | Variable | Scope | Purpose | Default |
 |---|---|---|---|
-| `TOOLSCAN_PATH` | helper and `ix mcp install` | An executable, script, or `dist/toolscan.mjs` to query. If unset, the helper looks for `toolscan` on `PATH`. | No toolscan; embedded probes decide. |
+| `TOOLSCAN_PATH` | helper and `ix mcp install` | An executable, script, or `dist/toolscan.mjs` to query. Opt-in only — the CLI never looks `toolscan` up on `PATH`, and it executes whatever this names, so point it only at a binary you trust. | Unset — no toolscan; embedded probes decide. |
 | `HARNESS_HOME` | `skill-harnesses.mjs --probe` | Replaces Node's home directory when expanding `~` for config-directory presence checks. | `os.homedir()` |
-| `HARNESS_HOSTS_FILE` | `ix mcp install` and `ix mcp doctor` | A checked-in or temporary `hosts.ts` fixture. The CLI extracts its declared host IDs, filters the normal registry to those IDs, and rejects unknown IDs. | Complete checked-in registry |
 
 A no-write local probe is:
 
@@ -82,21 +85,24 @@ TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
   node ix-cli/scripts/skill-harnesses.mjs --probe
 ```
 
-To exercise the CLI surface with a fixture, use the committed fixture from
-`.github/fixtures/harness-smoke/`:
+To exercise the CLI surface against a fixture, restrict it with `--host` (an
+unknown id fails loudly, so a renamed host cannot pass silently):
 
 ```bash
 HOME="$(mktemp -d)" \
-HARNESS_HOSTS_FILE="$PWD/.github/fixtures/harness-smoke/hosts.ts" \
 TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
-node ix-cli/dist/cli/main.js mcp install --dry-run --format json
+node ix-cli/dist/cli/main.js mcp install --host claude codex openclaw --dry-run --format json
 ```
 
 The CI smoke job repeats this in a clean `node:22-bookworm` container with a
-fake `toolscan` result naming only `claude`. It asserts `claude` is present and
-`codex`/`openclaw` are absent through both the shell installer and `ix mcp
-install`; the fake command and temporary home prevent host-machine state from
-making the check pass accidentally.
+fake `toolscan` result naming only `claude`. The fake `claude` is installed at
+`$HOME/.local/bin` — off PATH — so the job proves both directions of the seam:
+presence decided by toolscan, and the off-PATH CLI invoked through the absolute
+path toolscan reported. It asserts `claude` is present and `codex`/`agents`/
+`cursor` are absent through the shell installer, and `claude` registers
+(not a false conflict) plus `codex`/`openclaw` absent through `ix mcp install`;
+the fake command and temporary home prevent host-machine state from making the
+check pass accidentally.
 
 ## Re-mapping
 

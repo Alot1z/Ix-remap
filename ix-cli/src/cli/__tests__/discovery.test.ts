@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { discoverTools, NO_DISCOVERY, parseToolscanOutput, type ToolDiscovery } from "../../mcp/discovery.js";
+import { discoverTools, NO_DISCOVERY, parseToolscanOutput, resolveToolscan, type ToolDiscovery } from "../../mcp/discovery.js";
 
 const scratch: string[] = [];
 
@@ -107,6 +107,33 @@ describe("discoverTools", () => {
     } finally {
       if (previous === undefined) delete process.env.TOOLSCAN_PATH;
       else process.env.TOOLSCAN_PATH = previous;
+    }
+  });
+
+  it("never executes a bare `toolscan` found on PATH", async () => {
+    // Security pin: a PATH fallback would let any attacker-planted `toolscan`
+    // decide which host config files `ix mcp install` writes. Discovery is
+    // opt-in via TOOLSCAN_PATH only — a bare name on PATH is ignored even
+    // though it resolves.
+    const dir = tempDir();
+    const name = process.platform === "win32" ? "toolscan.cmd" : "toolscan";
+    writeFileSync(join(dir, name), process.platform === "win32" ? "@echo off\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") chmodSync(join(dir, name), 0o755);
+
+    const previousPath = process.env.PATH;
+    const previousToolscan = process.env.TOOLSCAN_PATH;
+    delete process.env.TOOLSCAN_PATH;
+    process.env.PATH = `${dir}${process.platform === "win32" ? ";" : ":"}${previousPath ?? ""}`;
+    try {
+      // The resolver itself must refuse the bare name even though it resolves.
+      expect(await resolveToolscan()).toBeNull();
+      const discovery = await discoverTools();
+      expect(discovery).toEqual(NO_DISCOVERY);
+    } finally {
+      if (previousToolscan === undefined) delete process.env.TOOLSCAN_PATH;
+      else process.env.TOOLSCAN_PATH = previousToolscan;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
     }
   });
 });

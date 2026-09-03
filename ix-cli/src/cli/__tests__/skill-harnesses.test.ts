@@ -1,22 +1,29 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
+/**
+ * The helper is plain ESM (.mjs) that install-skill.sh runs without a build
+ * step. Its public shape is declared here instead of in a hand-written
+ * .d.mts, so a signature change in the helper surfaces as a runtime failure
+ * in these tests rather than a typecheck that checks nothing.
+ */
+type HarnessRow = { id: string; label: string; bin: string; cfg: string; skill: string };
+type ProbeResult = { present: boolean; via: string };
 
-import { probePresent, readHarnesses } from "../../../scripts/skill-harnesses.mjs";
+// @ts-expect-error — no .d.mts by design (review #591): the local interface
+// below is the type contract, and a helper shape change fails here at runtime.
+const helper = (await import("../../../scripts/skill-harnesses.mjs")) as unknown as {
+  readHarnesses: () => HarnessRow[];
+  probePresent: (
+    row: HarnessRow,
+    deps?: {
+      toolscanNames?: Set<string> | null;
+      binOnPath?: (bin: string) => boolean;
+      exists?: (path: string) => boolean;
+    },
+  ) => ProbeResult;
+};
 
-const scratch: string[] = [];
-
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "ix-skill-harnesses-"));
-  scratch.push(dir);
-  return dir;
-}
+const { probePresent, readHarnesses } = helper;
 
 const row = (overrides: Partial<{ bin: string; cfg: string }> = {}) => ({
   id: "claude",
@@ -39,18 +46,18 @@ describe("probePresent", () => {
   });
 
   it("counts a harness present when its config dir exists, even with no CLI", () => {
-    // The GUI-only case: no bin anywhere, but ~/.gemini exists.
-    const present = probePresent(row({ bin: "gemini", cfg: "~/.gemini" }), {
+    // The GUI-only case: no bin anywhere, but ~/.agents exists.
+    const present = probePresent(row({ bin: "cursor", cfg: "~/.cursor" }), {
       toolscanNames: new Set(["claude"]),
       binOnPath: () => false,
-      exists: (path) => path.endsWith(".gemini"),
+      exists: (path) => path.endsWith(".cursor"),
     });
 
     expect(present).toEqual({ present: true, via: "config-dir" });
   });
 
   it("counts a harness absent when neither toolscan, PATH, nor the config dir has it", () => {
-    const present = probePresent(row({ bin: "openclaw", cfg: "~/.openclaw" }), {
+    const present = probePresent(row({ bin: "codex", cfg: "~/.codex" }), {
       toolscanNames: new Set(["claude"]),
       binOnPath: () => false,
       exists: () => false,
@@ -82,76 +89,24 @@ describe("probePresent", () => {
 });
 
 describe("readHarnesses", () => {
-  it("reads the checked-in hosts.ts table", () => {
-    const { rows, warnings } = readHarnesses();
+  it("lists exactly the harnesses with a verified skills convention", () => {
+    const rows = readHarnesses();
 
-    expect(rows.map((r) => r.id)).toEqual(
-      expect.arrayContaining(["claude", "codex", "gemini", "openclaw", "vscode", "cursor", "opencode", "agents"]),
-    );
-    expect(warnings).toEqual([]);
+    // Deliberately small and explicit: only harnesses whose skills directory
+    // is verified to be read belong here. gemini/opencode/openclaw/vscode
+    // have no skills convention, so they must not be install targets.
+    expect(rows.map((r) => r.id)).toEqual(["claude", "agents", "codex", "cursor"]);
   });
 
-  it("derives the skill dir from a config-file target", () => {
-    const codex = readHarnesses().rows.find((r) => r.id === "codex");
+  it("points cursor at skills-cursor, the directory Cursor actually reads", () => {
+    const cursor = readHarnesses().find((r) => r.id === "cursor");
 
-    // ~/.codex/config.toml -> cfg ~/.codex, skill ~/.codex/skills.
-    expect(codex).toMatchObject({ cfg: "~/.codex", skill: "~/.codex/skills" });
+    expect(cursor).toMatchObject({ cfg: "~/.cursor", skill: "~/.cursor/skills-cursor" });
   });
 
   it("appends the agents.md surface as a documented supplement", () => {
-    const agents = readHarnesses().rows.find((r) => r.id === "agents");
+    const agents = readHarnesses().find((r) => r.id === "agents");
 
     expect(agents).toMatchObject({ bin: "", cfg: "~/.agents", skill: "~/.agents/skills" });
-  });
-
-  it("reads an explicit hosts file (HARNESS_HOSTS_FILE)", () => {
-    const fixture = join(tempDir(), "hosts.ts");
-    writeFileSync(
-      fixture,
-      [
-        "const hosts = [",
-        "  {",
-        '    id: "claude",',
-        '    label: "Claude Code",',
-        '    bin: "claude",',
-        '    target: "user scope",',
-        "  },",
-        "  {",
-        '    id: "codex",',
-        '    label: "Codex CLI",',
-        '    bin: "codex",',
-        '    target: "~/.codex/config.toml",',
-        "  },",
-        "];",
-      ].join("\n"),
-    );
-
-    const { rows, warnings } = readHarnesses(fixture);
-
-    expect(rows.map((r) => r.id)).toEqual(["claude", "codex", "agents"]);
-    expect(rows.find((r) => r.id === "codex")).toMatchObject({ cfg: "~/.codex", skill: "~/.codex/skills" });
-    expect(warnings).toEqual([]);
-  });
-
-  it("warns loudly about a host with no derivable skill dir", () => {
-    const fixture = join(tempDir(), "hosts.ts");
-    writeFileSync(
-      fixture,
-      [
-        "const hosts = [",
-        "  {",
-        '    id: "exotic",',
-        '    label: "Exotic Host",',
-        '    bin: "exotic",',
-        '    target: "(computed at runtime)",',
-        "  },",
-        "];",
-      ].join("\n"),
-    );
-
-    const { rows, warnings } = readHarnesses(fixture);
-
-    expect(rows.map((r) => r.id)).toEqual(["agents"]);
-    expect(warnings.some((w) => w.includes("exotic"))).toBe(true);
   });
 });

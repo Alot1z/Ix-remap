@@ -320,9 +320,15 @@ jobs:
   # The real machine's PATH and home directory must not decide this test: if the
   # fixture disappears or the helper stops consuming toolscan output, the
   # positive/negative assertions below fail instead of silently passing.
+  #
+  # The fake claude lives at $HOME/.local/bin — deliberately NOT on PATH — and
+  # only the fake toolscan knows it, so this job exercises the seam's motivating
+  # case: presence decided by toolscan, and the off-PATH CLI invoked through
+  # the absolute path toolscan reported. If that threading regressed, inspect
+  # would ENOENT and the CLI would report a false conflict instead of
+  # would-register.
   harness-install-smoke:
     name: Harness install smoke
-    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     container: node:22-bookworm
     steps:
@@ -335,24 +341,29 @@ jobs:
       - name: Build Ix CLI
         working-directory: ix-cli
         run: npm run build
-      - name: Exercise the registry helper and shell installer
+      - name: Exercise the skills table and shell installer
         shell: bash
         env:
           HOME: /tmp/ix-harness-home
           HARNESS_HOME: /tmp/ix-harness-home
-          HARNESS_HOSTS_FILE: ${{ github.workspace }}/.github/fixtures/harness-smoke/hosts.ts
           TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
-          PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -euo pipefail
           rm -rf "$HOME"
-          mkdir -p "$HOME"
+          mkdir -p "$HOME/.local/bin"
+          # Installed off PATH, exactly where toolscan's extra roots matter.
+          cp "${{ github.workspace }}/.github/fixtures/harness-smoke/claude" "$HOME/.local/bin/claude"
+          chmod +x "$HOME/.local/bin/claude"
 
           rows=$(node ix-cli/scripts/skill-harnesses.mjs --probe)
           printf '%s\n' "$rows"
           grep -Fq 'claude|Claude Code|claude|~/.claude|~/.claude/skills|1|toolscan' <<<"$rows"
           grep -Fq 'codex|Codex CLI|codex|~/.codex|~/.codex/skills|0|none' <<<"$rows"
-          grep -Fq 'openclaw|OpenClaw|openclaw|~/.openclaw|~/.openclaw/skills|0|none' <<<"$rows"
+          grep -Fq 'agents|Agents (agents.md)||~/.agents|~/.agents/skills|0|none' <<<"$rows"
+          grep -Fq 'cursor|Cursor|cursor|~/.cursor|~/.cursor/skills-cursor|0|none' <<<"$rows"
+          # Harnesses without a skills convention must not be install targets.
+          ! grep -Fq 'openclaw' <<<"$rows"
+          ! grep -Fq 'gemini' <<<"$rows"
 
           install_out=$(bash scripts/install-skill.sh --dry-run)
           printf '%s\n' "$install_out"
@@ -368,29 +379,32 @@ jobs:
             if (claude?.action !== "would-install") throw new Error("claude not would-install in shell report");
             if (claude?.detectedVia !== "toolscan") throw new Error("claude detection source not toolscan in shell report");
             if (!claude?.dest.endsWith("/.claude/skills/ix")) throw new Error("claude dest wrong: " + claude?.dest);
-            for (const id of ["codex", "openclaw"]) {
+            for (const id of ["codex", "agents", "cursor"]) {
               const h = byId.get(id);
               if (h?.action !== "skip") throw new Error(id + " not skipped in shell report");
               if (h?.detectedVia !== "none") throw new Error(id + " detection source not none in shell report");
             }
           ' <<<"$shell_json"
-      - name: Exercise ix mcp install dry-run with the same fixture
+      - name: Exercise ix mcp install dry-run against the off-PATH fixture
         shell: bash
         env:
           HOME: /tmp/ix-harness-home
-          HARNESS_HOSTS_FILE: ${{ github.workspace }}/.github/fixtures/harness-smoke/hosts.ts
           TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
-          PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         working-directory: ix-cli
         run: |
           set -euo pipefail
-          node dist/cli/main.js mcp install --dry-run --format json | tee /tmp/mcp-install.json
+          # --host restricts the registry the same way the old env fixture did;
+          # an unknown id fails loudly, so a renamed host cannot pass silently.
+          node dist/cli/main.js mcp install --host claude codex openclaw --dry-run --format json | tee /tmp/mcp-install.json
           node -e '
             const r = require("/tmp/mcp-install.json");
             const byId = new Map(r.hosts.map((h) => [h.id, h]));
-            if (byId.get("claude")?.outcome !== "would-register") throw new Error("claude was not detected");
-            // The fake claude is on PATH too, so outcome alone cannot tell
-            // toolscan from the PATH probe; the source discriminator can.
+            // claude is NOT on PATH here — only the fake toolscan names it, and
+            // inspect must run the absolute path toolscan reported. A would-
+            // register proves the threading; a conflict would mean the seam
+            // regressed to PATH-only execution.
+            if (byId.get("claude")?.outcome !== "would-register")
+              throw new Error("claude was not detected: " + JSON.stringify(byId.get("claude")));
             if (byId.get("claude")?.detectedVia !== "toolscan")
               throw new Error("claude was not detected via toolscan: " + byId.get("claude")?.detectedVia);
             if (byId.get("codex")?.outcome !== "not-installed") throw new Error("codex was detected unexpectedly");

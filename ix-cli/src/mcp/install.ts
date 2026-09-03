@@ -163,66 +163,45 @@ function selectHosts(all: McpHost[], only?: string[]): McpHost[] {
 }
 
 /**
- * Restrict the real registry to the ids in a fixture when requested.
- *
- * This is intentionally a source-level seam for the clean-container smoke
- * test: the fixture is still parsed by the same registry helper, while the
- * default path remains the complete checked-in host table.
- */
-export function configuredHosts(): McpHost[] {
-  const fixture = process.env.HARNESS_HOSTS_FILE?.trim();
-  if (!fixture) return createHosts(writeJsonConfig);
-
-  let source: string;
-  try {
-    source = readFileSync(fixture, "utf8");
-  } catch (error) {
-    throw new Error(
-      `cannot read HARNESS_HOSTS_FILE ${fixture}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-
-  const allowedIds = new Set<string>();
-  for (const match of source.matchAll(/\bid:\s*["']([^"']+)["']/g)) {
-    const id = match[1];
-    if (id) allowedIds.add(id);
-  }
-  if (allowedIds.size === 0) {
-    throw new Error(`HARNESS_HOSTS_FILE ${fixture} contains no host ids`);
-  }
-
-  const allHosts = createHosts(writeJsonConfig);
-  const knownIds = new Set(allHosts.map((host) => host.id));
-  const unknownIds = [...allowedIds].filter((id) => !knownIds.has(id));
-  if (unknownIds.length > 0) {
-    throw new Error(
-      `HARNESS_HOSTS_FILE ${fixture} contains unknown host ${unknownIds.map((id) => `'${id}'`).join(", ")}`,
-    );
-  }
-  return allHosts.filter((host) => allowedIds.has(host.id));
-}
-
-/**
- * Whether the host is present.
+ * Whether the host is present, and which probe decided.
  *
  * The toolscan seam only ever adds evidence: a harness whose CLI toolscan
  * found is present no matter what the embedded probe says. It never overrides
  * a negative — a config-dir host (cursor, vscode, opencode) is present with
  * no CLI on PATH, and toolscan's bounded scan can truncate — so the embedded
  * check still runs whenever toolscan does not name the bin.
+ *
+ * Probe order is also the honesty order for `detectedVia`: PATH is checked
+ * before the config-dir probe, so a host whose CLI resolves on PATH is
+ * reported as found *on PATH* rather than misattributed to its config
+ * directory (which cursor/vscode/opencode's combined check would otherwise
+ * claim).
  */
 async function hostInstalled(
   host: McpHost,
   discovery: ToolDiscovery,
 ): Promise<{ installed: boolean; via: DetectionVia }> {
   if (discovery.names.has(host.bin.toLowerCase())) return { installed: true, via: "toolscan" };
+  if (await isOnPath(host.bin)) return { installed: true, via: "path" };
   if (host.detectInstalled) {
     return (await host.detectInstalled())
       ? { installed: true, via: "config-dir" }
       : { installed: false, via: "none" };
   }
-  return (await isOnPath(host.bin)) ? { installed: true, via: "path" } : { installed: false, via: "none" };
+  return { installed: false, via: "none" };
+}
+
+/**
+ * The absolute CLI path toolscan found for a host, if any.
+ *
+ * Without this, a harness whose CLI is installed off PATH (the seam's own
+ * motivating case) reads as an unreadable registration — `unknown`, which
+ * `install` reports as a conflict and `--force` turns into a failed
+ * registration. Toolscan's scan covers the install roots beyond PATH, so its
+ * reported path is exactly the command `inspect`/`register` must execute.
+ */
+function toolscanBin(host: McpHost, discovery: ToolDiscovery): string | undefined {
+  return discovery.paths.get(host.bin.toLowerCase());
 }
 
 function noteFor(registration: Registration, detail?: string): string | undefined {
@@ -243,7 +222,7 @@ function noteFor(registration: Registration, detail?: string): string | undefine
 }
 
 export async function runInstall(options: InstallOptions = {}): Promise<InstallReport> {
-  const hosts = selectHosts(options.hosts ?? configuredHosts(), options.only);
+  const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
   const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
@@ -263,7 +242,8 @@ export async function runInstall(options: InstallOptions = {}): Promise<InstallR
       continue;
     }
 
-    const { registration, detail } = await host.inspect();
+    const execBin = toolscanBin(host, discovery);
+    const { registration, detail } = await host.inspect(execBin);
     const blocked = outcomeFor(registration, options.force === true);
     if (blocked) {
       reports.push({
@@ -283,7 +263,7 @@ export async function runInstall(options: InstallOptions = {}): Promise<InstallR
     }
 
     try {
-      await host.register();
+      await host.register(execBin);
       reports.push({ ...base, detectedVia: presence.via, installed: true, registration, outcome: "registered" });
     } catch (error) {
       reports.push({
@@ -316,7 +296,7 @@ const DOCTOR_OUTCOME: Record<Registration, Outcome> = {
 export async function runDoctor(
   options: { hosts?: McpHost[]; only?: string[]; discover?: () => Promise<ToolDiscovery> } = {},
 ): Promise<DoctorReport> {
-  const hosts = selectHosts(options.hosts ?? configuredHosts(), options.only);
+  const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
   const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
@@ -333,7 +313,7 @@ export async function runDoctor(
       });
       continue;
     }
-    const { registration, detail } = await host.inspect();
+    const { registration, detail } = await host.inspect(toolscanBin(host, discovery));
     reports.push({
       ...base,
       detectedVia: presence.via,
