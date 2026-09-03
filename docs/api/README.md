@@ -3,9 +3,13 @@
 The Ix backend exposes a JSON-over-HTTP API on **`http://localhost:8090`** (the
 local Docker memory-layer). The `ix` CLI and the Compass visualizer are its two
 primary clients. This reference is generated from the client source
-(`ix-cli/src/client/api.ts`), the visualizer server template
-(`ix-cli/src/cli/commands/view.js`), and the shared client types
-(`ix-cli/src/client/types.ts`).
+(`ix-cli/src/client/api.ts`) and the shared client types
+(`ix-cli/src/client/types.ts`). The visualizer proxy
+(`ix-cli/src/cli/commands/view.ts`) forwards every `/v1/*` request to the
+backend and defines no endpoints of its own. A committed parity gate
+(`ix-cli/scripts/check-api-parity.mjs`, wired into CI) enforces that the
+OpenAPI paths/methods match the client surface, so the reference cannot drift
+from what the CLI actually calls.
 
 ## Table of Contents
 
