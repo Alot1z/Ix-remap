@@ -290,12 +290,12 @@ jobs:
 
   # ── API-reference parity gate ────────────────────────────────────────────
   # docs/api/openapi.yaml claims to be generated from the client source; this
-  # gate enforces it. The visualizer proxy forwards every /v1/* request and
-  # defines no endpoints of its own, so the client surface
-  # (ix-cli/src/client/api.ts) is the complete source of truth: a client call
-  # with no documented path/method, or a documented endpoint the client never
-  # calls, fails this job with the endpoint named. It parses source + yaml
-  # directly, so it needs no install or build.
+  # gate enforces it across four surfaces: endpoint parity (client calls vs
+  # openapi paths), openapi.yaml validity + $ref integrity, the schema contract
+  # (every schema must exist in types.ts or the explicit allowlist), and the
+  # README Endpoints by Area section. A client call pattern the gate cannot
+  # classify fails loudly rather than passing silently. The gate parses yaml
+  # with the `yaml` package, so ix-cli deps are installed first.
   api-parity:
     name: API-reference parity
     runs-on: ubuntu-latest
@@ -306,6 +306,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ix-cli/package-lock.json
+      - name: Install (ix-cli)
+        working-directory: ix-cli
+        run: npm ci --silent
       - name: docs/api vs client surface
         working-directory: ix-cli
         run: node scripts/check-api-parity.mjs
