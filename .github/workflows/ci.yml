@@ -289,13 +289,32 @@ jobs:
         run: docker compose -f docker-compose.standalone.yml logs --tail 200
 
   # ── Aggregate gate ───────────────────────────────────────────────────────
+  # ── Link gate ────────────────────────────────────────────────────────────
+  # Probes every external URL in the repo's markdown and fails on 404/410, so
+  # a link that stops resolving cannot merge. Zero dependencies (Node fetch),
+  # so no npm ci — runs in seconds. The allowlist is self-cleaning: an entry
+  # that no longer appears in any scanned file fails the gate, so an allowed
+  # dead link forces its own removal once the fixing PR merges.
+  links:
+    name: Dead-link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Check markdown links
+        run: node ix-cli/scripts/check-links.mjs
+
   # One stable required-status-check context. Branch protection requires only
   # this job, so the matrix can be reshaped without orphaning required checks.
   # Fails if any upstream job failed OR was skipped/cancelled.
   ci-success:
     name: CI Passed
     if: always()
-    needs: [static, test, e2e]
+    needs: [static, test, e2e, links]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
@@ -303,6 +322,8 @@ jobs:
           echo "static=${{ needs.static.result }}"
           echo "test=${{ needs.test.result }}"
           echo "e2e=${{ needs.e2e.result }}"
+          echo "links=${{ needs.links.result }}"
           [ "${{ needs.static.result }}" = "success" ] \
             && [ "${{ needs.test.result }}" = "success" ] \
-            && [ "${{ needs.e2e.result }}" = "success" ]
+            && [ "${{ needs.e2e.result }}" = "success" ] \
+            && [ "${{ needs.links.result }}" = "success" ]
