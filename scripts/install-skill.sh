@@ -5,20 +5,18 @@
 # skills/ix is a single, harness-agnostic skill (SKILL.md + references/ +
 # scripts/). Each agent harness loads skills from its own directory, so this
 # script probes for installed harnesses and deploys the same tree to each one
-# that is present:
+# that is present.
 #
-#   ~/.claude/skills/ix            Claude Code
-#   ~/.agents/skills/ix            Agents (agents.md convention)
-#   ~/.codex/skills/ix             Codex CLI
-#   ~/.gemini/skills/ix            Gemini CLI
-#   ~/.cursor/skills/ix            Cursor
-#   ~/.config/opencode/skills/ix   opencode
-#   ~/.vscode/skills/ix            VS Code
-#   ~/.openclaw/skills/ix          OpenClaw
+# The harness table is NOT maintained here: it is derived from the
+# authoritative registry, ix-cli/src/mcp/hosts.ts (the same host list `ix mcp
+# install` drives), read by ix-cli/scripts/skill-harnesses.mjs. A harness
+# added to hosts.ts with a literal config target becomes installable here with
+# zero edits to this script. ~/.agents — the agents.md surface — is not an MCP
+# host, so the helper appends it as a documented supplement.
 #
 # A harness is "present" when its CLI is on PATH or its config directory
-# exists — the same detection `ix mcp install` uses — so a GUI-only install is
-# still found. Re-run after editing skills/ix to update every installed copy.
+# exists, so a GUI-only install is still found. Re-run after editing skills/ix
+# to update every installed copy.
 #
 # Usage:
 #   bash scripts/install-skill.sh            # install to every harness found
@@ -44,53 +42,65 @@ for arg in "$@"; do
   esac
 done
 
-# id|bin|config dir|skill destination
-HARNESSES=(
-  "claude|claude|$HOME/.claude|$HOME/.claude/skills/ix"
-  "agents||$HOME/.agents|$HOME/.agents/skills/ix"
-  "codex|codex|$HOME/.codex|$HOME/.codex/skills/ix"
-  "gemini|gemini|$HOME/.gemini|$HOME/.gemini/skills/ix"
-  "cursor|cursor|$HOME/.cursor|$HOME/.cursor/skills/ix"
-  "opencode|opencode|$HOME/.config/opencode|$HOME/.config/opencode/skills/ix"
-  "vscode|code|$HOME/.vscode|$HOME/.vscode/skills/ix"
-  "openclaw|openclaw|$HOME/.openclaw|$HOME/.openclaw/skills/ix"
-)
+# --- Read the harness registry (hosts.ts via the helper, no built CLI) ------
+HELPER="$ROOT/ix-cli/scripts/skill-harnesses.mjs"
+if [ ! -f "$HELPER" ]; then
+  echo "error: $HELPER not found (the harness registry helper)" >&2
+  exit 1
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "error: node is required to read the harness registry (ix-cli/src/mcp/hosts.ts)" >&2
+  exit 1
+fi
 
-detected() {
-  local bin="$1" cfg="$2"
-  { [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1; } || [ -e "$cfg" ]
+HELPER_OUT="$(node "$HELPER")" || {
+  echo "error: harness registry helper failed — see its stderr above" >&2
+  exit 1
 }
+IDS=() LABELS=() BINS=() CFGS=() DESTS=()
+while IFS= read -r row; do
+  IFS='|' read -r id label bin cfg skill <<<"$row"
+  [ -z "$cfg" ] && { echo "error: harness '$id' has no config-dir convention" >&2; exit 1; }
+  cfg="${cfg//\~/$HOME}"
+  skill="${skill//\~/$HOME}"
+  IDS+=("$id"); LABELS+=("$label"); BINS+=("$bin"); CFGS+=("$cfg"); DESTS+=("$skill/ix")
+done <<<"$HELPER_OUT"
 
+if [ "${#IDS[@]}" = "0" ]; then
+  echo "error: harness registry produced no entries" >&2
+  exit 1
+fi
+
+# --- Explicit harness id selection (unknown ids are an error, not a no-op) ---
 if [ "${#EXPLICIT[@]}" -gt 0 ]; then
-  wanted="${EXPLICIT[*]}"
-  valid=""
-  for entry in "${HARNESSES[@]}"; do
-    id="${entry%%|*}"
-    valid="$valid $id"
-  done
+  all="${IDS[*]}"
   for id in "${EXPLICIT[@]}"; do
-    case " $valid " in
+    case " $all " in
       *" $id "*) ;;
       *) echo "error: unknown harness id '$id'" >&2
-         echo "       valid ids:${valid}" >&2
+         echo "       valid ids:${all}" >&2
          exit 1 ;;
     esac
   done
-  filtered=()
-  for entry in "${HARNESSES[@]}"; do
-    id="${entry%%|*}"
-    case " $wanted " in
-      *" $id "*) filtered+=("$entry") ;;
+  want=" ${EXPLICIT[*]} "
+  o_ids=("${IDS[@]}"); o_labels=("${LABELS[@]}"); o_bins=("${BINS[@]}")
+  o_cfgs=("${CFGS[@]}"); o_dests=("${DESTS[@]}")
+  IDS=(); LABELS=(); BINS=(); CFGS=(); DESTS=()
+  for ((i = 0; i < ${#o_ids[@]}; i++)); do
+    case "$want" in
+      *" ${o_ids[$i]} "*)
+        IDS+=("${o_ids[$i]}"); LABELS+=("${o_labels[$i]}"); BINS+=("${o_bins[$i]}")
+        CFGS+=("${o_cfgs[$i]}"); DESTS+=("${o_dests[$i]}") ;;
     esac
   done
-  HARNESSES=("${filtered[@]}")
 fi
 
+# --- Install to every selected harness that is present -----------------------
 installed=0
 conflicts=0
-for entry in "${HARNESSES[@]}"; do
-  IFS='|' read -r id bin cfg dest <<<"$entry"
-  if ! detected "$bin" "$cfg"; then
+for ((i = 0; i < ${#IDS[@]}; i++)); do
+  id="${IDS[$i]}"; bin="${BINS[$i]}"; cfg="${CFGS[$i]}"; dest="${DESTS[$i]}"
+  if ! { [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1; } && [ ! -e "$cfg" ]; then
     if [ -n "$bin" ]; then
       echo "skip: $id — no $bin CLI or config at $cfg"
     else
@@ -135,9 +145,8 @@ fi
 
 if [ "$installed" = "0" ] && [ "$conflicts" = "0" ]; then
   echo
-  echo "No agent harness found. Install one of: claude, agents (agents.md),"
-  echo "codex, gemini, cursor, opencode, vscode, openclaw — or pass ids:"
-  echo "  bash scripts/install-skill.sh claude"
+  echo "No agent harness found. Install one of: ${IDS[*]} — or pass ids:"
+  echo "  bash scripts/install-skill.sh ${IDS[0]}"
   exit 0
 fi
 
