@@ -153,6 +153,47 @@ function selectHosts(all: McpHost[], only?: string[]): McpHost[] {
 }
 
 /**
+ * Restrict the real registry to the ids in a fixture when requested.
+ *
+ * This is intentionally a source-level seam for the clean-container smoke
+ * test: the fixture is still parsed by the same registry helper, while the
+ * default path remains the complete checked-in host table.
+ */
+export function configuredHosts(): McpHost[] {
+  const fixture = process.env.HARNESS_HOSTS_FILE?.trim();
+  if (!fixture) return createHosts(writeJsonConfig);
+
+  let source: string;
+  try {
+    source = readFileSync(fixture, "utf8");
+  } catch (error) {
+    throw new Error(
+      `cannot read HARNESS_HOSTS_FILE ${fixture}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+
+  const allowedIds = new Set<string>();
+  for (const match of source.matchAll(/\bid:\s*["']([^"']+)["']/g)) {
+    const id = match[1];
+    if (id) allowedIds.add(id);
+  }
+  if (allowedIds.size === 0) {
+    throw new Error(`HARNESS_HOSTS_FILE ${fixture} contains no host ids`);
+  }
+
+  const allHosts = createHosts(writeJsonConfig);
+  const knownIds = new Set(allHosts.map((host) => host.id));
+  const unknownIds = [...allowedIds].filter((id) => !knownIds.has(id));
+  if (unknownIds.length > 0) {
+    throw new Error(
+      `HARNESS_HOSTS_FILE ${fixture} contains unknown host ${unknownIds.map((id) => `'${id}'`).join(", ")}`,
+    );
+  }
+  return allHosts.filter((host) => allowedIds.has(host.id));
+}
+
+/**
  * Whether the host is present.
  *
  * The toolscan seam only ever adds evidence: a harness whose CLI toolscan
@@ -184,7 +225,7 @@ function noteFor(registration: Registration, detail?: string): string | undefine
 }
 
 export async function runInstall(options: InstallOptions = {}): Promise<InstallReport> {
-  const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const hosts = selectHosts(options.hosts ?? configuredHosts(), options.only);
   const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
@@ -242,7 +283,7 @@ const DOCTOR_OUTCOME: Record<Registration, Outcome> = {
 export async function runDoctor(
   options: { hosts?: McpHost[]; only?: string[]; discover?: () => Promise<ToolDiscovery> } = {},
 ): Promise<DoctorReport> {
-  const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const hosts = selectHosts(options.hosts ?? configuredHosts(), options.only);
   const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];

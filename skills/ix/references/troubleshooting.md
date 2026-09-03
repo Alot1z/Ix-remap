@@ -50,6 +50,54 @@ again.
   stops sending more (default 5). `0` sends every patch regardless, which is
   the pre-#560 behaviour.
 
+## Harness presence (hermetic reproduction)
+
+The installers use the shared registry in `ix-cli/src/mcp/hosts.ts`. The
+registry helper (`ix-cli/scripts/skill-harnesses.mjs --probe`) emits one row per
+registry host with a final `1` or `0` presence field. If `toolscan` is available,
+its discovery output is consumed as additive evidence for binaries installed
+outside `PATH`; otherwise the embedded `PATH` and config-directory probes decide.
+
+Use these environment variables to reproduce the decision without using the
+real user configuration:
+
+| Variable | Scope | Purpose | Default |
+|---|---|---|---|
+| `TOOLSCAN_PATH` | helper and `ix mcp install` | An executable, script, or `dist/toolscan.mjs` to query. If unset, the helper looks for `toolscan` on `PATH`. | No toolscan; embedded probes decide. |
+| `HARNESS_HOME` | `skill-harnesses.mjs --probe` | Replaces Node's home directory when expanding `~` for config-directory presence checks. | `os.homedir()` |
+| `HARNESS_HOSTS_FILE` | `ix mcp install` and `ix mcp doctor` | A checked-in or temporary `hosts.ts` fixture. The CLI extracts its declared host IDs, filters the normal registry to those IDs, and rejects unknown IDs. | Complete checked-in registry |
+
+A no-write local probe is:
+
+```bash
+HARNESS_HOME="$(mktemp -d)" \
+  node ix-cli/scripts/skill-harnesses.mjs --probe
+```
+
+To include a local checkout or an npm-installed toolscan bundle:
+
+```bash
+TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
+  HARNESS_HOME="$(mktemp -d)" \
+  node ix-cli/scripts/skill-harnesses.mjs --probe
+```
+
+To exercise the CLI surface with a fixture, use the committed fixture from
+`.github/fixtures/harness-smoke/`:
+
+```bash
+HOME="$(mktemp -d)" \
+HARNESS_HOSTS_FILE="$PWD/.github/fixtures/harness-smoke/hosts.ts" \
+TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
+node ix-cli/dist/cli/main.js mcp install --dry-run --format json
+```
+
+The CI smoke job repeats this in a clean `node:22-bookworm` container with a
+fake `toolscan` result naming only `claude`. It asserts `claude` is present and
+`codex`/`openclaw` are absent through both the shell installer and `ix mcp
+install`; the fake command and temporary home prevent host-machine state from
+making the check pass accidentally.
+
 ## Re-mapping
 
 The graph persists between sessions but goes stale as code changes. Re-run

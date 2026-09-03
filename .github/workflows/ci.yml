@@ -315,6 +315,69 @@ jobs:
         working-directory: ix-cli
         run: node scripts/check-api-parity.mjs
 
+  # ── Harness installer smoke ─────────────────────────────────────────────
+  # Keep this in a clean container and feed both surfaces the same tiny fixture.
+  # The real machine's PATH and home directory must not decide this test: if the
+  # fixture disappears or the helper stops consuming toolscan output, the
+  # positive/negative assertions below fail instead of silently passing.
+  harness-install-smoke:
+    name: Harness install smoke
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Ix CLI dependencies
+        working-directory: ix-cli
+        run: npm ci --silent
+      - name: Build Ix CLI
+        working-directory: ix-cli
+        run: npm run build
+      - name: Exercise the registry helper and shell installer
+        shell: bash
+        env:
+          HOME: /tmp/ix-harness-home
+          HARNESS_HOME: /tmp/ix-harness-home
+          HARNESS_HOSTS_FILE: ${{ github.workspace }}/.github/fixtures/harness-smoke/hosts.ts
+          TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
+          PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME"
+          mkdir -p "$HOME"
+
+          rows=$(node ix-cli/scripts/skill-harnesses.mjs --probe)
+          printf '%s\n' "$rows"
+          grep -Fq 'claude|Claude Code|claude|~/.claude|~/.claude/skills|1' <<<"$rows"
+          grep -Fq 'codex|Codex CLI|codex|~/.codex|~/.codex/skills|0' <<<"$rows"
+          grep -Fq 'openclaw|OpenClaw|openclaw|~/.openclaw|~/.openclaw/skills|0' <<<"$rows"
+
+          install_out=$(bash scripts/install-skill.sh --dry-run)
+          printf '%s\n' "$install_out"
+          grep -Fq 'would install: /tmp/ix-harness-home/.claude/skills/ix' <<<"$install_out"
+          grep -Fq 'skip: codex' <<<"$install_out"
+          grep -Fq 'skip: openclaw' <<<"$install_out"
+          test ! -e "$HOME/.claude/skills/ix"
+      - name: Exercise ix mcp install dry-run with the same fixture
+        env:
+          HOME: /tmp/ix-harness-home
+          HARNESS_HOSTS_FILE: ${{ github.workspace }}/.github/fixtures/harness-smoke/hosts.ts
+          TOOLSCAN_PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke/toolscan.mjs
+          PATH: ${{ github.workspace }}/.github/fixtures/harness-smoke:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        working-directory: ix-cli
+        run: |
+          set -euo pipefail
+          node dist/cli/main.js mcp install --dry-run --format json | tee /tmp/mcp-install.json
+          node -e '
+            const r = require("/tmp/mcp-install.json");
+            const byId = new Map(r.hosts.map((h) => [h.id, h]));
+            if (byId.get("claude")?.outcome !== "would-register") throw new Error("claude was not detected");
+            if (byId.get("codex")?.outcome !== "not-installed") throw new Error("codex was detected unexpectedly");
+            if (byId.get("openclaw")?.outcome !== "not-installed") throw new Error("openclaw was detected unexpectedly");
+          '
+
   # ── Aggregate gate ───────────────────────────────────────────────────────
   # One stable required-status-check context. Branch protection requires only
   # this job, so the matrix can be reshaped without orphaning required checks.
@@ -322,7 +385,7 @@ jobs:
   ci-success:
     name: CI Passed
     if: always()
-    needs: [static, test, e2e, api-parity]
+    needs: [static, test, e2e, api-parity, harness-install-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
@@ -331,7 +394,9 @@ jobs:
           echo "test=${{ needs.test.result }}"
           echo "e2e=${{ needs.e2e.result }}"
           echo "api-parity=${{ needs.api-parity.result }}"
+          echo "harness-install-smoke=${{ needs.harness-install-smoke.result }}"
           [ "${{ needs.static.result }}" = "success" ] \
             && [ "${{ needs.test.result }}" = "success" ] \
             && [ "${{ needs.e2e.result }}" = "success" ] \
-            && [ "${{ needs.api-parity.result }}" = "success" ]
+            && [ "${{ needs.api-parity.result }}" = "success" ] \
+            && [ "${{ needs.harness-install-smoke.result }}" = "success" ]

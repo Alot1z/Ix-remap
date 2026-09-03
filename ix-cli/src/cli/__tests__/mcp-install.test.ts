@@ -15,7 +15,7 @@ import {
   type Registration,
 } from "../../mcp/hosts.js";
 import { IX_MCP_OSS_TOOL_NAMES, IX_MCP_PRO_TOOL_NAMES } from "../../mcp/server.js";
-import { runDoctor, runInstall, writeJsonConfig } from "../../mcp/install.js";
+import { configuredHosts, runDoctor, runInstall, writeJsonConfig } from "../../mcp/install.js";
 
 const scratch: string[] = [];
 
@@ -221,6 +221,30 @@ describe("ix mcp install", () => {
 
     expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
     expect(host.registerCalls).toBe(1);
+  });
+});
+
+describe("fixture registry", () => {
+  it("restricts the default host table to HARNESS_HOSTS_FILE ids", () => {
+    const dir = tempDir();
+    const fixture = join(dir, "hosts.ts");
+    const previous = process.env.HARNESS_HOSTS_FILE;
+    writeFileSync(
+      fixture,
+      [
+        'const fixture = [',
+        '  { id: "claude", label: "Claude Code", bin: "claude", target: "user scope" },',
+        '  { id: "codex", label: "Codex CLI", bin: "codex", target: "~/.codex/config.toml" },',
+        "];",
+      ].join("\n"),
+    );
+    process.env.HARNESS_HOSTS_FILE = fixture;
+    try {
+      expect(configuredHosts().map((host) => host.id)).toEqual(["claude", "codex"]);
+    } finally {
+      if (previous === undefined) delete process.env.HARNESS_HOSTS_FILE;
+      else process.env.HARNESS_HOSTS_FILE = previous;
+    }
   });
 });
 

@@ -71,6 +71,34 @@ Map → Explain → Trace → Impact
 4. Immediately after modifying code, run `ix map --silent` to re-ingest.
 5. When Ix reports low confidence, mention the uncertainty to the user, suggest re-running `ix map`, and never present low-confidence data as established fact.
 
+## Harness install seam
+
+The skill installers (`scripts/install-skill.sh` and `ix mcp install`) derive the authoritative harness list from `ix-cli/src/mcp/hosts.ts`. When toolscan is available, both surfaces consult its discovery output so a harness CLI installed outside `PATH` can still be found. Toolscan is optional and additive: if it is missing or fails, the embedded `PATH` and config-directory probes remain authoritative.
+
+The probe battery has two environment seams:
+
+| Seam | Used by | Default |
+|---|---|---|
+| `TOOLSCAN_PATH` | `skill-harnesses.mjs --probe`, `ix mcp install` | `toolscan` on `PATH`, otherwise embedded probes decide |
+| `HARNESS_HOME` | `skill-harnesses.mjs --probe` | `os.homedir()`; `install-skill.sh` uses the shell's `$HOME` |
+
+For a hermetic probe with no real user configuration:
+
+```bash
+HARNESS_HOME="$(mktemp -d)" \
+  node ix-cli/scripts/skill-harnesses.mjs --probe
+```
+
+To drive the same probe with a local or npm-installed toolscan bundle:
+
+```bash
+TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
+  HARNESS_HOME="$(mktemp -d)" \
+  node ix-cli/scripts/skill-harnesses.mjs --probe
+```
+
+`--probe` emits `id|label|bin|config-dir|skill-dir|present`, where `present` is `1` or `0`. `scripts/install-skill.sh --dry-run` consumes those rows and previews only present harnesses. `HARNESS_HOSTS_FILE` is available for clean-container tests; it restricts the CLI registry to the host IDs declared in the fixture and rejects unknown IDs.
+
 ## References
 
 - **references/commands.md** — full command routing tables, decomposition recipes, best practices, and the do-not-use list. Load before running any command beyond the core four above.
