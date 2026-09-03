@@ -288,6 +288,28 @@ jobs:
         if: failure()
         run: docker compose -f docker-compose.standalone.yml logs --tail 200
 
+  # ── API-reference parity gate ────────────────────────────────────────────
+  # docs/api/openapi.yaml claims to be generated from the client source; this
+  # gate enforces it. The visualizer proxy forwards every /v1/* request and
+  # defines no endpoints of its own, so the client surface
+  # (ix-cli/src/client/api.ts) is the complete source of truth: a client call
+  # with no documented path/method, or a documented endpoint the client never
+  # calls, fails this job with the endpoint named. It parses source + yaml
+  # directly, so it needs no install or build.
+  api-parity:
+    name: API-reference parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: docs/api vs client surface
+        working-directory: ix-cli
+        run: node scripts/check-api-parity.mjs
+
   # ── Aggregate gate ───────────────────────────────────────────────────────
   # One stable required-status-check context. Branch protection requires only
   # this job, so the matrix can be reshaped without orphaning required checks.
@@ -295,7 +317,7 @@ jobs:
   ci-success:
     name: CI Passed
     if: always()
-    needs: [static, test, e2e]
+    needs: [static, test, e2e, api-parity]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
@@ -303,6 +325,8 @@ jobs:
           echo "static=${{ needs.static.result }}"
           echo "test=${{ needs.test.result }}"
           echo "e2e=${{ needs.e2e.result }}"
+          echo "api-parity=${{ needs.api-parity.result }}"
           [ "${{ needs.static.result }}" = "success" ] \
             && [ "${{ needs.test.result }}" = "success" ] \
-            && [ "${{ needs.e2e.result }}" = "success" ]
+            && [ "${{ needs.e2e.result }}" = "success" ] \
+            && [ "${{ needs.api-parity.result }}" = "success" ]
