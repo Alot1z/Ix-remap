@@ -54,14 +54,22 @@ const typesDefault = join(here, "..", "src", "client", "types.ts");
 const docDefault = join(repoRoot, "docs", "api", "openapi.yaml");
 const readmeDefault = join(repoRoot, "docs", "api", "README.md");
 
-const arg = (name, fallback) => {
+const argValue = (name, fallback) => {
+  const eq = process.argv.find((a) => a.startsWith(`${name}=`));
+  if (eq !== undefined) return eq.slice(name.length + 1);
   const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : fallback;
+  if (i < 0) return fallback;
+  const v = process.argv[i + 1];
+  if (v === undefined || v.startsWith("--")) {
+    process.stderr.write(`error: option '${name} <value>' argument missing\n`);
+    process.exit(1);
+  }
+  return v;
 };
-const apiPath = arg("--api", apiDefault);
-const typesPath = arg("--types", typesDefault);
-const docPath = arg("--doc", docDefault);
-const readmePath = arg("--readme", readmeDefault);
+const apiPath = argValue("--api", apiDefault);
+const typesPath = argValue("--types", typesDefault);
+const docPath = argValue("--doc", docDefault);
+const readmePath = argValue("--readme", readmeDefault);
 
 for (const [label, p] of [
   ["api.ts", apiPath],
