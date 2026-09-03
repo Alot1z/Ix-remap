@@ -99,6 +99,8 @@ TOOLSCAN_PATH=/path/to/toolscan/dist/toolscan.mjs \
 
 `--probe` emits `id|label|bin|config-dir|skill-dir|present`, where `present` is `1` or `0`. `scripts/install-skill.sh --dry-run` consumes those rows and previews only present harnesses. `HARNESS_HOSTS_FILE` is available for clean-container tests; it restricts the CLI registry to the host IDs declared in the fixture and rejects unknown IDs.
 
+The install report's `--format json|llm` output carries `detectedVia` per host (`toolscan` | `path` | `config-dir` | `none`), so a consumer can see which probe decided presence — a host toolscan found reads `toolscan` even when its CLI also happens to be on PATH.
+
 ## References
 
 - **references/commands.md** — full command routing tables, decomposition recipes, best practices, and the do-not-use list. Load before running any command beyond the core four above.

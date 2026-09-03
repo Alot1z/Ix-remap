@@ -27,9 +27,19 @@ export type Outcome =
   /** Doctor only: ours, but the launcher path it records is gone. */
   | "stale";
 
+/** Which probe decided a host's presence. */
+export type DetectionVia = "toolscan" | "path" | "config-dir" | "none";
+
 export interface HostReport extends HostStatus {
   outcome: Outcome;
   target: string;
+  /**
+   * Which probe decided presence: toolscan's scan, the PATH probe, a config
+   * directory, or `none` when the host is absent. Makes the toolscan seam
+   * auditable: a host toolscan found reads `toolscan` even when its CLI also
+   * happens to be on PATH.
+   */
+  detectedVia: DetectionVia;
   /** Why it was skipped, or how it failed. */
   note?: string;
 }
@@ -202,9 +212,17 @@ export function configuredHosts(): McpHost[] {
  * no CLI on PATH, and toolscan's bounded scan can truncate — so the embedded
  * check still runs whenever toolscan does not name the bin.
  */
-async function hostInstalled(host: McpHost, discovery: ToolDiscovery): Promise<boolean> {
-  if (discovery.names.has(host.bin.toLowerCase())) return true;
-  return host.detectInstalled ? host.detectInstalled() : isOnPath(host.bin);
+async function hostInstalled(
+  host: McpHost,
+  discovery: ToolDiscovery,
+): Promise<{ installed: boolean; via: DetectionVia }> {
+  if (discovery.names.has(host.bin.toLowerCase())) return { installed: true, via: "toolscan" };
+  if (host.detectInstalled) {
+    return (await host.detectInstalled())
+      ? { installed: true, via: "config-dir" }
+      : { installed: false, via: "none" };
+  }
+  return (await isOnPath(host.bin)) ? { installed: true, via: "path" } : { installed: false, via: "none" };
 }
 
 function noteFor(registration: Registration, detail?: string): string | undefined {
@@ -232,30 +250,45 @@ export async function runInstall(options: InstallOptions = {}): Promise<InstallR
 
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
+    const presence = await hostInstalled(host, discovery);
 
-    if (!(await hostInstalled(host, discovery))) {
-      reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
+    if (!presence.installed) {
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: false,
+        registration: "none",
+        outcome: "not-installed",
+      });
       continue;
     }
 
     const { registration, detail } = await host.inspect();
     const blocked = outcomeFor(registration, options.force === true);
     if (blocked) {
-      reports.push({ ...base, installed: true, registration, outcome: blocked, note: noteFor(registration, detail) });
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: true,
+        registration,
+        outcome: blocked,
+        note: noteFor(registration, detail),
+      });
       continue;
     }
 
     if (options.dryRun) {
-      reports.push({ ...base, installed: true, registration, outcome: "would-register" });
+      reports.push({ ...base, detectedVia: presence.via, installed: true, registration, outcome: "would-register" });
       continue;
     }
 
     try {
       await host.register();
-      reports.push({ ...base, installed: true, registration, outcome: "registered" });
+      reports.push({ ...base, detectedVia: presence.via, installed: true, registration, outcome: "registered" });
     } catch (error) {
       reports.push({
         ...base,
+        detectedVia: presence.via,
         installed: true,
         registration,
         outcome: "failed",
@@ -289,13 +322,21 @@ export async function runDoctor(
   const reports: HostReport[] = [];
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
-    if (!(await hostInstalled(host, discovery))) {
-      reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
+    const presence = await hostInstalled(host, discovery);
+    if (!presence.installed) {
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: false,
+        registration: "none",
+        outcome: "not-installed",
+      });
       continue;
     }
     const { registration, detail } = await host.inspect();
     reports.push({
       ...base,
+      detectedVia: presence.via,
       installed: true,
       registration,
       outcome: DOCTOR_OUTCOME[registration],

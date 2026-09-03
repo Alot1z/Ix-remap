@@ -375,8 +375,14 @@ jobs:
             const r = require("/tmp/mcp-install.json");
             const byId = new Map(r.hosts.map((h) => [h.id, h]));
             if (byId.get("claude")?.outcome !== "would-register") throw new Error("claude was not detected");
+            // The fake claude is on PATH too, so outcome alone cannot tell
+            // toolscan from the PATH probe; the source discriminator can.
+            if (byId.get("claude")?.detectedVia !== "toolscan")
+              throw new Error("claude was not detected via toolscan: " + byId.get("claude")?.detectedVia);
             if (byId.get("codex")?.outcome !== "not-installed") throw new Error("codex was detected unexpectedly");
+            if (byId.get("codex")?.detectedVia !== "none") throw new Error("codex detection source not reported");
             if (byId.get("openclaw")?.outcome !== "not-installed") throw new Error("openclaw was detected unexpectedly");
+            if (byId.get("openclaw")?.detectedVia !== "none") throw new Error("openclaw detection source not reported");
           '
 
   # ── Aggregate gate ───────────────────────────────────────────────────────

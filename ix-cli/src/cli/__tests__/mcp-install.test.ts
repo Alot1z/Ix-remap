@@ -63,7 +63,7 @@ describe("ix mcp install", () => {
     const report = await runInstall({ hosts: [host] });
 
     expect(host.registerCalls).toBe(1);
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "path" });
     expect(report.registered).toBe(1);
   });
 
@@ -137,7 +137,7 @@ describe("ix mcp install", () => {
     });
 
     expect(host.registerCalls).toBe(1);
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "toolscan" });
   });
 
   it("falls back to the embedded probe when toolscan did not find the CLI", async () => {
@@ -152,7 +152,7 @@ describe("ix mcp install", () => {
     // The seam is additive evidence only — a toolscan miss must not flip a
     // genuinely absent host to installed.
     expect(host.registerCalls).toBe(0);
-    expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false });
+    expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false, detectedVia: "none" });
   });
 
   it("keeps the config-dir probe for hosts toolscan does not name", async () => {
@@ -166,7 +166,7 @@ describe("ix mcp install", () => {
     });
 
     expect(host.registerCalls).toBe(1);
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "config-dir" });
   });
 
   it("reports a failing host without aborting the rest", async () => {
@@ -219,7 +219,7 @@ describe("ix mcp install", () => {
 
     const report = await runInstall({ hosts: [host] });
 
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "config-dir" });
     expect(host.registerCalls).toBe(1);
   });
 });
