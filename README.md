@@ -219,18 +219,26 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/ix-infrastructure/ix-cursor-plugin/main/install.ps1 | iex
 ```
 
-## Claude Code / Freebuff Skill
+## Agent Skill (any harness)
 
-[`skills/ix/`](skills/ix/SKILL.md) is a self-contained **Claude Code skill** (also
-loaded natively by Freebuff / Codebuff) that teaches any LLM agent to drive the
-`ix` CLI: build the graph, explain symbols, trace flows, analyze impact, and
-detect smells — instead of grepping and guessing.
+[`skills/ix/`](skills/ix/SKILL.md) is a single, self-contained **agent skill** that
+teaches any LLM agent to drive the `ix` CLI: build the graph, explain symbols,
+trace flows, analyze impact, and detect smells — instead of grepping and
+guessing. It is harness-agnostic: the same `skills/ix/` tree loads natively in
+Claude Code, Freebuff / Codebuff, Codex CLI, Gemini CLI, Cursor, and any other
+skill-compatible agent, because each harness reads its own skills directory.
 
-**Install it** (deploys to `~/.claude/skills/ix` and `~/.agents/skills/ix` so it
-works in every project):
+**Install it** — `scripts/install-skill.sh` probes which agent harnesses are
+installed on this machine and deploys `skills/ix` to every one of them (Claude
+Code's `~/.claude/skills`, Freebuff's `~/.agents/skills`, Codex's
+`~/.codex/skills`, Gemini's `~/.gemini/skills`, Cursor's `~/.cursor/skills`, and
+more — the same detection `ix mcp install` uses). Pass `--dry-run` to see the
+targets, or list harness ids to install only those:
 
 ```bash
-bash scripts/install-skill.sh
+bash scripts/install-skill.sh          # every harness found
+bash scripts/install-skill.sh --dry-run
+bash scripts/install-skill.sh claude gemini
 ```
 
 Then start a new session and ask your agent to set it up:
