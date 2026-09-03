@@ -8,7 +8,7 @@
 # that is present:
 #
 #   ~/.claude/skills/ix            Claude Code
-#   ~/.agents/skills/ix            Freebuff / Codebuff
+#   ~/.agents/skills/ix            Agents (agents.md convention)
 #   ~/.codex/skills/ix             Codex CLI
 #   ~/.gemini/skills/ix            Gemini CLI
 #   ~/.cursor/skills/ix            Cursor
@@ -63,6 +63,19 @@ detected() {
 
 if [ "${#EXPLICIT[@]}" -gt 0 ]; then
   wanted="${EXPLICIT[*]}"
+  valid=""
+  for entry in "${HARNESSES[@]}"; do
+    id="${entry%%|*}"
+    valid="$valid $id"
+  done
+  for id in "${EXPLICIT[@]}"; do
+    case " $valid " in
+      *" $id "*) ;;
+      *) echo "error: unknown harness id '$id'" >&2
+         echo "       valid ids:${valid}" >&2
+         exit 1 ;;
+    esac
+  done
   filtered=()
   for entry in "${HARNESSES[@]}"; do
     id="${entry%%|*}"
@@ -74,7 +87,6 @@ if [ "${#EXPLICIT[@]}" -gt 0 ]; then
 fi
 
 installed=0
-skipped=0
 conflicts=0
 for entry in "${HARNESSES[@]}"; do
   IFS='|' read -r id bin cfg dest <<<"$entry"
@@ -84,7 +96,21 @@ for entry in "${HARNESSES[@]}"; do
     else
       echo "skip: $id — no config at $cfg"
     fi
-    skipped=$((skipped + 1))
+    continue
+  fi
+  if [ -e "$dest" ] && [ "$FORCE" != "1" ] && ! grep -qs '^name: ix$' "$dest/SKILL.md"; then
+    # Refuse to delete something that is not a previous install of this skill.
+    # `ix` is a short name, and the unconditional `rm -rf` this replaces would
+    # silently destroy a hand-written skill that happened to share it — with no
+    # prompt, no backup, and nothing in the output to say it had happened. The
+    # check runs in dry-run too, so the preview and the real run agree.
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "would refuse: $dest — exists and is not an Ix skill install (use --force)"
+    else
+      echo "error: $dest exists and is not an Ix skill install." >&2
+      echo "       Move it aside, or re-run with --force to overwrite it." >&2
+    fi
+    conflicts=$((conflicts + 1))
     continue
   fi
   if [ "$DRY_RUN" = "1" ]; then
@@ -94,16 +120,6 @@ for entry in "${HARNESSES[@]}"; do
   fi
   mkdir -p "$(dirname "$dest")"
   if [ -e "$dest" ]; then
-    # Refuse to delete something that is not a previous install of this skill.
-    # `ix` is a short name, and the unconditional `rm -rf` this replaces would
-    # silently destroy a hand-written skill that happened to share it — with no
-    # prompt, no backup, and nothing in the output to say it had happened.
-    if [ "$FORCE" != "1" ] && ! grep -qs '^name: ix$' "$dest/SKILL.md"; then
-      echo "error: $dest exists and is not an Ix skill install." >&2
-      echo "       Move it aside, or re-run with --force to overwrite it." >&2
-      conflicts=$((conflicts + 1))
-      continue
-    fi
     rm -rf "$dest"
   fi
   cp -R "$SRC" "$dest"
@@ -119,7 +135,7 @@ fi
 
 if [ "$installed" = "0" ] && [ "$conflicts" = "0" ]; then
   echo
-  echo "No agent harness found. Install one of: claude, agents (Freebuff),"
+  echo "No agent harness found. Install one of: claude, agents (agents.md),"
   echo "codex, gemini, cursor, opencode, vscode, openclaw — or pass ids:"
   echo "  bash scripts/install-skill.sh claude"
   exit 0

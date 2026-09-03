@@ -224,16 +224,20 @@ irm https://raw.githubusercontent.com/ix-infrastructure/ix-cursor-plugin/main/in
 [`skills/ix/`](skills/ix/SKILL.md) is a single, self-contained **agent skill** that
 teaches any LLM agent to drive the `ix` CLI: build the graph, explain symbols,
 trace flows, analyze impact, and detect smells — instead of grepping and
-guessing. It is harness-agnostic: the same `skills/ix/` tree loads natively in
-Claude Code, Freebuff / Codebuff, Codex CLI, Gemini CLI, Cursor, and any other
-skill-compatible agent, because each harness reads its own skills directory.
+guessing. It follows the [Claude Code skill
+format](https://code.claude.com/docs/en/skills) and the
+[agents.md](https://agents.md) standard, and any skill-compatible harness loads
+the same `skills/ix/` tree natively from its own skills directory — Claude Code
+(`~/.claude/skills`), Agents (`~/.agents/skills`), Codex CLI, Gemini CLI,
+Cursor, and more.
 
 **Install it** — `scripts/install-skill.sh` probes which agent harnesses are
 installed on this machine and deploys `skills/ix` to every one of them (Claude
-Code's `~/.claude/skills`, Freebuff's `~/.agents/skills`, Codex's
-`~/.codex/skills`, Gemini's `~/.gemini/skills`, Cursor's `~/.cursor/skills`, and
-more — the same detection `ix mcp install` uses). Pass `--dry-run` to see the
-targets, or list harness ids to install only those:
+Code's `~/.claude/skills`, Agents' `~/.agents/skills` per
+[agents.md](https://agents.md), Codex's `~/.codex/skills`, Gemini's
+`~/.gemini/skills`, Cursor's `~/.cursor/skills`, and more — the same detection
+`ix mcp install` uses). Pass `--dry-run` to see the targets, or list harness
+ids to install only those:
 
 ```bash
 bash scripts/install-skill.sh          # every harness found
@@ -259,8 +263,8 @@ powershell -ExecutionPolicy Bypass -File skills/ix/scripts/bootstrap.ps1 .
 The skill follows the progressive-disclosure layout — a lean `SKILL.md` with the
 full command reference, output-format rules, and troubleshooting split into
 `references/`, plus `scripts/` for first-run setup — so it is portable to Claude
-Code, Freebuff, and any other skill-compatible agent. Edit `skills/ix/` and
-re-run `scripts/install-skill.sh` to update your installed copy. To produce a
+Code, Agents, and any other skill-compatible agent. Edit `skills/ix/` and
+re-run `scripts/install-skill.sh` to update every installed copy. To produce a
 distributable zip:
 
 ```bash
