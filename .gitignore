@@ -5,7 +5,8 @@ target/
 # better kept that way so the intent of each is visible.
 /dist/
 
-# Session/tooling artifacts (Freebuff preview state, generated knowledge graphs)
+# Session/tooling artifacts (preview state, generated knowledge graphs; the
+# desktop tool writes .freebuff/ at session start)
 .freebuff/
 .understand-anything/
 .bsp/
