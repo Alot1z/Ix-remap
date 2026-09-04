@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { quoteForCmd as tsQuoteForCmd } from "../../mcp/hosts.js";
+
 const scratch: string[] = [];
 
 afterEach(() => {
@@ -33,9 +35,10 @@ const helper = (await import("../../../scripts/skill-harnesses.mjs")) as unknown
   ) => ProbeResult;
   resolveToolscan: () => { cmd: string; args: string[] } | null;
   runToolscanOnce: (resolve?: () => { cmd: string; args: string[] } | null) => Set<string> | null;
+  quoteForCmd: (arg: string) => string;
 };
 
-const { probePresent, readHarnesses, resolveToolscan, runToolscanOnce } = helper;
+const { probePresent, readHarnesses, resolveToolscan, runToolscanOnce, quoteForCmd } = helper;
 
 const row = (overrides: Partial<{ bin: string; cfg: string }> = {}) => ({
   id: "claude",
@@ -120,6 +123,38 @@ describe("resolveToolscan (the security pin)", () => {
       if (previousTs === undefined) delete process.env.TOOLSCAN_PATH;
       else process.env.TOOLSCAN_PATH = previousTs;
       process.env.PATH = previousPath ?? "";
+    }
+  });
+});
+
+describe("quoteForCmd (drift guard vs hosts.ts)", () => {
+  // The .mjs mirrors hosts.ts::quoteForCmd because it cannot import TS. This
+  // battery keeps the two byte-identical — a divergence here is exactly the
+  // "unquoted path with a space gets split" class the mirror exists to avoid.
+  const cases = [
+    ["C:\\node.exe", "C:\\node.exe"],
+    ["C:\\Program Files\\bin\\toolscan.cmd", '"C:\\Program Files\\bin\\toolscan.cmd"'],
+    ["C:\\a&b\\x.cmd", '"C:\\a&b\\x.cmd"'],
+    // Backslash is in the safe-bare class, so a lone backslash path is bare.
+    ["C:\\foo\\", "C:\\foo\\"],
+    // A space forces quoting; trailing backslashes are doubled before the
+    // closing quote so cmd does not eat it.
+    ["C:\\Program Files\\foo\\", '"C:\\Program Files\\foo\\\\"'],
+    // `~` is not in the safe-bare class (mirrors hosts.ts exactly).
+    ["~/.local/bin/claude", '"~/.local/bin/claude"'],
+    ["/opt/ix tools/bin/claude", '"/opt/ix tools/bin/claude"'],
+    ["npm-run.cmd", "npm-run.cmd"],
+  ] as const;
+
+  for (const [input, expected] of cases) {
+    it(`quotes ${JSON.stringify(input)}`, () => {
+      expect(quoteForCmd(input)).toBe(expected);
+    });
+  }
+
+  it("matches hosts.ts::quoteForCmd on every case", () => {
+    for (const [input] of cases) {
+      expect(quoteForCmd(input)).toBe(tsQuoteForCmd(input));
     }
   });
 });

@@ -93,6 +93,39 @@ export function resolveToolscan() {
 }
 
 /**
+ * Mirror of hosts.ts `quoteForCmd` for the shell branch below.
+ *
+ * Canonical copy: ix-cli/src/mcp/hosts.ts (the .mjs cannot import TS). The
+ * two must stay byte-identical — the drift guard is skill-harnesses.test.ts,
+ * which asserts this function equals the TS implementation across a battery
+ * of arguments. Wrapping in double quotes is what makes a path containing a
+ * space — or a `&`, or parentheses — survive: cmd treats a quoted region as
+ * literal. An argument carrying a double quote of its own cannot be encoded
+ * this way and is refused by hosts.ts `run`.
+ */
+const SAFE_BARE_ARG = /^[A-Za-z0-9_@:.,=+\-\\/]+$/;
+export function quoteForCmd(arg) {
+  if (SAFE_BARE_ARG.test(arg)) return arg;
+  let out = '"';
+  let slashes = 0;
+  for (const ch of arg) {
+    if (ch === "\\") {
+      slashes += 1;
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      out += `${`\\`.repeat(slashes)}\\"`;
+      slashes = 0;
+      continue;
+    }
+    slashes = 0;
+    out += ch;
+  }
+  return `${out}${`\\`.repeat(slashes)}"`;
+}
+
+/**
  * Run toolscan once and return the set of tool names it found with a usable
  * path (lowercased), or null when toolscan is unavailable or misbehaves.
  *
@@ -106,7 +139,13 @@ export function runToolscanOnce(resolve = resolveToolscan) {
   if (!target) return null;
   try {
     const useShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(target.cmd);
-    const out = execFileSync(target.cmd, target.args, {
+    // npm shims carry no executable bit and CreateProcess cannot launch them,
+    // so the whole line goes through cmd, PRE-QUOTED (same as hosts.ts `run`
+    // and discovery.ts `execSpawnable`): with `shell: true` and an args array
+    // node joins them unquoted, so a shim path containing a space would be
+    // split — the exact class hosts.ts::quoteForCmd exists for.
+    const line = [target.cmd, ...target.args].map(quoteForCmd).join(" ");
+    const out = execFileSync(useShell ? line : target.cmd, useShell ? {} : target.args, {
       encoding: "utf8",
       timeout: 20_000,
       windowsHide: true,
