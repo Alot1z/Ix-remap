@@ -238,10 +238,10 @@ Code's `~/.claude/skills`, Agents' `~/.agents/skills` per
 `~/.gemini/skills`, Cursor's `~/.cursor/skills`, and more — the same detection
 `ix mcp install` uses). Detection is embedded; when
 [toolscan](https://github.com/Alot1z/toolscan) is available (`TOOLSCAN_PATH`
-set, or `toolscan` on PATH) its discovery output additionally scans the common
-install roots beyond PATH (`~/.local/bin`, `%LOCALAPPDATA%`, ...) — a purely
-additive seam: without it the built-in probes decide, so a clean machine and
-CI behave exactly the same. Pass `--dry-run` to see the targets, or list
+set — never a bare-name PATH lookup, so nothing is executed unless you opt in)
+its discovery output additionally scans the common install roots beyond PATH
+(`~/.local/bin`, `%LOCALAPPDATA%`, ...) — a purely additive seam: without it
+the built-in probes decide, so a clean machine and CI behave exactly the same. Pass `--dry-run` to see the targets, or list
 harness ids to install only those:
 
 ```bash
