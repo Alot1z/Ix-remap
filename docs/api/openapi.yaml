@@ -977,6 +977,7 @@ components:
       properties:
         status: { type: string }
         schema_version: { type: integer, description: On-disk graph format version }
+        release_version: { type: string, description: The published release the running container was built as, when it knows (#599) }
     CapabilitiesResponse:
       type: object
       properties:
