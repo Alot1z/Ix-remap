@@ -194,7 +194,7 @@ const apiLines = apiSrc.split(/\r?\n/);
 // excluded.
 const KNOWN_HELPERS = new Set(["runReset"]);
 for (let i = 0; i < apiLines.length; i++) {
-  const call = apiLines[i].match(/this\.([a-zA-Z_$][\w$]*)\(/);
+  const call = apiLines[i].match(/this\.([a-zA-Z_$][\w$]*)(?:<[^>]*>)?\(/);
   if (!call) continue;
   const verb = call[1];
   if (VERBS.has(verb) || KNOWN_HELPERS.has(verb)) continue;
