@@ -181,7 +181,18 @@ async function hostInstalled(
   host: McpHost,
   discovery: ToolDiscovery,
 ): Promise<{ installed: boolean; via: DetectionVia }> {
-  if (discovery.names.has(host.bin.toLowerCase())) return { installed: true, via: "toolscan" };
+  // A toolscan entry must carry the path that makes its verdict executable:
+  // `inspect`/`register` run whatever `paths` names for an off-PATH harness,
+  // so a name-only entry (truncated scan) that flips presence here would fall
+  // through to a bare-name PATH exec that ENOENTs into a false `conflict`.
+  // Requiring the path degrades such entries to the embedded probes instead
+  // of inventing a presence toolscan did not actually establish.
+  if (
+    discovery.names.has(host.bin.toLowerCase()) &&
+    discovery.paths.has(host.bin.toLowerCase())
+  ) {
+    return { installed: true, via: "toolscan" };
+  }
   if (await isOnPath(host.bin)) return { installed: true, via: "path" };
   if (host.detectInstalled) {
     return (await host.detectInstalled())

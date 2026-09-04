@@ -173,6 +173,32 @@ describe("ix mcp install", () => {
     expect(host.registerBins).toEqual([undefined]);
   });
 
+  it("degrades a name-only toolscan entry to the embedded probes when the bin is off PATH", async () => {
+    // KageBinary #591 round-2 finding: a toolscan entry that names a bin but
+    // carries no path would flip presence on the name alone, then fall through
+    // to a bare-name PATH exec that cannot find an off-PATH CLI — a clean
+    // `not-installed` became a false `conflict`. The presence verdict must
+    // require the path toolscan reported, degrading to the embedded probes.
+    const host = fakeHost("absent", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({
+        source: "toolscan",
+        names: new Set(["definitely-not-a-real-binary-xyz"]),
+        paths: new Map(),
+      }),
+    });
+
+    expect(host.inspectBins).toEqual([]);
+    expect(host.registerCalls).toBe(0);
+    expect(report.hosts[0]).toMatchObject({
+      outcome: "not-installed",
+      installed: false,
+      detectedVia: "none",
+    });
+  });
+
   it("falls back to the embedded probe when toolscan did not find the CLI", async () => {
     // toolscan ran but only found `node`; the fake bin is not on PATH either.
     const host = fakeHost("absent", "none", { installed: false });
