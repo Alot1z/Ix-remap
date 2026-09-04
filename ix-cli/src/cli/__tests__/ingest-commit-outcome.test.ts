@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeCommitOutcome, describeStitchFailure, ingestCompletedCleanly, isStitchUnsupported } from "../commands/ingest.js";
+import { describeCommitOutcome, describeStitchFailure, describeStitchSkipped, ingestCompletedCleanly, isStitchUnsupported } from "../commands/ingest.js";
 
 describe("describeCommitOutcome", () => {
   it("says nothing when every patch committed", () => {
@@ -232,6 +232,66 @@ describe("describeStitchFailure", () => {
   it("does not read a three-digit run elsewhere in the message as a status", () => {
     expect(describeStitchFailure(new Error("connect ECONNREFUSED 127.0.0.1:8090")))
       .toContain("backend request failed");
+  });
+});
+
+describe("describeStitchSkipped", () => {
+  const cooling = "the last stitch was cut off after 62s and may still be running";
+  const contended = "another ix run is already stitching http://localhost:8090";
+
+  it("is a Note, not a failure, and leads with the reason", () => {
+    const msg = describeStitchSkipped(cooling, "cooling");
+    expect(msg.startsWith("Note:")).toBe(true);
+    expect(msg).not.toContain("Warning");
+    expect(msg).toContain(cooling);
+  });
+
+  it("stays short by default, but still carries a remedy that works", () => {
+    // 15 minutes of auto-map hooks, one Note each, so the long form's three
+    // sentences of unchanging advice were too much. But the reason alone is not
+    // enough either: waiting the cooldown out and re-running does NOT recover,
+    // because the mtime baseline is already written and the next map never
+    // enters the stitch block. The one thing that does has to be in the short
+    // form.
+    const msg = describeStitchSkipped(cooling, "cooling");
+    expect(msg.length).toBeLessThan(260);
+    expect(msg).toContain("ix ingest <root> --force");
+    expect(msg).not.toContain("Source patches were committed");
+  });
+
+  it("offers the plain re-run FIRST on contention, but still names --force", () => {
+    // --verbose is off by default, so this is the advice almost everyone sees,
+    // and it has to be both true and proportionate. The other run may be
+    // registering this same workspace and finishing a second later, so a forced
+    // monorepo re-ingest is the wrong thing to lead with -- but a plain re-run
+    // ALONE was a promise this code cannot keep: a skipped stitch does not stop
+    // the run persisting its mtime baseline, so the re-run is incremental and
+    // never reaches the stitch block. It prints nothing and exits 0.
+    const msg = describeStitchSkipped(contended, "in-flight");
+    expect(msg).toContain("Re-run once that finishes");
+    expect(msg).toContain("--force");
+    expect(msg.indexOf("Re-run")).toBeLessThan(msg.indexOf("--force"));
+  });
+
+  it("names --force on the deadline rule too, since a longer budget alone does not register", () => {
+    const msg = describeStitchSkipped("the map ran out of time", "deadline");
+    expect(msg).toContain("IX_MAP_DEADLINE_MS");
+    expect(msg).toContain("--force");
+
+    const verbose = describeStitchSkipped("the map ran out of time", "deadline", true);
+    expect(verbose).toContain("nothing was registered either");
+    expect(verbose).toContain("--force");
+  });
+
+  it("gives the remedy under --verbose, and picks it by RULE", () => {
+    const cool = describeStitchSkipped(cooling, "cooling", true);
+    expect(cool).toContain("Once the cooldown expires");
+    expect(cool).toContain("ix ingest <root> --force");
+    expect(cool).toContain("Source patches were committed");
+
+    const busy = describeStitchSkipped(contended, "in-flight", true);
+    expect(busy).toContain("may be registering a different workspace");
+    expect(busy).not.toContain("Once the cooldown expires");
   });
 });
 

@@ -535,8 +535,33 @@ Examples:
         const systems    = result.regions.filter(r => r.label_kind === "system").length;
         const subsystems = result.regions.filter(r => r.label_kind === "subsystem").length;
         const modules    = result.regions.filter(r => r.label_kind === "module").length;
+        // Ix#568: `--silent` returns before both format branches AND wins over
+        // `--format llm`, so it is the one output the hooks this field exists
+        // for actually see. A skipped stitch deliberately does not move the exit
+        // code -- without a token here an automated consumer cannot tell a clean
+        // map from one whose cross-repo edges are up to 15 minutes stale.
+        // Ix#568. The RULE, not just the fact -- and not for `incomplete`.
+        //
+        // `--silent` is the hook surface: one terse line per run. `incomplete`
+        // fires on nearly every incremental map, so emitting it here would put
+        // a token on almost every line and make `stitch_skipped` useless as a
+        // signal, while a consumer that actually needs to know an incremental
+        // map registered nothing has `--format json` and `--format llm`, which
+        // both carry it. What stays here is the guard refusing -- the case that
+        // means a backend is being protected from stacked joins.
+        const rule = localIngest?.stitchSkippedRule;
+        const stitch =
+          rule === undefined || rule === "incomplete" || rule === "run-errors"
+            ? ""
+            // `stitch_skipped_rule`, not `stitch_skipped`. The json and llm
+            // formats put the English prose under `stitch_skipped` and the rule
+            // under `stitch_skipped_rule`, and emitting the RULE under the
+            // prose key here gave one name two value spaces: a hook matching
+            // `stitch_skipped=cooling` on this line silently stopped matching
+            // the moment it was pointed at `--format json`.
+            : ` · stitch_skipped_rule=${rule}`;
         process.stderr.write(
-          `map: ${result.file_count} files · ${systems}s/${subsystems}ss/${modules}m regions · ${mapMs}ms\n`
+          `map: ${result.file_count} files · ${systems}s/${subsystems}ss/${modules}m regions · ${mapMs}ms${stitch}\n`
         );
         return;
       }
@@ -569,6 +594,14 @@ Examples:
           // from one missing every file that failed to build a patch (#554).
           parse_errors: localIngest?.parseErrors ?? 0,
           commit_errors: localIngest?.commitErrors ?? 0,
+          // Ix#568. The whole reason this is reported at all is hooks that run
+          // `ix map` and read the machine output; leaving it only in
+          // `ix ingest --format json` puts it where those hooks never look.
+          // `?? null`, not left undefined: JSON.stringify drops an undefined
+          // value, so a consumer could not tell the field apart from an older
+          // CLI that never emitted it. Its siblings are always present too.
+          stitch_skipped: localIngest?.stitchSkipped ?? null,
+          stitch_skipped_rule: localIngest?.stitchSkippedRule ?? null,
           regions: regions.map((r: any) => ({
             label: r.label,
             level: r.level,
@@ -593,7 +626,7 @@ Examples:
 export function renderMapLlm(
   result: MapResult,
   regions: MapRegion[],
-  ingest?: Pick<IngestFilesSummary, "parseErrors" | "commitErrors">,
+  ingest?: Pick<IngestFilesSummary, "parseErrors" | "commitErrors" | "stitchSkipped" | "stitchSkippedRule">,
 ): void {
   console.log(llmLine("map", [
     ["files", result.file_count],
@@ -608,6 +641,11 @@ export function renderMapLlm(
     // signal are dropped (docs/llm-format.md); a clean ingest says nothing.
     ["parse_errors", ingest?.parseErrors ? ingest.parseErrors : undefined],
     ["commit_errors", ingest?.commitErrors ? ingest.commitErrors : undefined],
+    // Ix#568. `--format llm` and `--silent` are what the hooks this field was
+    // added for actually read; shipping it only in `--format json` put it
+    // where they never look.
+    ["stitch_skipped", ingest?.stitchSkipped],
+    ["stitch_skipped_rule", ingest?.stitchSkippedRule],
   ]));
   for (const r of regions) {
     console.log(llmLine("region", [

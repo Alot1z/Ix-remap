@@ -18,6 +18,7 @@ import { loadIngestionModules } from './ingestion-loader.js';
 import { ensureWorkspaceIdState } from '../bootstrap.js';
 import { detectSystem, repoWorkspaceIdFor, lookupPackage, readPackageNames, readPackageDeps } from '../system.js';
 import { CLIENT_EXPECTED_SCHEMA_VERSION } from '../backend-status.js';
+import { admitStitchWaiting, connectionNeverEstablished, type StitchRefusal } from '../stitch-guard.js';
 import {
   createCommitBreaker,
   createDrainGate,
@@ -400,7 +401,7 @@ async function loadStoredPatchEntities(
       if (entities) return entities;
       throw new Error(`Patch ${patchId} has no entity manifest`);
     } catch (err) {
-      if (!String(err).includes('404:')) throw err;
+      if (!isNotFoundError(err)) throw err;
     }
   }
   throw new Error('Previous source patch was not found');
@@ -469,7 +470,7 @@ export async function reconcileRemovedEntities(
         }
       }
     } catch (err) {
-      if (!String(err).includes('404:')) throw err;
+      if (!isNotFoundError(err)) throw err;
       // Already absent. Emitting the delete anyway keeps the patch a complete
       // statement of intent and costs nothing.
       removedNodeIds.push(nodeId);
@@ -918,6 +919,25 @@ export interface IngestFilesSummary {
   parseErrors: number;
   commitErrors: number;
   stitchErrors: number;
+  /**
+   * Why the cross-workspace stitch was not attempted, if it was not (Ix#568).
+   *
+   * A skip is not an error and deliberately does not move the exit code -- but
+   * CLAUDE.md RULE 5 has hooks running `ix map --silent` and reading the exit
+   * code, so without a field here an automated consumer sees a wholly
+   * successful map for up to 15 minutes while cross-repo edges are stale, and
+   * the only signal is an English sentence on stderr.
+   */
+  stitchSkipped?: string;
+  /**
+   * Which rule kept the stitch from happening, for a consumer that must branch.
+   *
+   * The prose in `stitchSkipped` is for people. `incomplete` -- an incremental
+   * map with nothing complete to send -- fires on almost every run, so without
+   * this a hook watching for the #568 cooldown could only tell the two apart by
+   * substring-matching English, which `StitchRefusal`'s own doc forbids.
+   */
+  stitchSkippedRule?: StitchRefusal;
 }
 
 /**
@@ -944,14 +964,131 @@ export function isStitchUnsupported(error: unknown): boolean {
 }
 
 /**
+ * Is this "the backend does not have it", as opposed to any other failure?
+ *
+ * Anchored, the way `stitchFailureStatus` is. A bare
+ * `String(err).includes('404:')` was safe only while an unparseable body
+ * surfaced as V8's `SyntaxError`, which quotes about ten characters of input.
+ * `IxClient` now reports it as `"${status}: response body is not JSON: ..."`
+ * with a 200-character preview -- so a gateway answering 200 with an HTML error
+ * page whose title is `404: Not Found` matched, the error was swallowed as
+ * "absent", and `reconcileRemovedEntities` emitted a DeleteNode for a node that
+ * exists. That is the #528 proxy shape this file already cites twice.
+ */
+function isNotFoundError(error: unknown): boolean {
+  return /^(?:Error:\s*)?404:/.test(String(error));
+}
+
+/**
  * Ix#528: describe the failure without echoing the response body. The observed
  * case is a proxy 504 whose body is a full HTML error page, and pasting that
  * into a map summary buries the one line that matters.
  */
 export function describeStitchFailure(error: unknown): string {
   const status = stitchFailureStatus(error);
-  const detail = status === null ? "backend request failed" : `HTTP ${status}`;
+  // A 2xx here means the request succeeded and something downstream made the
+  // body unreadable -- the #528 proxy shape -- so "HTTP 200" as the failure
+  // status is accurate and useless. Say what actually happened.
+  const detail =
+    status === null
+      ? "backend request failed"
+      : status >= 200 && status < 300
+        ? `HTTP ${status} with an unreadable body`
+        : `HTTP ${status}`;
   return `Warning: Cross-workspace stitch failed (${detail}). Source patches were committed, but cross-repository relationships may be incomplete.`;
+}
+
+/**
+ * Ix#568: the stitch was never sent, and why.
+ *
+ * Deliberately not phrased as a failure. Nothing broke and the previous
+ * registration still stands -- the same position a stitch that FAILED already
+ * left the graph in. Saying only that cross-repo relationships may be
+ * incomplete, with no reason, is what would make this look like a regression.
+ *
+ * It does not promise that the next map re-registers, because that is not
+ * reliably true and predates this guard: the stitch block is gated on
+ * `filesSkippedAsUnchanged === 0`, so an incremental map that skips any
+ * mtime- or hash-unchanged file never reaches it -- and by then it has no
+ * registration data to send
+ * either, since it only parsed what changed. Its own comment already names
+ * the ways back in: a fresh map, `--force`, or a post-reset re-map. What the
+ * cooldown changes is only how often this path is taken, not where it leads.
+ */
+export function describeStitchSkipped(
+  reason: string,
+  rule?: StitchRefusal,
+  /** Whether the caller is showing per-file detail (`--verbose` / `--debug`). */
+  verbose = false,
+): string {
+  // Short by default. A cooldown lasts 15 minutes, and under CLAUDE.md RULE 5
+  // an auto-map hook fires after every edit -- so the long form printed three
+  // sentences of unchanging advice on every map in that window. The reason is
+  // the part that changes and the part worth reading; the rest is on --verbose,
+  // and `stitchSkipped` / `stitch_skipped` carry it to machine consumers either
+  // way.
+  // The short form has to carry a real remedy, not just the reason. Waiting the
+  // cooldown out and re-running does NOT recover: `persistIngestBaselineIfClean`
+  // has already written the mtime baseline, so the next map has
+  // `filesSkipped > 0` and never enters the stitch block at all -- it prints
+  // nothing and exits 0, and the user reads that as fixed while cross-repo edges
+  // stay frozen. Only a run that re-ingests every file gets back in.
+  // Every branch names `--force`, because nothing else re-registers this
+  // workspace. A skipped stitch does NOT stop the run persisting its mtime
+  // baseline -- `persistIngestBaselineIfClean` gates on parse and commit errors
+  // only -- so an ordinary re-run is incremental, skips unchanged files, and
+  // never enters the stitch block. "Re-run once that finishes" and "raise
+  // IX_MAP_DEADLINE_MS" were both promises this code cannot keep: the re-run
+  // prints nothing, exits 0, and the cross-repo edges stay exactly as stale.
+  //
+  // The hedge that used to justify withholding `--force` from the in-flight
+  // branch is still right, and now lives in the wording rather than in the
+  // omission: the other run may well be registering this same workspace, in
+  // which case the force is unnecessary -- but it is the only thing that
+  // recovers the case where it was not.
+  const recover =
+    rule === "deadline"
+      ? " Raise IX_MAP_DEADLINE_MS or map a smaller path, then re-register with `ix ingest <root> --force`."
+      : rule === "in-flight"
+        ? " Re-run once that finishes; if the cross-repo edges still look stale, `ix ingest <root> --force`."
+        : rule === "lost-parses"
+          // Nothing "clears" here, and this rule fires ON a --force run, so the
+          // cooling remedy told the user to wait for a condition that does not
+          // exist and then re-run the command they had just run.
+          ? " Re-run `ix ingest <root> --force`; if it keeps happening, the crash is reproducible and IX_PARSE_DEBUG=1 will show it."
+          : rule === "run-errors"
+            ? " Fix the errors above and re-run `ix ingest <root> --force`."
+            : " Recover with `ix ingest <root> --force` once it clears.";
+  const head = `Note: Cross-workspace stitch not started — ${reason}.${recover}`;
+  if (!verbose) return head;
+
+  // The remedy follows the RULE, never the prose. Note the other run may be
+  // registering this SAME workspace: only `ix map` takes the per-workspace
+  // lock, so two `ix ingest` runs on one repo, or an `ix ingest` racing an
+  // `ix map`, both reach here. Hence "may be" rather than a confident
+  // instruction to force a full re-ingest nobody needs.
+  const remedy =
+    rule === "in-flight"
+      ? "That run may be registering a different workspace, in which case this one was not " +
+        "registered; re-run once it has finished, or force a full re-ingest " +
+        "(`ix ingest <root> --force`) if the cross-repo edges still look stale."
+      : rule === "lost-parses"
+        ? "A parse worker crashed, so this run never saw some files and its registration would be " +
+          "missing them. Nothing is running on the backend and nothing needs to clear: re-run " +
+          "`ix ingest <root> --force`, and if it recurs the crash is reproducible -- IX_PARSE_DEBUG=1 " +
+          "will show what the parser choked on."
+        : rule === "run-errors"
+          ? "The parse or commit errors above mean this run has an incomplete picture of the repo, so " +
+            "registering from it would overwrite a good registration with a worse one. Fix those and " +
+            "re-run `ix ingest <root> --force`."
+        : rule === "deadline"
+        ? "Nothing was sent, so nothing is running -- but nothing was registered either, and a longer " +
+          "budget does not fix that on its own: the next map is incremental and never reaches the stitch " +
+          "block. Raise IX_MAP_DEADLINE_MS or map a smaller path, then `ix ingest <root> --force`."
+        : "Once the cooldown expires and the backend is healthy, re-register with a run that re-ingests " +
+          "every file (`ix ingest <root> --force`) — an incremental map that skips unchanged files does not " +
+          "re-attempt the stitch.";
+  return `${head} Source patches were committed; cross-repository edges are unchanged since the last successful stitch. ${remedy}`;
 }
 
 /**
@@ -1348,6 +1485,12 @@ export async function ingestFiles(
     '../../../../core-ingestion/dist/parse-worker.js',
   );
   let pool: ParsePool | null = null;
+  /**
+   * In-flight parses lost to a crashed worker, read where the pool is still in
+   * scope. A function rather than a read at the use site because control-flow
+   * narrowing makes `pool` `never` down there.
+   */
+  const crashedParses = (): number => (pool === null ? 0 : pool.crashedTasks());
   const ensureParsePool = (): ParsePool => {
     if (pool) return pool;
     pool = new ParsePool(workerPath, Math.max(1, os.cpus().length - 1));
@@ -1383,7 +1526,12 @@ export async function ingestFiles(
     for (let i = 0; i < targets.length; i += PRESCAN_PARSE_CHUNK) {
       const chunk = targets.slice(i, i + PRESCAN_PARSE_CHUNK);
       const parsed = await Promise.all(
-        chunk.map(fp => ensureParsePool().parse(fp, relSources.get(fp)!).catch(() => null)),
+        // `false`: this prescan is best-effort by construction -- the caller
+        // drops nulls, and every file here is read and parsed again by the
+        // streaming loop below. A loss here is not a file the RUN lost, and
+        // counting it as one refused the stitch and withheld the baseline over
+        // files that were all present.
+        chunk.map(fp => ensureParsePool().parse(fp, relSources.get(fp)!, false).catch(() => null)),
       );
       for (let j = 0; j < chunk.length; j++) {
         if (parsed[j]) preParsed.set(chunk[j], parsed[j]);
@@ -1421,10 +1569,79 @@ export async function ingestFiles(
   let filesChanged = 0;
   let patchesApplied = 0;
   let filesSkipped = 0;
+  /**
+   * Files skipped because we ASSUMED THEY WERE UNCHANGED. (Ix#568)
+   *
+   * A subset of `filesSkipped`, and the one the cross-workspace stitch cares
+   * about. The stitch registers this repo's provides/consumes, collected over
+   * the files actually parsed this run, so it must only run when that set
+   * covers the whole repo -- otherwise it overwrites a full registration with
+   * a partial one.
+   *
+   * `filesSkipped` is the wrong test for that, because it also counts files
+   * that contribute nothing under ANY run: a zero-byte file and one that
+   * looks minified. Both are decided by the file's own content under a rule
+   * that does not vary between runs, so the collected set is complete and
+   * correct without them -- and their presence in the count was silently
+   * disqualifying repos from ever stitching. A single empty `__init__.py` was
+   * enough, `--force` or not, which made `ix ingest <root> --force` -- the
+   * remedy this command prints when it refuses a stitch -- a promise it could
+   * not keep: the run would print nothing, exit 0, and leave the cross-repo
+   * edges stale.
+   *
+   * An mtime- or hash-clean skip is different in kind: the file has content
+   * we would have indexed and we did not look at it this run, so the set
+   * really is missing it. So is a file the parser returned nothing for --
+   * see `filesSkippedUnparsed`, which the gate reads alongside this.
+   */
+  let filesSkippedAsUnchanged = 0;
+  /** Zero-byte files. Reported as `skipReasons.emptyFile`, which was hardcoded 0. */
+  let filesSkippedAsEmpty = 0;
+  /**
+   * Files the parse pool returned nothing for.
+   *
+   * Reported, but NOT part of the stitch gate -- `ParsePool.crashedTasks()` is.
+   * `parse()` resolves `null` for two different things and only one of them
+   * makes the run incomplete:
+   *
+   *   - `parseFile` returned null, which is deterministic and means the file
+   *     has nothing to give. The dominant cause is an unavailable optional
+   *     grammar -- fourteen are optionalDependencies loaded through a try/catch,
+   *     and `tree-sitter-sas` has no win32 prebuild at all -- and those
+   *     extensions are still in SUPPORTED_EXTENSIONS, so the files are
+   *     discovered, read, dispatched and come back null on EVERY run. Gating on
+   *     this count blocked stitching permanently for any repo containing one,
+   *     `--force` included, since forcing does not change a parse result. That
+   *     is the empty-`__init__.py` bug again with a different file class.
+   *   - a worker CRASHED with the task in flight, which is transient and did
+   *     lose a file we would have indexed. That one belongs in the gate.
+   *
+   * A parse that THREW is in the first category, not the second, even though it
+   * sounds like the second: `parseFile` catches every exception itself and
+   * returns null (logging only under IX_PARSE_DEBUG=1), so the worker cannot
+   * tell it from a missing grammar -- and neither can this. It is also
+   * deterministic for the same bytes in every case we can observe, so gating on
+   * it would block stitching permanently for that repo, which is exactly the
+   * bug this counter was taken OUT of the gate to fix. The residue is the
+   * transient sub-case, an OOM caught by that same handler; it is narrower than
+   * the bug the alternative creates, and it is a deliberate choice rather than
+   * an oversight.
+   *
+   * Reported as `skipReasons.unparsed`, its own bucket: `parseError` counts
+   * every parse-stage failure including stat, read and patch-build errors, most
+   * of which are not skips, so adding to it made that number mean neither thing.
+   */
+  let filesSkippedUnparsed = 0;
   let parseErrors = 0;
   let commitErrors = 0;
   let stitchErrors = 0;
   let stitchError: unknown;
+  // Set when the stitch was refused before it was ever sent (Ix#568).
+  // Distinct from stitchError: nothing failed, so it must not count as a
+  // stitch error or move the exit code -- but the user is about to be told
+  // cross-repo edges may be incomplete and is owed the reason.
+  let stitchSkipped: string | undefined;
+  let stitchSkippedRule: StitchRefusal | undefined;
   // Ix#560: a backend refusing every commit gets one failed request per
   // patch out of the per-file fallback. Stop after a streak instead.
   const commitBreaker = createCommitBreaker();
@@ -1582,15 +1799,29 @@ export async function ingestFiles(
 
     // Stat all files and partition into mtime-clean (skip) and mtime-changed (need hash check).
     const mtimeChangedPaths: string[] = [];
+    /**
+     * Paths this loop has already accounted for, and under which counter.
+     *
+     * Recorded explicitly rather than inferred from `currentMtimes`. The loop
+     * leaves a path out of that map in three cases -- empty, oversized, and
+     * `statSync` THREW -- and only the first two are counted here. So a file
+     * that errored on the first stat and then read as size 0 on the second (a
+     * transient lock, an antivirus scan, a file recreated underneath us) was
+     * treated as already counted and landed in no bucket at all: absent from
+     * the graph, from `filesSkipped` and from every `skipReasons` entry, which
+     * is precisely what the check that reads this exists to prevent.
+     */
+    const accountedByStatLoop = new Map<string, 'empty' | 'tooLarge'>();
     for (const filePath of filePaths) {
       try {
         const st = fs.statSync(filePath);
-        if (st.size === 0) { filesSkipped++; progressCurrent++; continue; }
-        if (st.size > MAX_FILE_BYTES) { tooLarge++; progressCurrent++; continue; }
+        if (st.size === 0) { filesSkipped++; filesSkippedAsEmpty++; accountedByStatLoop.set(filePath, 'empty'); progressCurrent++; continue; }
+        if (st.size > MAX_FILE_BYTES) { tooLarge++; accountedByStatLoop.set(filePath, 'tooLarge'); progressCurrent++; continue; }
         const mtime = st.mtimeMs;
         currentMtimes.set(filePath, mtime);
         if (!opts.force && !forceReingestPaths.has(filePath) && mtimeCache.get(filePath) === mtime) {
           filesSkipped++;
+          filesSkippedAsUnchanged++;
           progressCurrent++;   // mtime clean — assume unchanged
         } else {
           mtimeChangedPaths.push(filePath);
@@ -2489,6 +2720,7 @@ export async function ingestFiles(
           const hash = sha256(bytes);
           if (!forceReingestPaths.has(filePath) && knownHashes.get(filePath) === hash) {
             filesSkipped++;
+            filesSkippedAsUnchanged++;
             progressCurrent++;
             continue;
           }
@@ -2579,7 +2811,7 @@ export async function ingestFiles(
           const batch: ParsedFile[] = [];
           for (let j = 0; j < chunk.length; j++) {
             const parsed = parseResults[j] as any;
-            if (!parsed) { filesSkipped++; continue; }
+            if (!parsed) { filesSkipped++; filesSkippedUnparsed++; continue; }
             entitiesParsed += parsed.entities.length;
             batch.push({ filePath: chunk[j].filePath, parsed, hash: chunk[j].hash, previousHash: chunk[j].previousHash });
           }
@@ -2590,6 +2822,19 @@ export async function ingestFiles(
       }
     } else {
       // Path B: no baseline (first ingest) or --force → load modules, then stream parse + commit.
+      //
+      // Ix#568: this branch walks ALL of `filePaths`, re-reading, re-hashing and
+      // re-parsing every one, and its hash-clean short-circuit cannot fire here
+      // -- `knownHashes` is empty by construction on the non-force entry, and
+      // the check is `!opts.force` on the other. So the mtime skips the stat
+      // loop recorded did not actually happen, and leaving them counted refused
+      // the stitch on the commonest incremental shape there is: add ONE new
+      // file to a mapped repo, and `loadExistingHashes` returns nothing for it,
+      // so `knownHashes.size === 0` sends the whole repo down here -- every file
+      // parsed, registration complete -- while the gate still saw N-1 files
+      // "skipped as unchanged" and silently declined to stitch.
+      filesSkipped -= filesSkippedAsUnchanged;
+      filesSkippedAsUnchanged = 0;
       const moduleStart = performance.now();
       const [ingestion, patchBuilder] = await loadIngestionModules();
       timings.moduleLoadMs = Math.round(performance.now() - moduleStart);
@@ -2648,8 +2893,57 @@ export async function ingestFiles(
             let bytes!: Buffer;
             try {
               const st = await fh.stat();
-              if (st.size === 0) { filesSkipped++; return; }
-              if (st.size > MAX_FILE_BYTES) { tooLarge++; return; }
+              // The stat loop above walks the same `filePaths` unconditionally,
+              // so a file it already rejected is counted there and must not be
+              // counted again here -- incrementing unconditionally counted every
+              // empty or oversized file TWICE, invisible until
+              // `skipReasons.emptyFile` stopped being hardcoded to 0 and
+              // reported 2 for a repo with one empty `__init__.py`.
+              //
+              // `accountedByStatLoop` is exactly that record. It is a set the
+              // loop writes deliberately, not `currentMtimes` read backwards:
+              // that map also omits files whose `statSync` THREW, which the loop
+              // counts as a parse error and not as a skip, so inferring from it
+              // treated those as already counted. Reaching here for a file the
+              // loop passed means it changed between the two stats -- truncated,
+              // or grown past the cap -- and it must be counted, or it vanishes
+              // from the graph, from `filesSkipped` and from every `skipReasons`
+              // bucket at once.
+              //
+              // The check itself is not optional either way: it is the fstat on
+              // the handle we are about to read, which is what makes the size cap
+              // TOCTOU-free (CodeQL js/file-system-race).
+              const countedByStatLoop = accountedByStatLoop.get(absFilePath);
+              if (st.size === 0) {
+                // Re-bucket rather than just skip: the stat loop may have
+                // recorded this as `tooLarge`, and the file has since been
+                // truncated. Leaving it there reports an empty file as
+                // oversized and keeps it out of `filesSkipped` entirely.
+                if (countedByStatLoop === undefined) { filesSkipped++; filesSkippedAsEmpty++; }
+                else if (countedByStatLoop === 'tooLarge') { tooLarge--; filesSkipped++; filesSkippedAsEmpty++; }
+                accountedByStatLoop.set(absFilePath, 'empty');
+                return;
+              }
+              if (st.size > MAX_FILE_BYTES) {
+                // ...and the mirror image, for a file that has since grown.
+                if (countedByStatLoop === undefined) tooLarge++;
+                else if (countedByStatLoop === 'empty') { filesSkipped--; filesSkippedAsEmpty--; tooLarge++; }
+                accountedByStatLoop.set(absFilePath, 'tooLarge');
+                return;
+              }
+              // The other direction of the same race, and it needs undoing
+              // rather than skipping: the stat loop saw this file as empty or
+              // oversized and counted it, and the fstat -- the one we are about
+              // to READ from, so the authoritative one -- says it is neither.
+              // The file is ingested, so leaving the earlier count in place
+              // reports it as skipped in the very number the docs now call the
+              // real one.
+              if (countedByStatLoop !== undefined) {
+                accountedByStatLoop.delete(absFilePath);
+                // Which counter, from the record rather than a guess.
+                if (countedByStatLoop === 'empty') { filesSkipped--; filesSkippedAsEmpty--; }
+                else tooLarge--;
+              }
               bytes = await fh.readFile();
             } finally {
               await fh.close();
@@ -2657,6 +2951,7 @@ export async function ingestFiles(
             const hash = sha256(bytes);
             if (!opts.force && !forceReingestPaths.has(absFilePath) && knownHashes.get(absFilePath) === hash) {
               filesSkipped++;
+              filesSkippedAsUnchanged++;
               return;
             }
             const previousHash = knownHashes.get(absFilePath);
@@ -2684,7 +2979,7 @@ export async function ingestFiles(
           const f = fileData[j];
           if (!f) continue;
           const parsed = parseResults[j] as any;
-          if (!parsed) { filesSkipped++; continue; }
+          if (!parsed) { filesSkipped++; filesSkippedUnparsed++; continue; }
           entitiesParsed += parsed.entities.length;
           batch.push({ filePath: f.filePath, parsed, hash: f.hash, previousHash: f.previousHash });
         }
@@ -2786,7 +3081,15 @@ export async function ingestFiles(
       projectRoot,
       currentMtimes,
       latestRev,
-      parseErrors,
+      // Lost parses count as parse errors HERE, whatever they are called
+      // elsewhere. A run whose worker pool died resolves every later file as
+      // null, and those increment `filesSkippedUnparsed` rather than
+      // `parseErrors` -- so without this the run wrote an mtime baseline for
+      // tens of thousands of files it never parsed or committed, exited 0, and
+      // every later incremental map skipped them as unchanged. Half the graph
+      // missing, recoverable only by `--force`, and worse than `main`, which
+      // respawns without a cap and loses one file per crash.
+      parseErrors + crashedParses(),
       commitErrors,
       undefined,
       nextDeletedFiles,
@@ -2795,7 +3098,19 @@ export async function ingestFiles(
     // Migration cleanup (Ix#225 gap 2): the re-ingest under the new path-based id has
     // committed, so delete the OLD id's now-orphaned nodes/edges/patches. Best-effort —
     // a failure here is non-fatal (orphans are harmless dead storage, cleanable later).
-    if (workspaceMigrated && previousWorkspaceId && ingestCompletedCleanly(parseErrors, commitErrors)) {
+    // `+ crashedParses()`, exactly as the baseline guard below. This one
+    // DELETES the old workspace's graph, so it must be at least as strict: a
+    // run whose parse pool died resolves every later file as null without
+    // raising `parseErrors`, so both guards saw a clean run while the new
+    // workspace held a half-populated graph -- and this one would drop the
+    // complete old one permanently. The two adjacent guards must not disagree
+    // about whether the run was clean, and the destructive one certainly must
+    // not be the laxer of the pair.
+    if (
+      workspaceMigrated &&
+      previousWorkspaceId &&
+      ingestCompletedCleanly(parseErrors + crashedParses(), commitErrors)
+    ) {
       try {
         await client.deleteWorkspace(previousWorkspaceId);
         if (debug) process.stderr.write(`  Cleaned up pre-migration nodes under ${previousWorkspaceId}.\n`);
@@ -2808,12 +3123,63 @@ export async function ingestFiles(
     // write the cross-repo IMPORTS edges to other separately-ingested repos.
     // Best-effort: a failure (or an older backend with no /v1/stitch) never fails
     // the ingest. Collection is over the files actually parsed this run, so it is
-    // only COMPLETE on a full ingest. Gating on filesSkipped === 0 means a partial
-    // incremental re-map (some files mtime-skipped) leaves the prior full
-    // registration intact rather than overwriting it with a partial set; a fresh
-    // map, `--force`, or a post-reset re-map re-registers. (Incremental registry
-    // updates that touch only changed files are a future refinement.)
-    if (stitchEnabled && filesSkipped === 0 && stitchFiles.length > 0 && ingestCompletedCleanly(parseErrors, commitErrors)) {
+    // only COMPLETE on a full ingest. Gating on filesSkippedAsUnchanged === 0
+    // means a partial incremental re-map (some files mtime- or hash-skipped)
+    // leaves the prior full registration intact rather than overwriting it with a
+    // partial set; a fresh map, `--force`, or a post-reset re-map re-registers.
+    // (Incremental registry updates that touch only changed files are a future
+    // refinement.)
+    //
+    // Ix#568: the two narrow counts, not `filesSkipped` -- see their
+    // declarations. The broad total also includes empty and minified-looking
+    // files, which contribute nothing under any run, so one empty `__init__.py`
+    // used to disqualify a repo from ever stitching, with or without `--force`.
+    // A CRASHED parse worker is in that category and is counted here: it
+    // resolves its in-flight task as null without raising `parseErrors`, and
+    // stitching then would overwrite a complete registration with one missing
+    // that file's exports. A file `parseFile` simply returned null for is not --
+    // that is deterministic, usually an unavailable optional grammar, and
+    // gating on it blocked stitching forever for any repo containing one.
+    const registrationIsComplete = filesSkippedAsUnchanged === 0 && crashedParses() === 0;
+    // Every way the stitch does not happen is REPORTED, not just the guard's.
+    // `stitch_skipped: null` means "the cross-repo edges are current", so every
+    // path that leaves it unset while skipping the stitch says something false
+    // -- and the two below are far commoner than any refusal the guard makes.
+    // Neither prints a human Note or a `--silent` token: `incomplete` would
+    // appear on nearly every incremental map, and a run with errors has already
+    // said so, loudly, in the lines above.
+    // `lost-parses` FIRST. It is the only one of the three that prints, and a
+    // dead pool also raises `parseErrors`, so testing `run-errors` first meant a
+    // `--force` run with one patch-build failure and four thousand lost files
+    // reported the one and said nothing about the rest -- suppressing the very
+    // Note this rule was added to show.
+    if (stitchEnabled && crashedParses() > 0) {
+      // Its OWN rule, and one that IS printed. `incomplete` is silent because
+      // it fires on nearly every incremental map -- but on a `--force` run
+      // nothing is skipped as unchanged, so `incomplete` there could only ever
+      // mean a crashed worker, and staying silent made the recovery command
+      // this CLI advertises exit 0 having quietly done nothing.
+      stitchSkippedRule = "lost-parses";
+      stitchSkipped =
+        `a parse worker crashed and ${crashedParses()} file(s) went unparsed, so the ` +
+        "cross-workspace registration would be missing them";
+    } else if (stitchEnabled && !ingestCompletedCleanly(parseErrors, commitErrors)) {
+      stitchSkippedRule = "run-errors";
+      stitchSkipped =
+        "this run had parse or commit errors, so its registration would be built from " +
+        "an incomplete picture of the repo";
+    } else if (stitchEnabled && !registrationIsComplete) {
+      // `stitchFiles.length > 0` is deliberately NOT required on any of these
+      // three. A map where nothing changed parses nothing, so `stitchFiles` is
+      // empty and the field stayed unset -- reporting "the cross-repo edges are
+      // current" for the commonest map there is, while a cooldown was refusing
+      // stitches the whole time. The staleness is identical either way.
+      stitchSkippedRule = "incomplete";
+      stitchSkipped =
+        "this map did not re-parse every file, so it has no complete cross-workspace " +
+        "registration to send";
+    }
+    if (stitchEnabled && registrationIsComplete && stitchFiles.length > 0 && ingestCompletedCleanly(parseErrors, commitErrors)) {
       try {
         const entry = pickEntryFile(stitchFiles);
         const provides = entry
@@ -2860,13 +3226,50 @@ export async function ingestFiles(
           symbolConsumes.push({ symbol, callerNodeId, pkg });
         }
         if (provides.length > 0 || stitchConsumes.length > 0 || stitchExports.length > 0 || symbolConsumes.length > 0) {
-          const res = await client.stitch({ workspaceId, provides, consumes: stitchConsumes, exports: stitchExports, symbolConsumes });
-          if (debug) process.stderr.write(`  [stitch] provides=${provides.length} consumes=${stitchConsumes.length} exports=${stitchExports.length} symConsumes=${symbolConsumes.length} -> ${res.stitched} edges\n`);
-          // This call is the one thing that can change whether the workspace
-          // belongs to a system, and reads cache that answer on disk. Drop it
-          // here so the next read asks again rather than scoping to the
-          // pre-stitch workspace for as long as the file survives.
-          clearStitchScopeCache(workspaceId);
+          // Ix#568: ask before stitching. The join is cross-workspace and
+          // outlives the HTTP call that starts it, so `ix map`'s per-workspace
+          // lock does not bound it -- see stitch-guard.ts. A refusal is not a
+          // failure: the previous registration stands, exactly as it does after
+          // a stitch that FAILED. It is not picked up by the next map either --
+          // see describeStitchSkipped for what actually re-registers.
+          const admission = await admitStitchWaiting(
+            client.endpoint,
+            undefined,
+            undefined,
+            opts.deadlineSignal,
+          );
+          if (!admission.admitted) {
+            stitchSkipped = admission.reason;
+            stitchSkippedRule = admission.rule;
+            if (debug) process.stderr.write(`  [stitch not started] ${admission.reason}\n`);
+          } else {
+            const stitchStart = performance.now();
+            let res;
+            try {
+              res = await client.stitch({ workspaceId, provides, consumes: stitchConsumes, exports: stitchExports, symbolConsumes });
+            } catch (err) {
+              // Settle before rethrowing, so the shared catch below still sees
+              // the original error and the lock is never held past the request.
+              admission.settle({
+                ok: false,
+                elapsedMs: performance.now() - stitchStart,
+                // Two proofs that the backend is not running a join, and only
+                // two: it answered and refused (a status), or we never reached
+                // it at all. Everything else -- a 5xx, a timeout, an abort, a
+                // socket dropped after the request went out -- leaves it.
+                status: stitchFailureStatus(err),
+                neverConnected: connectionNeverEstablished(err),
+              });
+              throw err;
+            }
+            admission.settle({ ok: true, elapsedMs: performance.now() - stitchStart });
+            if (debug) process.stderr.write(`  [stitch] provides=${provides.length} consumes=${stitchConsumes.length} exports=${stitchExports.length} symConsumes=${symbolConsumes.length} -> ${res.stitched} edges\n`);
+            // This call is the one thing that can change whether the workspace
+            // belongs to a system, and reads cache that answer on disk. Drop it
+            // here so the next read asks again rather than scoping to the
+            // pre-stitch workspace for as long as the file survives.
+            clearStitchScopeCache(workspaceId);
+          }
         }
       } catch (err) {
         // Unsupported is not failed: an older backend answers 404 here, and
@@ -2925,9 +3328,19 @@ export async function ingestFiles(
   const summary: IngestFilesSummary = {
     filesDiscovered,
     patchesApplied,
-    parseErrors,
+    // `+ crashedParses()`, as the baseline and delete guards already do. Files
+    // lost to a dead parse pool raise `filesSkippedUnparsed`, never
+    // `parseErrors`, so without this everything downstream read the run as
+    // clean: `describeDroppedFiles` stayed silent, and the completed-map checks
+    // blamed the backend "after a clean local ingest" and cleared the map
+    // baseline. On a co-ingest workspace the `lost-parses` channel is off too
+    // (`stitchEnabled` is false there), so the run exited 0 with no signal
+    // anywhere at all.
+    parseErrors: parseErrors + crashedParses(),
     commitErrors,
     stitchErrors,
+    stitchSkipped,
+    stitchSkippedRule,
   };
   // `everTripped()` alone, and it is not a weakening: `recordFailure` has one
   // call site, in the per-file catch immediately after `commitErrors++`, so a
@@ -2954,6 +3367,25 @@ export async function ingestFiles(
   if (stitchErrors > 0) {
     process.stderr.write(`  ${describeStitchFailure(stitchError)}\n`);
     process.exitCode = 1;
+  } else if (
+    stitchSkipped !== undefined &&
+    // Not on `--silent`. `ix map` always passes `suppressOutput`, and that
+    // surface is deliberately one terse line per run -- which is the stated
+    // reason `incomplete` is filtered out of its token. A ~250-character Note
+    // on every map for the whole 15-minute cooldown is the repetition the short
+    // form exists to avoid; the token still carries the rule.
+    opts.suppressOutput !== true &&
+    // The guard's refusals only. `incomplete` would print on nearly every
+    // incremental map, and `run-errors` restates lines the run has already
+    // printed; both are still on the machine surfaces.
+    stitchSkippedRule !== "incomplete" &&
+    stitchSkippedRule !== "run-errors"
+  ) {
+    // Not an error and not an exit code: nothing failed, and the graph is
+    // exactly where a failed stitch would have left it. But the sentence a
+    // user gets otherwise -- cross-repo relationships may be incomplete --
+    // reads as an unexplained regression without the reason.
+    process.stderr.write(`  ${describeStitchSkipped(stitchSkipped, stitchSkippedRule, debug)}\n`);
   }
   if (commitReport.kind === "warn") {
     process.stderr.write(`  ${commitReport.message}\n`);
@@ -2979,9 +3411,32 @@ export async function ingestFiles(
       filesSkipped,
       entitiesParsed,
       latestRev,
-      skipReasons: { unchanged: filesSkipped, emptyFile: 0, parseError: parseErrors, tooLarge, minifiedLikely, outsideRoot },
+      // `unchanged` is the files we ASSUMED unchanged, not every skip. It used
+      // to be `filesSkipped`, which also counts empty, minified-looking and
+      // unparseable files -- so a consumer reading this could not tell an
+      // incremental no-op from a repo full of empty __init__.py. `emptyFile` was
+      // hardcoded 0 for the same reason and is now the real count.
+      //
+      // `unparsed` is its own bucket. Narrowing `unchanged` left the pool's
+      // nulls in no bucket at all, but folding them into `parseError` was
+      // worse: that counts every parse-stage failure, including stat, read and
+      // patch-build errors that were never skips, so one unstat-able file gave
+      // `filesSkipped: 0` with a bucket claiming 1. `unchanged`, `emptyFile`,
+      // `minifiedLikely` and `unparsed` are the buckets that are subsets of
+      // `filesSkipped`; `parseError` and `tooLarge` are counted separately and
+      // always were.
+      skipReasons: { unchanged: filesSkippedAsUnchanged, emptyFile: filesSkippedAsEmpty, parseError: parseErrors + crashedParses(), unparsed: filesSkippedUnparsed, tooLarge, minifiedLikely, outsideRoot },
       commitErrors,
       stitchErrors,
+      // Ix#568. Present only when the stitch was refused before it was sent, so
+      // a consumer reading this body can tell "cross-repo edges are current"
+      // from "cross-repo edges are as stale as the last successful stitch" --
+      // a distinction the exit code deliberately does not make.
+      // `?? null`, not left undefined: JSON.stringify drops an undefined
+      // value, so a consumer could not tell the field apart from an older CLI
+      // that never emitted it. `ix map --format json` does the same.
+      stitchSkipped: stitchSkipped ?? null,
+      stitchSkippedRule: stitchSkippedRule ?? null,
       elapsedSeconds: parseFloat(elapsed),
       timings: {
         ...timings,
@@ -2999,8 +3454,18 @@ export async function ingestFiles(
     console.log(`  processed:   ${patchesApplied} files (${elapsed}s)`);
     console.log(`  discovered:  ${filesDiscovered} files`);
     console.log(`  changed:     ${filesChanged} files`);
-    if (filesSkipped > 0) console.log(`  ${chalk.dim('skipped unchanged:')} ${filesSkipped}`);
-    if (parseErrors > 0) console.log(`  ${chalk.red('parse errors:')}      ${parseErrors}`);
+    // "skipped" without "unchanged": the count includes empty, minified-looking
+    // and unparseable files, none of which were assumed unchanged. Splitting the
+    // counter for the stitch gate (Ix#568) made the old label demonstrably
+    // wrong on a repo with an empty __init__.py and --force.
+    if (filesSkipped > 0) console.log(`  ${chalk.dim('skipped:')} ${filesSkipped}`);
+    // `+ crashedParses()`, matching the summary field. On a co-ingest workspace
+    // `stitchEnabled` is false, so the `lost-parses` Note never fires and
+    // `describeDroppedFiles` is only wired into `ix map` -- which left
+    // `ix ingest` on such a workspace printing "skipped: 4000", no parse-error
+    // line at all, and exiting 0 after losing its whole parse pool.
+    const parseErrorsShown = parseErrors + crashedParses();
+    if (parseErrorsShown > 0) console.log(`  ${chalk.red('parse errors:')}      ${parseErrorsShown}`);
     if (commitErrors > 0) console.log(`  ${chalk.red('commit errors:')}     ${commitErrors}`);
     if (tooLarge > 0) console.log(`  ${chalk.dim('skipped too large:')} ${tooLarge}`);
     if (minifiedLikely > 0) console.log(`  ${chalk.dim('skipped minified:')} ${minifiedLikely}`);
