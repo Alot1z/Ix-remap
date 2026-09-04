@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+const scratch: string[] = [];
+
+afterEach(() => {
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 /**
  * The helper is plain ESM (.mjs) that install-skill.sh runs without a build
@@ -21,9 +31,11 @@ const helper = (await import("../../../scripts/skill-harnesses.mjs")) as unknown
       exists?: (path: string) => boolean;
     },
   ) => ProbeResult;
+  resolveToolscan: () => { cmd: string; args: string[] } | null;
+  runToolscanOnce: (resolve?: () => { cmd: string; args: string[] } | null) => Set<string> | null;
 };
 
-const { probePresent, readHarnesses } = helper;
+const { probePresent, readHarnesses, resolveToolscan, runToolscanOnce } = helper;
 
 const row = (overrides: Partial<{ bin: string; cfg: string }> = {}) => ({
   id: "claude",
@@ -85,6 +97,53 @@ describe("probePresent", () => {
     });
 
     expect(present).toEqual({ present: true, via: "toolscan" });
+  });
+});
+
+describe("resolveToolscan (the security pin)", () => {
+  it("never resolves a bare `toolscan` from PATH — TOOLSCAN_PATH is the only opt-in", () => {
+    // KageBinary #591 round-2 finding: the TS copy of this resolver carries a
+    // pin in discovery.test.ts; the shell-side copy must too. A PATH fallback
+    // re-added here would execute any attacker-planted `toolscan`; planting one
+    // on PATH and expecting null makes that regression go red.
+    const dir = mkdtempSync(join(tmpdir(), "ix-skill-pin-"));
+    scratch.push(dir);
+    const plant = join(dir, process.platform === "win32" ? "toolscan.cmd" : "toolscan");
+    writeFileSync(plant, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n", "utf8");
+    const previousPath = process.env.PATH;
+    const previousTs = process.env.TOOLSCAN_PATH;
+    delete process.env.TOOLSCAN_PATH;
+    process.env.PATH = `${dir}${process.platform === "win32" ? ";" : ":"}${previousPath ?? ""}`;
+    try {
+      expect(resolveToolscan()).toBeNull();
+    } finally {
+      if (previousTs === undefined) delete process.env.TOOLSCAN_PATH;
+      else process.env.TOOLSCAN_PATH = previousTs;
+      process.env.PATH = previousPath ?? "";
+    }
+  });
+});
+
+describe("runToolscanOnce", () => {
+  it("ignores an entry that names a tool without a usable path", () => {
+    const nameOnly = runToolscanOnce(() => ({
+      cmd: process.execPath,
+      args: ["-e", `process.stdout.write(JSON.stringify({ tools: [{ name: "claude" }], truncated: false }))`],
+    }));
+
+    expect(nameOnly).toEqual(new Set());
+  });
+
+  it("keeps an entry whose tool carries a path", () => {
+    const withPath = runToolscanOnce(() => ({
+      cmd: process.execPath,
+      args: [
+        "-e",
+        `process.stdout.write(JSON.stringify({ tools: [{ name: "claude", path: "/x/claude" }], truncated: false }))`,
+      ],
+    }));
+
+    expect(withPath).toEqual(new Set(["claude"]));
   });
 });
 

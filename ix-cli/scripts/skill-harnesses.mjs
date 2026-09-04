@@ -93,8 +93,13 @@ export function resolveToolscan() {
 }
 
 /**
- * Run toolscan once and return the set of tool names it found (lowercased),
- * or null when toolscan is unavailable or misbehaves.
+ * Run toolscan once and return the set of tool names it found with a usable
+ * path (lowercased), or null when toolscan is unavailable or misbehaves.
+ *
+ * An entry that names a tool without a path is not usable evidence — mirror
+ * the CLI's `hostInstalled`, which requires `discovery.paths` before it takes
+ * the toolscan verdict — so name-only entries are ignored rather than
+ * reported as a presence toolscan did not establish.
  */
 export function runToolscanOnce(resolve = resolveToolscan) {
   const target = resolve();
@@ -112,7 +117,14 @@ export function runToolscanOnce(resolve = resolveToolscan) {
     const tools = Array.isArray(parsed?.tools) ? parsed.tools : [];
     const names = new Set();
     for (const tool of tools) {
-      if (typeof tool?.name === "string" && tool.name !== "") names.add(tool.name.toLowerCase());
+      if (
+        typeof tool?.name === "string" &&
+        tool.name !== "" &&
+        typeof tool?.path === "string" &&
+        tool.path !== ""
+      ) {
+        names.add(tool.name.toLowerCase());
+      }
     }
     return names;
   } catch {
