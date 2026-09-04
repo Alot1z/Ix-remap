@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as nodePath from "node:path";
 import { createHash } from "node:crypto";
 import { readBoundedFile } from "./bounded-read.js";
@@ -88,7 +89,11 @@ function hasOwnGit(dir: string): boolean {
  * explicit "these subdirs are MY packages, not separate repos" declaration.
  */
 function hasWorkspaceMarker(dir: string): boolean {
-  const has = (f: string) => { try { return fs.existsSync(nodePath.join(dir, f)); } catch { return false; } };
+  // All of these markers are FILES (a Bazel WORKSPACE, nx.json, a package.json
+  // declaring workspaces). Presence alone is not enough: a stray DIRECTORY named
+  // `WORKSPACE` or `nx.json` (e.g. an app's data folder) is not a workspace root
+  // and must not make `dir` look like one.
+  const has = (f: string) => { try { return fs.statSync(nodePath.join(dir, f)).isFile(); } catch { return false; } };
   const reads = (f: string): string | null => readManifest(dir, f);
   // Dedicated workspace/monorepo config files.
   if (has("pnpm-workspace.yaml") || has("lerna.json") || has("nx.json") ||
@@ -108,17 +113,32 @@ function hasWorkspaceMarker(dir: string): boolean {
   return false;
 }
 
+/** True if the two resolved paths denote the same directory. Windows filesystems
+ *  are case-insensitive, so a case-blind comparison would walk past the home
+ *  boundary instead of stopping on it. */
+function sameDir(a: string, b: string): boolean {
+  const ra = nodePath.resolve(a);
+  const rb = nodePath.resolve(b);
+  return process.platform === "win32"
+    ? ra.toLowerCase() === rb.toLowerCase()
+    : ra === rb;
+}
+
 /** True if `dir` or any ancestor is a single repository: a git repo root (.git)
  *  OR a declared monorepo/workspace root. Used to tell a monorepo's package dir
  *  (part of ONE repo) from a plain folder that collects independently-cloned
  *  repos. */
 function isInsideSingleRepo(dir: string): boolean {
   let cur = nodePath.resolve(dir);
-  // Walk up to the filesystem root, checking each level.
+  const home = nodePath.resolve(os.homedir());
+  // Walk up, checking each level, but never consult markers AT the user's home:
+  // a `.git` or workspace marker there is ambient (a dotfiles repo, a stray
+  // tool folder) and must not classify every path beneath it as one repository.
+  // Home itself is still judged when it IS the mapped path (first iteration).
   while (true) {
     if (hasOwnGit(cur) || hasWorkspaceMarker(cur)) return true;
     const parent = nodePath.dirname(cur);
-    if (parent === cur) return false;
+    if (parent === cur || sameDir(parent, home)) return false;
     cur = parent;
   }
 }
