@@ -1,6 +1,6 @@
 # Issue kit — code-owner auto-request on ready-opened PRs + GitHub bug #69208
 
-**Status: LOCAL DRAFT.** GitHub issues have NO draft state — opening this issue is a live write and needs your go on WHERE (see options below). The paired fix opens as a real **draft PR** (PR drafts do exist) referencing this issue.
+**Status: OPENED.** Live upstream issue **#608** (https://github.com/ix-infrastructure/Ix/issues/608), opened 2026-09-05, title + body verbatim from this kit (verified API round-trip). The paired fix stays a **held draft PR kit** (PR drafts exist; issues don't) — it opens only at train release with the owner's go, referencing this issue via **Refs**.
 
 ## Verbatim issue
 
@@ -23,9 +23,9 @@ Opening a pull request as **ready** makes GitHub immediately request the root co
 - #604 (closed, recreated) → #605 (draft-from-open, zero requested reviewers)
 - ix-infrastructure/Ix CODEOWNERS: `* @josephismikhail`
 
-## Open mechanics (when you choose a home)
-- **Upstream (ix-infrastructure/Ix):** live issue, no draft possible. Paired fix = a docs draft PR (CONTRIBUTING/PR-template note: "open drafts; code owners are requested at mark-ready") opened **draft:true** referencing this issue via **Refs** (partial-resolve discipline — KB #6650), opened at train release.
-- **Alot1z/Ix-findings:** your own findings hub — live but zero upstream exposure; the paired PR still opens upstream as a draft.
+## Open record
+- **#608** opened 2026-09-05, `state: open`, title/body match verified true (recorded in `issue-number.json`).
+- Paired fix kit (`fix-pr-title.txt`, `fix-pr-body.md`) — body now reads **Refs #608**; opens as a **draft** PR at train release with the owner's go.
 
 ## Files
-- `ISSUE-KIT.md` (this index) · `issue-body.md` (verbatim body) · `fix-pr-title.txt` + `fix-pr-body.md` (draft-PR kit)
+- `ISSUE-KIT.md` (this index) · `issue-body.md` (verbatim body as opened) · `issue-number.json` (open record) · `fix-pr-title.txt` + `fix-pr-body.md` (held draft-PR kit, Refs #608)

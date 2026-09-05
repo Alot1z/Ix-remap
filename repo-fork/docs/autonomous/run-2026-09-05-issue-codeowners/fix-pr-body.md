@@ -6,7 +6,7 @@ Feedback and suggestions are welcome at any stage. Each point is addressed on th
 
 ---
 
-Refs [the issue this PR documents — number filled at open] — the issue records the platform behavior behind this note; it is not fully resolved by docs alone (the root fix lives upstream at github/community#69208), so this PR references rather than closes it.
+Refs #608 — the issue records the platform behavior behind this note; it is not fully resolved by docs alone (the root fix lives upstream at github/community#69208), so this PR references rather than closes it.
 
 ## What this ships
 
