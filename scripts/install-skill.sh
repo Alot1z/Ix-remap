@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Install the Ix skill so Claude Code and Freebuff can use it.
+# Install the Ix skill for Claude Code and the .agents skill surface.
 #
 # Deploys skills/ix to:
 #   ~/.claude/skills/ix   — Claude Code (global)
-#   ~/.agents/skills/ix   — Freebuff / Codebuff (global)
+#   ~/.agents/skills/ix   — the .agents skill surface (global)
 #
-# Freebuff's skill loader searches ~/.claude/skills, ~/.agents/skills, and the
+# Skill loaders search ~/.claude/skills, ~/.agents/skills, and the
 # project's .claude/skills and .agents/skills, so a global install makes the
 # skill available in every project. Re-run after editing skills/ix.
 #
@@ -43,7 +43,7 @@ done
 
 if [ "$installed" = "1" ]; then
   echo
-  echo "Ix skill installed for Claude Code and Freebuff."
+  echo "Ix skill installed for Claude Code and the .agents surface."
   echo "Start a new session so the agent picks it up, then ask it to use Ix:"
   echo "  \"Set up Ix and map this repo\""
 fi

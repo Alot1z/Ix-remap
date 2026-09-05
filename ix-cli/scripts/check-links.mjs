@@ -30,14 +30,15 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const ALLOW = new Map([
-  // Dead repo link in CONTRIBUTING.md; open PR #582 removes it. Drop this
-  // entry when #582 merges — the gate will fail on the unused entry if not.
-  ['https://github.com/ix-infrastructure/ix-memory-layer', '#582 replaces this URL'],
-  // Dead Docs nav link in README.md; open PR #589 points it at the in-repo
-  // docs. Drop this entry when #589 merges — same self-cleaning rule.
-  ['https://www.ix-infra.com/docs', '#589 points it at the in-repo docs'],
-]);
+// Empty, and that is the intended steady state.
+//
+// It carried two entries while #582 and #589 were open — the dead backend-repo
+// link in CONTRIBUTING.md and the dead Docs nav link in README.md. Both merged,
+// so both URLs are gone from the tree, and the stale-entry check below did
+// exactly what it exists to do: it failed this branch until the entries were
+// removed. Anything added here must name the PR that retires it, because an
+// entry that outlives its URL is itself an error.
+const ALLOW = new Map([]);
 
 const SKIP_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 const TIMEOUT_MS = 10000;

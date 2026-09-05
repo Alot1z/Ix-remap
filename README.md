@@ -21,8 +21,8 @@
 
 <p align="center">
   <a href="https://www.ix-infra.com">Website</a> ·
-  <a href="https://www.ix-infra.com/docs">Docs</a> ·
-  <a href="https://compass.ix-infra.com">Demo</a> .
+  <a href="https://github.com/ix-infrastructure/Ix/tree/main/docs">Docs</a> ·
+  <a href="https://compass.ix-infra.com">Demo</a> ·
   <a href="https://discord.gg/ncEYVHVqZ8">Discord</a>
 </p>
 
@@ -219,10 +219,10 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/ix-infrastructure/ix-cursor-plugin/main/install.ps1 | iex
 ```
 
-## Claude Code / Freebuff Skill
+## Claude Code / .agents Skill
 
 [`skills/ix/`](skills/ix/SKILL.md) is a self-contained **Claude Code skill** (also
-loaded natively by Freebuff / Codebuff) that teaches any LLM agent to drive the
+loaded natively through the `.agents` surface) that teaches any LLM agent to drive the
 `ix` CLI: build the graph, explain symbols, trace flows, analyze impact, and
 detect smells — instead of grepping and guessing.
 
@@ -251,7 +251,7 @@ powershell -ExecutionPolicy Bypass -File skills/ix/scripts/bootstrap.ps1 .
 The skill follows the progressive-disclosure layout — a lean `SKILL.md` with the
 full command reference, output-format rules, and troubleshooting split into
 `references/`, plus `scripts/` for first-run setup — so it is portable to Claude
-Code, Freebuff, and any other skill-compatible agent. Edit `skills/ix/` and
+Code, the `.agents` surface, and any other skill-compatible agent. Edit `skills/ix/` and
 re-run `scripts/install-skill.sh` to update your installed copy. To produce a
 distributable zip:
 
@@ -293,13 +293,17 @@ Set `IX_DEBUG=1` to get full stack traces on any error.
 
 ## Supported Languages
 
-Ix parses and extracts symbols, calls, and imports across 26 languages, and recognizes several more config and data formats.
+Ix parses and extracts symbols, calls, and imports across 27 languages, and recognizes several more config and data formats.
 
 **Languages:**
-JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Ruby, Rust, PHP, Kotlin, Swift, Scala, R, SAS, Elixir, Haskell, Zig, Lua, Bash, HTML, XML, CSS, HCL / Terraform, Makefile
+JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Ruby, Rust, PHP, Kotlin, Swift, Scala, R, SAS, Elixir, Haskell, Zig, Lua, Bash, PowerShell, HTML, XML, CSS, HCL / Terraform, Makefile
+
+CUDA (`.cu` / `.cuh`) is parsed with the C++ grammar; kernel-launch syntax
+(`kernel<<<grid, block>>>(args)`) is handled, so host-to-kernel calls appear in
+the graph. Python stub files (`.pyi`) are parsed as Python.
 
 **Also recognized:**
-YAML, JSON, TOML, SQL, Dockerfile, Markdown
+YAML, JSON, TOML, SQL, Protocol Buffers, Dockerfile, Markdown
 
 ## Quick Start
 
