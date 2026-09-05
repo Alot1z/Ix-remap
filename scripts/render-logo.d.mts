@@ -10,6 +10,7 @@ export declare function resolveColorMode(
 export declare function renderLogo(opts?: {
   width?: number;
   color?: string;
+  bg?: "brand" | "none";
   file?: string;
   json?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -17,6 +18,7 @@ export declare function renderLogo(opts?: {
   ok: boolean;
   tool: string;
   color: string;
+  bg: string;
   file: { path: string; bytes: number };
   source: { width: number; height: number };
   grid: { cols: number; rows: number };
