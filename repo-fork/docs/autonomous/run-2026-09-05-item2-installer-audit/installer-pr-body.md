@@ -2,7 +2,7 @@
 
 This pull request is intentionally a **draft** and one component of a coordinated set the author is landing together (terminal logo banner · installer polish from the merged-surface audit · toolscan output-contract hardening). It will be marked ready only when every part of the train is green and the whole set is released at once.
 
-Feedback is welcome at any stage: review comments, suggestions, and inspiration are all appreciated. Nothing here is set in stone — if you spot anything, it will be addressed on this branch and merged without conflict; every point is evaluated on its merits and either folded in or answered directly. The change below is accurate and complete; the branch may still move as feedback is folded in.
+Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict. The change below is accurate and complete; the branch may still move.
 
 ---
 
@@ -21,6 +21,10 @@ A **docs-only correction** of the README's install surface, from an audit of the
 - The refuse-to-destroy guard is untouched; its satisfiability-by-a-foreign-`name: ix`-skill point is a risk-class note for the maintainer's assessment, not a docs fix.
 - The merged toolscan seam paragraph and link are upstream's own accepted text — untouched.
 - Nothing is promised beyond what this PR ships.
+
+## Companion
+
+This draft is part of the same coordinated set as #605 (terminal logo banner) and ships with it; both open as drafts and are marked ready together at the train release.
 
 ## Validation
 
