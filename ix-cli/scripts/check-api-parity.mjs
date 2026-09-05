@@ -194,7 +194,7 @@ const apiLines = apiSrc.split(/\r?\n/);
 // excluded.
 const KNOWN_HELPERS = new Set(["runReset"]);
 for (let i = 0; i < apiLines.length; i++) {
-  const call = apiLines[i].match(/this\.([a-zA-Z_$][\w$]*)(?:<[^>]*>)?\(/);
+  const call = apiLines[i].match(/this\.([a-zA-Z_$][\w$]*)(?:<.*?>)?\(/);
   if (!call) continue;
   const verb = call[1];
   if (VERBS.has(verb) || KNOWN_HELPERS.has(verb)) continue;
@@ -212,7 +212,7 @@ for (let i = 0; i < apiLines.length; i++) {
 // yield two tokens that normalize to the same key). A call with no literal
 // path at all is a new, unparseable pattern — fail loud instead of passing.
 for (let i = 0; i < apiLines.length; i++) {
-  const call = apiLines[i].match(/this\.(get|post|put|delete|patch)(?:<[^>]*>)?\(/);
+  const call = apiLines[i].match(/this\.(get|post|put|delete|patch)(?:<.*?>)?\(/);
   if (!call) continue;
   const method = call[1].toUpperCase();
   let tokens = [...apiLines[i].matchAll(/\/v1[^\s"'`]*/g)].map((t) => t[0]);

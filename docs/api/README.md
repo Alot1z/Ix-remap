@@ -85,7 +85,7 @@ curl -s -X POST http://localhost:8090/v1/context \
 
 | Method | Path | Client | Purpose |
 |---|---|---|---|
-| GET | `/v1/health` | `health()` | Liveness, status, `schema_version` |
+| GET | `/v1/health` | `health()` | Liveness, status, `schema_version`, `release_version` |
 | GET | `/v1/capabilities` | `capabilities()` | Pro feature flags |
 | POST | `/v1/context` | `query()` | Structured-context QA |
 
@@ -95,14 +95,17 @@ curl -s -X POST http://localhost:8090/v1/context \
 
 #### GET `/v1/health`
 
-Liveness probe. Returns `{"status": "ok", "schema_version": 3}`. A client whose
-expected schema version differs forces a clean re-ingest (e.g. after the
-absolute→relative `source_uri` migration).
+Liveness probe. Returns `{"status": "ok", "schema_version": 3, "release_version": "1.0.28"}`.
+A client whose expected schema version differs forces a clean re-ingest (e.g. after the
+absolute→relative `source_uri` migration). `release_version` is the semver the running
+container was built as, when it knows — the container's own claim, not proof (it is an
+env var, so `docker run -e` can override it); clients fall back to the release they
+tracked when the field is absent.
 
 **Response**
 
 ```json
-{ "status": "ok", "schema_version": 3 }
+{ "status": "ok", "schema_version": 3, "release_version": "1.0.28" }
 ```
 
 #### GET `/v1/capabilities`
@@ -768,7 +771,7 @@ interface PatchCommitResult { status: string; rev: number; }
 ### HealthResponse
 
 ```ts
-interface HealthResponse { status: string; schema_version?: number; }
+interface HealthResponse { status: string; schema_version?: number; release_version?: string; }
 ```
 
 ### CapabilitiesResponse

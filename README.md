@@ -21,8 +21,8 @@
 
 <p align="center">
   <a href="https://www.ix-infra.com">Website</a> ·
-  <a href="https://www.ix-infra.com/docs">Docs</a> ·
-  <a href="https://compass.ix-infra.com">Demo</a> .
+  <a href="https://github.com/ix-infrastructure/Ix/tree/main/docs">Docs</a> ·
+  <a href="https://compass.ix-infra.com">Demo</a> ·
   <a href="https://discord.gg/ncEYVHVqZ8">Discord</a>
 </p>
 
@@ -310,13 +310,17 @@ Set `IX_DEBUG=1` to get full stack traces on any error.
 
 ## Supported Languages
 
-Ix parses and extracts symbols, calls, and imports across 26 languages, and recognizes several more config and data formats.
+Ix parses and extracts symbols, calls, and imports across 27 languages, and recognizes several more config and data formats.
 
 **Languages:**
-JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Ruby, Rust, PHP, Kotlin, Swift, Scala, R, SAS, Elixir, Haskell, Zig, Lua, Bash, HTML, XML, CSS, HCL / Terraform, Makefile
+JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Ruby, Rust, PHP, Kotlin, Swift, Scala, R, SAS, Elixir, Haskell, Zig, Lua, Bash, PowerShell, HTML, XML, CSS, HCL / Terraform, Makefile
+
+CUDA (`.cu` / `.cuh`) is parsed with the C++ grammar; kernel-launch syntax
+(`kernel<<<grid, block>>>(args)`) is handled, so host-to-kernel calls appear in
+the graph. Python stub files (`.pyi`) are parsed as Python.
 
 **Also recognized:**
-YAML, JSON, TOML, SQL, Dockerfile, Markdown
+YAML, JSON, TOML, SQL, Protocol Buffers, Dockerfile, Markdown
 
 ## Quick Start
 

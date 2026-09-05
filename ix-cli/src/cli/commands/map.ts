@@ -151,7 +151,12 @@ const COMPLETED_MAP_OUTCOMES = new Set([
  */
 export function describeEmptyCompletedMap(
   result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
-  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+  ingest:
+    | Pick<
+        IngestFilesSummary,
+        "filesDiscovered" | "patchesApplied" | "idempotentPatches" | "filesSkippedAsUnchanged" | "parseErrors" | "commitErrors"
+      >
+    | undefined,
 ): string | undefined {
   if (!ingest || ingest.filesDiscovered <= 0 || ingest.parseErrors > 0 || ingest.commitErrors > 0) {
     return undefined;
@@ -161,7 +166,33 @@ export function describeEmptyCompletedMap(
 
   const sourceFiles = ingest.filesDiscovered;
   const patches = ingest.patchesApplied;
-  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"} (${patches} ${patches === 1 ? "patch" : "patches"} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet. The source ingest baseline was preserved, so the next 'ix map' can reuse unchanged files.`;
+  const files = `${sourceFiles} supported source ${sourceFiles === 1 ? "file" : "files"}`;
+  const patchWord = patches === 1 ? "patch" : "patches";
+  const tail = "The source ingest baseline was preserved, so the next 'ix map' can reuse unchanged files.";
+
+  // The backend deduplicated every commit, so this run wrote nothing at all —
+  // and the two sentences below are then both false: nothing was ingested, and
+  // the language had no chance to be the reason (#527). The observed cause is a
+  // graph deleted out from under the backend's own patch records: a scoped
+  // reset used to remove a workspace's nodes and patches while leaving its
+  // idempotency keys, so the identical re-ingest was accepted as a replay and
+  // committed nothing (Ix-memory#174). Those keys expire after 24h, which is
+  // why waiting is a real workaround and worth saying out loud.
+  // `filesSkippedAsUnchanged === 0` is load-bearing, not a belt-and-braces extra.
+  // `idempotentPatches >= patches` only says every patch this run *submitted*
+  // was a replay; it says nothing about the files the run never submitted, and
+  // those are what disprove the diagnosis. A workspace on a language the
+  // backend cannot build a hierarchy for skips its 99 clean files, and one
+  // reverted file whose content was ingested before commits as `Idempotent` —
+  // giving patches === 1, idempotentPatches === 1, file_count === 0 with a
+  // graph that is perfectly intact and a 24-hour wait that changes nothing.
+  // A real #527 run skips nothing: the DB-reset guard clears the mtime cache
+  // and the hash lookup comes back empty, so every file is re-submitted.
+  if (patches > 0 && ingest.idempotentPatches >= patches && ingest.filesSkippedAsUnchanged === 0) {
+    return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${files}. The backend answered every one of the ${patches} committed ${patchWord} with 'already applied', so this run wrote nothing — the graph is empty because the commits were deduplicated against patch records the backend still holds, not because the source could not be parsed. That is what a workspace whose graph was deleted without its patch records looks like; the records expire within 24 hours, or an upgraded backend clears them with the reset. ${tail}`;
+  }
+
+  return `Backend reported ${result.outcome}, but mapped 0 files after local ingest found ${files} (${patches} ${patchWord} committed). The source graph was ingested, but no architecture hierarchy was created. The active backend may not map this source language yet. ${tail}`;
 }
 
 /**
@@ -249,7 +280,12 @@ function emitDroppedFileWarning(
  */
 export function invalidateBaselineForIncompleteCompletedMap(
   result: Pick<MapResult, "file_count" | "region_count" | "regions" | "outcome">,
-  ingest: Pick<IngestFilesSummary, "filesDiscovered" | "patchesApplied" | "parseErrors" | "commitErrors"> | undefined,
+  ingest:
+    | Pick<
+        IngestFilesSummary,
+        "filesDiscovered" | "patchesApplied" | "idempotentPatches" | "filesSkippedAsUnchanged" | "parseErrors" | "commitErrors"
+      >
+    | undefined,
   projectRoot: string,
   invalidate: (root: string) => void = clearMapBaseline,
 ): string | undefined {
