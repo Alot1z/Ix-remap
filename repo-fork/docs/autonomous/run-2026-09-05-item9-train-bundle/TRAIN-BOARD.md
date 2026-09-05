@@ -19,7 +19,7 @@
 |---|---|---|
 | #605 logo banner (draft-from-open) | ix-infrastructure/Ix | DRAFT @ `0869a137` · reviewers none · 29/30 CI |
 | #604 (superseded original) | ix-infrastructure/Ix | closed 15:45Z → #605 |
-| toolscan work | Alot1z/toolscan | 0 PRs — direct commits on main (repo convention); head `a3e33771e3` since 15:56Z (owner NUL-byte hardening push, superseding `2f88671b`) |
+| toolscan work | Alot1z/toolscan | 0 PRs — direct commits on main (repo convention); head `4c0b2d11b9` since 16:43Z (owner brand pass — radar mark + README/CONTRIBUTING; prior `a3e33771e3` was the 15:56Z NUL-hardening push) |
 | Issue #608 code-owner auto-request (owned by the drafts episode) | ix-infrastructure/Ix | open 2026-09-05, verbatim-verified; paired fix held as a draft PR kit (Refs #608, opens at train release) — kept open because its PR is paired (KB #6653) |
 | Issue #606 harness-detector proposal (from the concurrent dispatch session's §8) | ix-infrastructure/Ix | **closed-with-note 2026-09-05** (owner: no issues before PRs) — parked, not resolved; reopens with its implementation PR (comment 5553161411) |
 

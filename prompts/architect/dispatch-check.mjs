@@ -160,8 +160,8 @@ if (process.argv.includes("--live")) {
     const ts = await apiThrow("/repos/Alot1z/toolscan");
     if (ts.license?.spdx_id !== "MIT") add("live", `toolscan license regressed: ${JSON.stringify(ts.license)}`);
     const tsRef = await apiThrow("/repos/Alot1z/toolscan/git/ref/heads/main");
-    if (tsRef.object.sha !== "a3e33771e30c8044b03d0bc423ab4b2807f7a067")
-      add("live", `toolscan main moved off a3e33771e3 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the B4 NUL-hardening head; prior 2f88671b superseded by an owner push 2026-09-05 15:56Z)`);
+    if (tsRef.object.sha !== "4c0b2d11b9667d8f93fac135b6e8cca995d4a81b")
+      add("live", `toolscan main moved off 4c0b2d11 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the brand-pass head; prior a3e33771 superseded by an owner push 2026-09-05 16:43Z)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
     if (br.object.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9") {
       add("live", `fork logo branch moved off 0869a137 → ${br.object.sha.slice(0, 10)} (dispatch pins 0869a137 — the #605 draft head)`);
