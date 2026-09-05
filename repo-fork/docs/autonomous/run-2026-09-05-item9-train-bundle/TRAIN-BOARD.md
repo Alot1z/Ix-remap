@@ -40,4 +40,5 @@
 - New PRs opened by us this campaign: **1** (#605 draft; #604 closed). Zero merged yet — train releases together.
 - New issues filed by us upstream: **2** — #608 open (code-owner auto-request, paired with its held fix-PR kit, Refs #608) + #606 closed-with-note (harness-detector proposal parked per the no-orphan-issues rule; reopens with its PR).
 - KB rows added from this session: **#6646, #6649, #6650, #6653** (all TRUSTED).
+- Full historical sweep of the closed campaign PR/issue threads (agentception-extract over a 12-PR + issue digest, 2026-09-05): **zero new rows** — every candidate already owned by TRUSTED rows (dead-link CI #6333/#6454, four-surface parity #6316/#6499/#6647/#6578, command/flag doc gate #6500/#6501/#6503); nothing stacked (rule 8).
 - Live review requests outstanding: **0**.
