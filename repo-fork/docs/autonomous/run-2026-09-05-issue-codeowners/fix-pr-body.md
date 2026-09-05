@@ -6,19 +6,11 @@ Feedback and suggestions are welcome at any stage. Each point is addressed on th
 
 ---
 
-Refs #608 — the issue records the platform behavior behind this note; it is not fully resolved by docs alone (the root fix lives upstream at github/community#69208), so this PR references rather than closes it.
+Refs #608 — the issue records the behavior behind this note; the platform root fix lives upstream (community #69208), so this PR references rather than closes it.
 
 ## What this ships
 
-A one-line, contributor-facing addition to **CONTRIBUTING.md** (Development Workflow, step 4), grounded against current main (`39d0734`): work-in-progress PRs open as drafts, because GitHub requests code owners at **mark-ready**, not at draft-open — and a ready-open auto-request cannot be removed once a PR is a draft.
-
-The workflow step currently reads:
-
-```
-4. Open a PR using the pull request template
-```
-
-and becomes:
+One line added to **CONTRIBUTING.md** (Development Workflow, step 4 — the canonical "open a PR" instruction), grounded at main `39d0734`:
 
 ```
 4. Open a PR using the pull request template — work-in-progress opens as a draft;
@@ -26,17 +18,16 @@ and becomes:
    auto-request cannot be removed once a PR is a draft (see #608)
 ```
 
-Why CONTRIBUTING and nowhere else (grounded at `39d0734`): its Development Workflow step 4 is the canonical "open a PR" instruction, and its exit-code section already teaches draft-until-dependency — this completes the draft guidance in the one place contributors read it. The PR template has no review-flow section, so nothing belongs there. CODEOWNERS, workflows, and product code are untouched.
+That is the whole change. CONTRIBUTING's workflow list is where contributors read the PR step, and its exit-code section already teaches draft-until-dependency — this completes the draft guidance in one place. The PR template has no review-flow section, so no change there.
 
-## Scope (explicit)
+## Scope
 
-- CONTRIBUTING.md only — one file, one added line.
-- No CODEOWNERS change, no workflow change, no product code, no template change.
-- The underlying removal-block is a GitHub platform bug (community #69208), tracked in #608 — not fixable from this repo.
+- CONTRIBUTING.md only — one file, one line; docs-only, no tests affected.
+- No CODEOWNERS, workflow, template, or product-code change.
+- The removal-block is a GitHub platform bug (community #69208), tracked in #608 — not fixable from this repo.
 - Nothing is promised beyond what this PR ships.
 
 ## Validation
 
-- Docs-only: no tests affected; the harness-install smoke jobs are untouched but still run on this branch and must stay green.
-- Consistent with GitHub's documented behavior: code-owner requests fire at **mark-ready** (verified live 2026-09-05 — #605 opened as a draft carried zero requested reviewers; its ready-opened predecessor #604 auto-requested the code owner and the request could not be removed).
-- Grounding diff is exact against CONTRIBUTING.md at main `39d0734`.
+- Consistent with GitHub's documented behavior (verified live 2026-09-05: #605 draft-from-open carried zero requested reviewers; ready-opened #604 auto-requested the code owner and the request could not be removed).
+- Exact diff grounded against CONTRIBUTING.md at main `39d0734`.

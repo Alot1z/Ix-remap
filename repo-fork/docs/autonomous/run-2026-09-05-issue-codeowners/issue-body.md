@@ -1,14 +1,15 @@
-### Summary
-Opening a pull request as **ready** makes GitHub immediately request the root code owner (`* @josephismikhail` in this repo's CODEOWNERS) — for any files, because the root rule matches everything. If the PR is then converted to a **draft**, that pending review request cannot be removed: `DELETE /pulls/{n}/requested_reviewers` fails with `422 Validation Failed — Could not add requested reviewers to pull request`, a GitHub-side bug open since 2023 (community discussion #69208). Re-adding also fails (404). Observed 2026-09-05 on #604: opened ready (auto-request fired 1 s later), converted to draft, removal blocked 3/3 attempts → closed and recreated as #605 opened **as a draft**, which per GitHub docs ("marking a pull request as ready for review will request reviews from any code owners") requests nobody until mark-ready.
+### The problem
+This repo's CODEOWNERS root rule (`* @josephismikhail`) auto-requests the code owner whenever a PR opens **ready** — for any files, because the root rule matches everything. Turning that PR into a **draft** does not retract the request, and removing it then fails: `DELETE /pulls/{n}/requested_reviewers` returns `422 Could not add requested reviewers` (GitHub bug, community #69208, open since 2023; re-adding → 404).
 
-### Why it matters
-- A co-founder lands on a contributor's review-requested queue for the whole draft lifetime with nothing actionable to review.
-- The contributor cannot clean it up through any API — the only escapes are close+recreate (loses the thread) or a maintainer's manual UI action.
+Observed on #604: opened ready (auto-request fired 1 s later), converted to draft, removal blocked ×3 → closed and reopened as #605 **draft-from-open**, which requests nobody until mark-ready (GitHub's documented behavior).
 
-### Suggested handling (assess, not a demand)
-- Prefer **draft-from-open** for work-in-progress PRs (the repo's own CONTRIBUTING/PR template can say so).
-- Track the GitHub-side bug: https://github.com/orgs/community/discussions/69208 — removal should work; it is a platform defect, not repo policy.
+Effect: a co-founder sits on the contributor's review-requested queue for the whole draft lifetime with nothing actionable — and the contributor has no API to clean it up (only close+recreate, or a maintainer's manual action).
+
+### What fixes it
+1. **Contributors:** open work-in-progress PRs as drafts (`draft: true` at create). Code owners are requested at **mark-ready**, never at draft-open — so drafts request nobody.
+2. **Repo docs:** state the draft-first rule where contributors read it — proposed in the paired draft PR (CONTRIBUTING, one line).
+3. **Platform:** track https://github.com/orgs/community/discussions/69208 — removing a pending request on a draft should work; it is a GitHub defect, not repo policy.
 
 ### References
 - #604 (closed, recreated) → #605 (draft-from-open, zero requested reviewers)
-- ix-infrastructure/Ix CODEOWNERS: `* @josephismikhail`
+- CODEOWNERS: `* @josephismikhail`
