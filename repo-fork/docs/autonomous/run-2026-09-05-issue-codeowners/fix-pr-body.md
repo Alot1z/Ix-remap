@@ -8,6 +8,8 @@ Feedback and suggestions are welcome at any stage. Each point is addressed on th
 
 Refs #608 — the issue records the behavior behind this note; the platform root fix lives upstream (community #69208), so this PR references rather than closes it.
 
+Companion drafts in the same train: #605 (terminal logo banner) and #609 (installer README-claims fix) — all three open as drafts and are marked ready together.
+
 ## What this ships
 
 One line added to **CONTRIBUTING.md** (Development Workflow, step 4 — the canonical "open a PR" instruction), grounded at current main `e8ab1926`:

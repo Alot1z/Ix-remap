@@ -176,6 +176,14 @@ if (process.argv.includes("--live")) {
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);
     if (rrs.length) add("live", `PR #605 has requested reviewers: ${rrs.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
+    // train drafts #609/#610 (opened 2026-09-05, owner's go — Tier A.3): draft + zero reviewers
+    for (const n of [609, 610]) {
+      const p = await apiThrow(`/repos/ix-infrastructure/Ix/pulls/${n}`);
+      if (!p.draft) add("live", `PR #${n} is NOT a draft — RULE 0 violated (dispatch pins draft:true)`);
+      const rr = await apiThrow(`/repos/ix-infrastructure/Ix/pulls/${n}/requested_reviewers`);
+      const rrsN = (rr.users || []).map((u) => u.login);
+      if (rrsN.length) add("live", `PR #${n} has requested reviewers: ${rrsN.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
+    }
   } catch (e) {
     add("live", `probe failed (treat as gate-missing signal, not truth): ${e.message.slice(0, 100)}`);
   }

@@ -1,0 +1,1 @@
+docs: note draft-first PRs in CONTRIBUTING — code owners are requested at mark-ready

@@ -24,7 +24,7 @@ A **docs-only correction** of the README's install surface, from an audit of the
 
 ## Companion
 
-This draft is part of the same coordinated set as #605 (terminal logo banner) and ships with it; both open as drafts and are marked ready together at the train release.
+This draft is part of the same coordinated set as #605 (terminal logo banner) and #610 (the CONTRIBUTING draft-first note, Refs #608) — all three open as drafts, reference each other, and are marked ready together at the train release.
 
 ## Validation
 
