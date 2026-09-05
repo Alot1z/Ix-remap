@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as nodePath from "node:path";
 import { createHash } from "node:crypto";
 import { readBoundedFile } from "./bounded-read.js";
@@ -113,32 +112,42 @@ function hasWorkspaceMarker(dir: string): boolean {
   return false;
 }
 
-/** True if the two resolved paths denote the same directory. Windows filesystems
- *  are case-insensitive, so a case-blind comparison would walk past the home
- *  boundary instead of stopping on it. */
-function sameDir(a: string, b: string): boolean {
-  const ra = nodePath.resolve(a);
-  const rb = nodePath.resolve(b);
-  return process.platform === "win32"
-    ? ra.toLowerCase() === rb.toLowerCase()
-    : ra === rb;
-}
-
 /** True if `dir` or any ancestor is a single repository: a git repo root (.git)
  *  OR a declared monorepo/workspace root. Used to tell a monorepo's package dir
  *  (part of ONE repo) from a plain folder that collects independently-cloned
  *  repos. */
 function isInsideSingleRepo(dir: string): boolean {
   let cur = nodePath.resolve(dir);
-  const home = nodePath.resolve(os.homedir());
-  // Walk up, checking each level, but never consult markers AT the user's home:
-  // a `.git` or workspace marker there is ambient (a dotfiles repo, a stray
-  // tool folder) and must not classify every path beneath it as one repository.
-  // Home itself is still judged when it IS the mapped path (first iteration).
+  // Walk up to the filesystem root, checking each level.
+  //
+  // Deliberately NOT stopped at `os.homedir()`. An earlier revision of the
+  // #601 fix did that, to keep an ambient marker at the user's home -- a
+  // dotfiles `.git`, a stray `npm init` -- from classifying every path beneath
+  // it as one repository. The motivating report is fixed by `hasWorkspaceMarker`
+  // requiring a FILE instead, and the home boundary turned out to cost more
+  // than it bought:
+  //
+  //   - it makes this answer depend on WHO is running. Same tree, two
+  //     independent clones under a directory whose parent carries a real
+  //     `package.json` with `workspaces`: a `SYSTEM` when `$HOME` is that
+  //     parent, `undefined` when it is not. `detectSystem` returns a
+  //     `systemId` that gets persisted, so a CI job running as root and a
+  //     developer mapping the same checkout would disagree about whether the
+  //     path is a system at all.
+  //   - a workspace config is an EXPLICIT declaration ("these subdirs are my
+  //     packages"), and the boundary cannot tell one at `$HOME` from an
+  //     ambient `.git`, so it ignores both.
+  //   - nothing pinned it: removing the line left all 20 tests in
+  //     system.test.ts green.
+  //
+  // If the ambient-`.git`-at-home case is worth fixing, it needs its own
+  // failing test and a narrower rule -- skipping only `hasOwnGit` at home while
+  // still honouring an explicit workspace declaration, or stopping at the git
+  // boundary rather than at `$HOME`.
   while (true) {
     if (hasOwnGit(cur) || hasWorkspaceMarker(cur)) return true;
     const parent = nodePath.dirname(cur);
-    if (parent === cur || sameDir(parent, home)) return false;
+    if (parent === cur) return false;
     cur = parent;
   }
 }
