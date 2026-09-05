@@ -4,6 +4,17 @@
 
 **Body standard (universal, RULE 0 §5.9 + KB #6646):** DRAFT + train framing; feedback/suggestions/inspiration explicitly welcomed at any stage; any issue found is addressed on-branch and merged without upstream conflict; nothing promised beyond what the PR ships. No review requests on drafts — open `draft: true` from the start and verify `requested_reviewers` is empty after open.
 
+## Opening checklist (universal standard — every prepared draft body must pass, added 2026-09-05)
+
+1. **Status header** — `Status: DRAFT — part of a larger train`, naming the same coordinated set as the other train bodies.
+2. **Feedback line verbatim** — “Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict.”
+3. **Accuracy line** scoped to this PR's own change (installer: “The change below is accurate and complete; the branch may still move.”).
+4. **Scope section** — explicit, promising nothing beyond what the PR ships.
+5. **No do-not-review / ignore-this framing anywhere** — grep the body before open; any hit is a defect (RULE 0 §5.9, KB #6646, #6653).
+6. **Post-open verify** — `requested_reviewers` empty (draft-from-open; KB #6646).
+
+Side-by-side proof that the train speaks with one voice: `draft-body-comparison.html` in the item-9 bundle (this body vs the live #605 body).
+
 ## Files
 
 | File | Purpose |

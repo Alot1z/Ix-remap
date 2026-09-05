@@ -1,6 +1,6 @@
 # Issue kit — code-owner auto-request on ready-opened PRs + GitHub bug #69208
 
-**Status: OPENED.** Live upstream issue **#608** (https://github.com/ix-infrastructure/Ix/issues/608), opened 2026-09-05, title + body verbatim from this kit (verified API round-trip). The paired fix stays a **held draft PR kit** (PR drafts exist; issues don't) — it opens only at train release with the owner's go, referencing this issue via **Refs**.
+**Status: OPENED.** Live upstream issue **#608** (https://github.com/ix-infrastructure/Ix/issues/608), opened 2026-09-05, title + body verbatim from this kit (verified API round-trip). The paired fix stays a **held draft PR kit** (PR drafts exist; issues don't) — it opens only at train release with the owner's go, referencing this issue via **Refs #608**.
 
 ## Verbatim issue
 
@@ -25,7 +25,14 @@ Opening a pull request as **ready** makes GitHub immediately request the root co
 
 ## Open record
 - **#608** opened 2026-09-05, `state: open`, title/body match verified true (recorded in `issue-number.json`).
-- Paired fix kit (`fix-pr-title.txt`, `fix-pr-body.md`) — body now reads **Refs #608**; opens as a **draft** PR at train release with the owner's go.
+
+## The concrete fix (grounded 2026-09-05, held as a draft-PR kit)
+
+Assessment of whether the repo warrants a docs change: **yes — minimal and honest.** CONTRIBUTING.md's Development Workflow step 4 is the canonical "open a PR" instruction and currently says only `4. Open a PR using the pull request template`. Its exit-code section already teaches draft-until-dependency, so a general draft-first note completes the guidance in the one place contributors read it. The PR template has **no** review-flow section, so nothing is warranted there; CODEOWNERS/workflows are correctly untouched.
+
+- **Title (held):** `docs: note draft-first PRs in CONTRIBUTING — code owners are requested at mark-ready`
+- **Change:** one line added to CONTRIBUTING.md step 4 (exact old → new text in `fix-pr-body.md`), Refs #608; scope = one file, docs-only.
+- **Body (held):** `fix-pr-body.md`, verbatim-ready on the universal welcome-feedback standard, train-framed, opens as a draft at train release with the owner's go, Refs #608.
 
 ## Files
-- `ISSUE-KIT.md` (this index) · `issue-body.md` (verbatim body as opened) · `issue-number.json` (open record) · `fix-pr-title.txt` + `fix-pr-body.md` (held draft-PR kit, Refs #608)
+- `ISSUE-KIT.md` (this index) · `issue-body.md` (verbatim body as opened) · `issue-number.json` (open record) · `fix-pr-title.txt` + `fix-pr-body.md` (held draft-PR kit — concrete CONTRIBUTING one-liner, Refs #608)

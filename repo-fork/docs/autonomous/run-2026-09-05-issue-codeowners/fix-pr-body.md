@@ -10,15 +10,33 @@ Refs #608 — the issue records the platform behavior behind this note; it is no
 
 ## What this ships
 
-A short contributor-facing note that work-in-progress PRs open as **drafts**: GitHub requests code-owner reviews at **mark-ready**, not at draft-open, so a draft-from-open requests nobody and avoids pinging the root code owner (`* @josephismikhail`) with nothing actionable. Where exactly: the CONTRIBUTING section / PR template that describes the review flow — precise insertion point scoped against current main at open time.
+A one-line, contributor-facing addition to **CONTRIBUTING.md** (Development Workflow, step 4), grounded against current main (`39d0734`): work-in-progress PRs open as drafts, because GitHub requests code owners at **mark-ready**, not at draft-open — and a ready-open auto-request cannot be removed once a PR is a draft.
+
+The workflow step currently reads:
+
+```
+4. Open a PR using the pull request template
+```
+
+and becomes:
+
+```
+4. Open a PR using the pull request template — work-in-progress opens as a draft;
+   GitHub requests code owners at mark-ready, not at draft-open, and a ready-open
+   auto-request cannot be removed once a PR is a draft (see #608)
+```
+
+Why CONTRIBUTING and nowhere else (grounded at `39d0734`): its Development Workflow step 4 is the canonical "open a PR" instruction, and its exit-code section already teaches draft-until-dependency — this completes the draft guidance in the one place contributors read it. The PR template has no review-flow section, so nothing belongs there. CODEOWNERS, workflows, and product code are untouched.
 
 ## Scope (explicit)
 
-- Docs only — CONTRIBUTING and/or the PR template, one file.
-- No CODEOWNERS change, no workflow change, no product code.
-- The underlying removal-block is a GitHub platform bug (community #69208), tracked in the referenced issue — not fixable from this repo.
+- CONTRIBUTING.md only — one file, one added line.
+- No CODEOWNERS change, no workflow change, no product code, no template change.
+- The underlying removal-block is a GitHub platform bug (community #69208), tracked in #608 — not fixable from this repo.
 - Nothing is promised beyond what this PR ships.
 
 ## Validation
 
-- Consistent with GitHub's documented behavior: code-owner requests fire when a PR is marked ready for review (verified live 2026-09-05: #605 opened as a draft carried zero requested reviewers; its ready-opened predecessor #604 auto-requested the code owner and the request could not be removed).
+- Docs-only: no tests affected; the harness-install smoke jobs are untouched but still run on this branch and must stay green.
+- Consistent with GitHub's documented behavior: code-owner requests fire at **mark-ready** (verified live 2026-09-05 — #605 opened as a draft carried zero requested reviewers; its ready-opened predecessor #604 auto-requested the code owner and the request could not be removed).
+- Grounding diff is exact against CONTRIBUTING.md at main `39d0734`.

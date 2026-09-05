@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05 (state written ~16:10Z; PR recreated 15:45Z)
 **Scope:** train bundle + illustrated TUI-logo showcase + item 9 (prepared, awaiting owner go) + item 10 (drafted).
-**Live state:** PR **#605** — DRAFT (opened draft-from-open), head `0869a137`, **requested reviewers: NONE**, CI 29/30 (sole red = the documented CodeQL infra-race run `101317167251`). PR **#604** — **CLOSED** 15:45Z with a verbatim note linking #605. Toolscan main unchanged at `2f88671b`. Nothing else opened or marked ready.
+**Live state:** PR **#605** — DRAFT (opened draft-from-open), head `0869a137`, **requested reviewers: NONE**, CI 29/30 (sole red = the documented CodeQL infra-race run `101317167251`). PR **#604** — **CLOSED** 15:45Z with a verbatim note linking #605. Toolscan main `a3e33771` (owner push 15:56Z; pin refreshed). Issues: **#608 open** (code-owner tracker, paired), **#606 closed-with-note**. The repo's only other open PR is #607 (josephismikhail's own, not ours). Nothing else opened or marked ready.
 
 ## Why #604 closed and #605 opened (owner correction, 2026-09-05)
 #604 was opened as *ready* and later converted to draft. GitHub auto-requested the `* @josephismikhail` code-owner review 1 s after that ready-open — and removing a pending review request once a PR is a draft is blocked by a GitHub-side bug (community #69208, open since 2023; reproduced 3/3 DELETEs → 422, re-add → 404). GitHub docs: code-owner requests fire at **mark-ready**, never at draft-open. So #604 was closed and **recreated as #605 draft-from-open** on the same branch/head/body — which carries zero requested reviewers, verified live. Universal rule recorded as agent-knowledge **#6646** (VERIFIED/TRUSTED): drafts get no review requests; never request reviewers on a draft; if a request is stuck, recreate draft-from-open.
@@ -22,5 +22,13 @@
 - Local fork record commit `37741ff` (earlier-phase dirs, 15 files, NO push).
 - `dispatch-check.mjs`: fast + `--live` **ALL GREEN** (live pins now #604 closed + #605 draft@0869a137 + zero reviewers).
 
+## Session update (2026-09-05, drafts-only round — zero live changes)
+- **`draft-body-comparison.html`** — installer kit body vs the **live** #605 body, side by side as reviewers see them; verdict: one voice (identical status header + verbatim feedback line; one intentional per-PR accuracy-line variance).
+- **`live-drafts-snapshot.md`** — one-screen live probe: #605 draft @ `0869a13` · 0 reviewers · CI 29/1 (CodeQL race) · fork `Alot1z/Ix-remap` 0 PRs · toolscan 0 PRs (direct-commit convention) · issues #608 open / #606 closed. The only other open PR anywhere: #607 (owner's own, not ours).
+- **Draft-body standard checklist** added to dispatch §1 item 9 + the installer `OPENING-KIT.md` + ITEM-9-BUNDLE §2 (header · verbatim feedback line · accuracy line · scope · no do-not-review framing · post-open reviewer verify) — dated 2026-09-05.
+- **#608 fix kit grounded:** CONTRIBUTING.md Development Workflow step 4 is the single honest home (one added line, docs-only; PR template has no review-flow section → no change there). Kit title/body updated to the concrete change, Refs #608, held for train release.
+- KB **#6653** (no orphan issues — issues open only alongside their PR; close-with-note is the hold) added, gate PASS, promoted TRUSTED. Full historical thread sweep: zero new rows (campaign fully mined).
+- Workspace renamed `ix-workspace` → `github-workspace` (plain descriptive name; commits `b22f7c9`+`82b2bdf`, no remote).
+
 ## Pending
-- Owner go on item 9 (the only mark-ready moment). Until then: nothing ready, nothing else opens, zero upstream writes. Installer README-fix stays a held-local draft file.
+- Owner go on item 9 (the only mark-ready moment). Until then: nothing ready, nothing else opens, zero upstream writes. Installer README-fix + the #608 fix kit stay held-local draft files.

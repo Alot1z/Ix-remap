@@ -22,12 +22,13 @@
 
 ## 2 · The exact mark-ready sequence (runs only on your go)
 
-1. **Pre-flight (read-only):** re-probe §0 rows — #605 still draft at `0869a137` with zero requested reviewers, toolscan HEAD `2f88671b`, wave gates unchanged; run `dispatch-check.mjs` fast + `--live` (must be ALL GREEN).
-2. **Mark #605 ready** — GraphQL `markPullRequestReadyForReview` on `ix-infrastructure/Ix#605` (REST `PATCH` silently ignores draft; verified §5.9 live). Note: marking ready WILL auto-request the code owner (GitHub behavior at mark-ready) — that is expected and correct at release time.
-3. **Open the installer README-fix PR** (fork branch → `ix-infrastructure/Ix`, **as a DRAFT**, train-framed body, README-only content from `installer-docs-fix.draft.md`) — Tier A permits the draft open; your go decides whether it also marks ready here or waits.
-4. **Coordinated note** on the released PR(s): names the train set (logo banner · installer docs fix · toolscan hardening), states what each ships.
-5. **Re-verify** CI to completion on the released heads (probe check-runs, zero new failures), then **item 10** final report.
-6. **Close-out:** dispatch-check fast + `--live` ALL GREEN, §0/§1 stamped with dates and URLs.
+1. **Pre-flight (read-only):** re-probe §0 rows — #605 still draft at `0869a137` with zero requested reviewers, toolscan HEAD `a3e33771` (moved 15:56Z by the owner NUL-byte hardening push; pin refreshed 2026-09-05 per KB #6644), wave gates unchanged; run `dispatch-check.mjs` fast + `--live` (must be ALL GREEN).
+2. **Draft-body standard check (checklist added 2026-09-05):** every prepared train body (#605 live, the installer kit, any new kit) passes the four checks — `Status: DRAFT — part of a larger train` header naming the set · verbatim feedback line (“Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict.”) · accuracy line scoped to the PR's own change · explicit scope section promising nothing beyond the PR. Grep the run-dirs for “please do not review” / “ignore this” framing — zero hits allowed; any hit is a defect fixed before anything opens (RULE 0 §5.9; KB #6646, #6653). Proof artifact: `draft-body-comparison.html`.
+3. **Mark #605 ready** — GraphQL `markPullRequestReadyForReview` on `ix-infrastructure/Ix#605` (REST `PATCH` silently ignores draft; verified §5.9 live). Note: marking ready WILL auto-request the code owner (GitHub behavior at mark-ready) — that is expected and correct at release time.
+4. **Open the installer README-fix PR** (fork branch → `ix-infrastructure/Ix`, **as a DRAFT**, train-framed body, README-only content from `installer-docs-fix.draft.md`) — Tier A permits the draft open; your go decides whether it also marks ready here or waits.
+5. **Coordinated note** on the released PR(s): names the train set (logo banner · installer docs fix · toolscan hardening), states what each ships.
+6. **Re-verify** CI to completion on the released heads (probe check-runs, zero new failures), then **item 10** final report.
+7. **Close-out:** dispatch-check fast + `--live` ALL GREEN, §0/§1 stamped with dates and URLs.
 
 ## 3 · Explicitly out of scope at item 9 (needs separate authorization, recorded as BLOCKED(b/c) until then)
 
