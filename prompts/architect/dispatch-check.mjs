@@ -176,12 +176,13 @@ if (process.argv.includes("--live")) {
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);
     if (rrs.length) add("live", `PR #605 has requested reviewers: ${rrs.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
-    // train draft #609 (opened 2026-09-05, owner's go — Tier A.3): draft + zero reviewers
+    // train PR #609: MERGED 2026-09-05 (main → 8c0e6b00) — pin merge state,
+    // not draft state (a merged PR keeps its historical review-request record,
+    // so the old draft pin false-fails forever after the merge).
     const p609 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/609");
-    if (!p609.draft) add("live", "PR #609 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
-    const rr609 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/609/requested_reviewers");
-    const rrs609 = (rr609.users || []).map((u) => u.login);
-    if (rrs609.length) add("live", `PR #609 has requested reviewers: ${rrs609.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
+    if (!p609.merged && p609.state !== "closed") {
+      add("live", "PR #609 expected merged (upstream merged it 2026-09-05) — state: " + p609.state);
+    }
     // #610 + #608 were closed 2026-09-05 at the owner's call (superseded-by-process, KB #6658/#6653)
     const p610 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/610");
     if (p610.state !== "closed") add("live", "PR #610 not closed — expected closed (owner closed it 2026-09-05 as superseded-by-process)");
