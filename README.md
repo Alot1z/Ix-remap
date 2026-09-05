@@ -303,7 +303,7 @@ CUDA (`.cu` / `.cuh`) is parsed with the C++ grammar; kernel-launch syntax
 the graph. Python stub files (`.pyi`) are parsed as Python.
 
 **Also recognized:**
-YAML, JSON, TOML, SQL, Dockerfile, Markdown
+YAML, JSON, TOML, SQL, Protocol Buffers, Dockerfile, Markdown
 
 ## Quick Start
 

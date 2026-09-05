@@ -15,6 +15,7 @@ export const SUPPORTED_EXTENSIONS = new Set<string>([
   ".yaml", ".yml",
   ".dockerfile",
   ".sql",
+  ".proto",
   ".json",
   ".toml",
   ".md", ".markdown",
