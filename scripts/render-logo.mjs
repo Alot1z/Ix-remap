@@ -15,7 +15,7 @@
 //
 // CLI:
 //   node scripts/render-logo.mjs [--width N] [--color auto|truecolor|256|ascii]
-//                                 [--file path] [--json]
+//                                 [--bg brand|none] [--file path] [--json]
 // Exit codes: 0 ok · 1 usage/file error · 2 unsupported/truncated (toolscan-aligned)
 import { readFileSync, statSync } from "node:fs";
 import { inflateSync } from "node:zlib";
@@ -110,6 +110,8 @@ export function renderLogo(opts = {}) {
   if (!Number.isInteger(width) || width < WIDTH_MIN || width > WIDTH_MAX) {
     throw new LogoError(`--width must be an integer ${WIDTH_MIN}..${WIDTH_MAX}`, 1);
   }
+  const bgMode = opts.bg ?? "brand";
+  if (!"brand none".split(" ").includes(bgMode)) throw new LogoError("--bg must be brand|none", 1);
   const fileArg = opts.file ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "assets", "logo.png");
   const { img, w, h, stride, color, bpp, bytes } = decodePng(fileArg);
   const mode = resolveColorMode(opts.color ?? "auto", opts.env);
@@ -162,6 +164,33 @@ export function renderLogo(opts = {}) {
       out += RAMP[Math.min(RAMP.length - 1, Math.max(top.ink || bot.ink ? 1 : 0, Math.round(intensity * (RAMP.length - 1))))];
       continue;
     }
+    if (bgMode === "none") {
+      // Per-shape emission: paint only the half-cells that carry ink, never the
+      // backdrop. A top-only cell is ▀ with fg=top and no background; a
+      // bottom-only cell is ▄ with fg=bot; a full cell paints ▀ with fg=top,
+      // bg=bot exactly like brand mode. The block stays the brand shape's own
+      // pixels — nothing is drawn behind it.
+      const fTop = mode === "truecolor"
+        ? `38;2;${top.rgb.map((v) => Math.round(v)).join(";")}`
+        : `38;5;${to256(top.rgb)}`;
+      const fBot = mode === "truecolor"
+        ? `38;2;${bot.rgb.map((v) => Math.round(v)).join(";")}`
+        : `38;5;${to256(bot.rgb)}`;
+      if (top.ink && bot.ink) {
+        const sig = mode === "truecolor" ? `${top.rgb.map(Math.round)}/${bot.rgb.map(Math.round)}` : `${to256(top.rgb)}/${to256(bot.rgb)}`;
+        if (sig !== lastSig) { out += `\x1b[0;${fTop};${fBot}m`; lastSig = sig; }
+        out += "▀";
+      } else if (top.ink) {
+        const sig = mode === "truecolor" ? `${top.rgb.map(Math.round)}/-` : `${to256(top.rgb)}/-`;
+        if (sig !== lastSig) { out += `\x1b[0;${fTop}m`; lastSig = sig; }
+        out += "▀";
+      } else {
+        const sig = mode === "truecolor" ? `-${bot.rgb.map(Math.round)}` : `-${to256(bot.rgb)}`;
+        if (sig !== lastSig) { out += `\x1b[0;${fBot}m`; lastSig = sig; }
+        out += "▄";
+      }
+      continue;
+    }
     const sig = mode === "truecolor"
       ? `${top.rgb.map(Math.round)}/${bot.rgb.map(Math.round)}`
       : `${to256(top.rgb)}/${to256(bot.rgb)}`;
@@ -183,7 +212,7 @@ out += "\n";
   if (opts.json) {
     const inkCells = cells.filter((c) => c.top.ink || c.bot.ink).length;
     return {
-      ok: true, tool: TOOL, color: mode, file: { path: String(fileArg), bytes },
+      ok: true, tool: TOOL, color: mode, bg: bgMode, file: { path: String(fileArg), bytes },
       source: { width: w, height: h }, grid: { cols: width, rows },
       cells: { total: cells.length, ink: inkCells }, truncated: false,
     };
@@ -213,10 +242,13 @@ if (isCli) {
     if (v === null) fail(`missing value for ${name}`, 1);
     return v;
   };
+  const bgRaw = get("--bg");
+  if (bgRaw !== undefined && !"brand none".split(" ").includes(bgRaw)) fail("--bg must be brand|none", 1);
   try {
     const result = renderLogo({
       width: flag("--width") !== undefined ? Number(get("--width")) : 56,
       color: get("--color") ?? "auto",
+      bg: bgRaw ?? "brand",
       file: get("--file"),
       json: flagJson(),
     });

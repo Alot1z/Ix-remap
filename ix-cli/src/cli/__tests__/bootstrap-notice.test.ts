@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { renameSync } from "node:fs";
+import { renameSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { emitSetupNotice } from "../bootstrap.js";
 import { renderBanner, resetBannerCacheForTests } from "../banner.js";
@@ -143,4 +143,68 @@ describe("render-logo CLI contract", () => {
       expect((e as LogoError).code).toBe(1);
     }
   });
+
+  it("--bg none paints only shape pixels: the backdrop never appears as a background", () => {
+    // brand mode paints the navy canvas behind every partial cell; none mode
+    // must never emit the backdrop constant as a background color.
+    const brand = run(["--width", "20", "--color", "truecolor"]);
+    const none = run(["--width", "20", "--color", "truecolor", "--bg", "none"]);
+    expect(brand).toContain("48;2;5;10;30"); // brand paints the backdrop
+    expect(none).not.toContain("48;2;5;10;30"); // none never does
+    expect(none).toContain("▄"); // bottom-only cells emit the lower half-block
+    expect(none).not.toBe(brand);
+  });
+
+  it("--bg none is byte-identical through the library and the CLI", () => {
+    const viaCli = run(["--width", "24", "--color", "ascii", "--bg", "none"]);
+    const viaLib = renderLogo({ width: 24, color: "ascii", bg: "none" });
+    expect(viaLib).toBe(viaCli);
+  });
+
+  it("--bg none is reported honestly in the JSON block; default is brand", () => {
+    expect(JSON.parse(run(["--width", "16", "--bg", "none", "--json"])).bg).toBe("none");
+    expect(JSON.parse(run(["--width", "16", "--json"])).bg).toBe("brand");
+  });
+
+  it("--bg bogus exits 1 with the reason on stderr and a payload-free stdout", () => {
+    let code = 0, stderrText = "", stdoutText = "";
+    try {
+      execFileSync(process.execPath, [RENDERER, "--width", "16", "--bg", "bogus"], { encoding: "utf8", stdio: "pipe" });
+    } catch (e: any) {
+      code = e.status;
+      stderrText = e.stderr?.toString() ?? "";
+      stdoutText = e.stdout?.toString() ?? "";
+    }
+    expect(code).toBe(1);
+    expect(stderrText).toContain("--bg");
+    expect(stdoutText).toBe("");
+  });
+});
+
+describe("output stability (golden fixtures)", () => {
+  // output-samples/*.ans are byte-pinned renders. Each filename encodes its
+  // invocation (width-color[-bg-none]); the pin re-renders and compares, so
+  // accidental visual drift fails CI. Update goldens ONLY in a dedicated,
+  // stated commit that says what changed and why.
+  const GOLDENS_DIR = join(fileURLToPath(import.meta.url), "..", "..", "..", "..", "..", "output-samples");
+  const goldens = readdirSync(GOLDENS_DIR).filter((f) => f.endsWith(".ans"));
+
+  it("ships goldens covering every color mode and both bg modes", () => {
+    expect(goldens.length).toBeGreaterThanOrEqual(6);
+    expect(goldens.some((f) => f.includes("ascii"))).toBe(true);
+    expect(goldens.some((f) => f.includes("256"))).toBe(true);
+    expect(goldens.some((f) => f.endsWith("bg-none.ans"))).toBe(true);
+  });
+
+  for (const g of goldens) {
+    it(`current render is byte-identical to the golden fixture: ${g}`, () => {
+      const m = g.match(/^width-(\d+)-(truecolor|256|ascii)(-bg-none)?\.ans$/);
+      expect(m, `fixture name must encode its invocation: ${g}`).not.toBeNull();
+      const args = ["--width", m![1], "--color", m![2]];
+      if (m![3]) args.push("--bg", "none");
+      const expected = readFileSync(join(GOLDENS_DIR, g), "utf8");
+      const actual = execFileSync(process.execPath, [RENDERER, ...args], { encoding: "utf8" });
+      expect(actual).toBe(expected);
+    });
+  }
 });
