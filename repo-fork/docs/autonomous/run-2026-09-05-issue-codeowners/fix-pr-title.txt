@@ -1,0 +1,1 @@
+docs: note draft-first for PRs — code-owner review requests fire at mark-ready
