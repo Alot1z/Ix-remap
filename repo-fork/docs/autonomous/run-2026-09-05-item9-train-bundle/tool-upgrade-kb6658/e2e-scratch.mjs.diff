@@ -1,0 +1,28 @@
+4c4,5
+< // asserts (commit msg, PR title, PR body) → PR create (verbatim) → edit → close
+---
+> // asserts (commit msg, PR title, PR body) → PR create (verbatim) → draft-from-open
+> // create (--draft, RULE 0 / KB #6646) → edit → close
+29a31
+> const PR_DRAFT_BRANCH = "e2e-pr-draft";
+122a125
+>   try { runTool("gh-commit.mjs", ["delete-branch", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH]); } catch { /* may be gone with repo */ }
+174a178,195
+>   // ready-open stays the DEFAULT when --draft is absent (additive contract, KB #6658)
+>   assert("ready-open default (no --draft) is NOT a draft", pr.draft === false);
+> 
+>   step("4b. draft-from-open via gh-pr.mjs create --draft");
+>   // RULE 0 / KB #6646: draft:true AT CREATE is the only reviewer-free open path.
+>   // A PR head must differ from base, so give the draft branch one real commit first.
+>   await api("POST", `/repos/${OWNER}/${NAME}/git/refs`, { ref: `refs/heads/${PR_DRAFT_BRANCH}`, sha: head.object.sha });
+>   const snapD = JSON.parse(runTool("gh-commit.mjs", ["snapshot", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, DIR, COMMIT_MSG]));
+>   runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, snapD.newCommit]);
+>   const prDraftOut = JSON.parse(runTool("gh-pr.mjs", ["create", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, BR, T1, B1, "--draft"]));
+>   const prDraft = await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prDraftOut.number}`);
+>   assert("create --draft opened a draft (draft:true)", prDraft.draft === true);
+>   assert("draft PR title/body verbatim",
+>     prDraft.title === titleFile && prDraft.body === fs.readFileSync(B1, "utf8"), `draft=${prDraft.draft}`);
+>   assert("draft PR has no requested reviewers", (prDraft.requested_reviewers || []).length === 0);
+>   assert("draft PR state=open", prDraft.state === "open");
+>   runTool("gh-pr.mjs", ["close", `${OWNER}/${NAME}`, String(prDraftOut.number)]);
+>   assert("draft PR closed", (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prDraftOut.number}`)).state === "closed");

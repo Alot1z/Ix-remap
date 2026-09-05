@@ -1,0 +1,18 @@
+12a13,15
+> //       [--draft]                     // open as a DRAFT (draft:true at create)
+> //                                     //   — no code-owner request until mark-ready (KB #6646);
+> //                                     //   absent = ready-open, unchanged behavior
+51a55,59
+>     const createBody = { title, head: headParam, base, body };
+>     // RULE 0 / KB #6646: draft:true AT CREATE is the only reviewer-free open path.
+>     // Absent the flag, behavior is unchanged: the PR opens ready (which auto-requests
+>     // code owners at ready-open and cannot be converted safely afterwards).
+>     if (process.argv.includes("--draft")) createBody.draft = true;
+54c62
+<       body: JSON.stringify({ title, head: headParam, base, body }),
+---
+>       body: JSON.stringify(createBody),
+58c66
+<       title, footer_free: true,
+---
+>       title, draft: !!out.draft, footer_free: true,
