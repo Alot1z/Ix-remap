@@ -171,6 +171,28 @@ of two field sets it is holding. `saved_at` is on it because the `context`
 record that follows says whether the snapshot was fresh when it was taken, not
 when that was.
 
+`ix savings --detail`:
+
+```
+savings model="Claude Opus ($15/MTok in, $75/MTok out)"
+scope name=session commands=726 tokens_saved=832739 naive_tokens=1099164 actual_tokens=266425 money_saved=27.48 water_saved_ml=1665.478
+command scope=session name=callers count=329 tokens_saved=334995
+scope name=lifetime commands=4820 tokens_saved=6142880 naive_tokens=8003104 actual_tokens=1860224 money_saved=202.72 water_saved_ml=12285.76
+command scope=lifetime name=callers count=2104 tokens_saved=2210488
+```
+
+(Truncated: one `command` record is shown per scope, and a real run emits one
+per entry in that scope's breakdown.)
+
+The two `scope` records are always emitted; `command` records appear only under
+`--detail` and carry their own `scope=` because both scopes are broken down in
+one stream. They are emitted inside the scope loop, so they follow their own
+`scope` record rather than being grouped at the end — a parser reading the
+stream in order sees session's breakdown before the lifetime `scope` line.
+
+`money_saved` is the only field `--model` moves — the token and water figures
+are model-independent.
+
 Error line:
 
 ```

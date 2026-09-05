@@ -3,9 +3,13 @@
 The Ix backend exposes a JSON-over-HTTP API on **`http://localhost:8090`** (the
 local Docker memory-layer). The `ix` CLI and the Compass visualizer are its two
 primary clients. This reference is generated from the client source
-(`ix-cli/src/client/api.ts`), the visualizer server template
-(`ix-cli/src/cli/commands/view.js`), and the shared client types
-(`ix-cli/src/client/types.ts`).
+(`ix-cli/src/client/api.ts`) and the shared client types
+(`ix-cli/src/client/types.ts`). The visualizer proxy
+(`ix-cli/src/cli/commands/view.ts`) forwards every `/v1/*` request to the
+backend and defines no endpoints of its own. A committed parity gate
+(`ix-cli/scripts/check-api-parity.mjs`, wired into CI) enforces that the
+OpenAPI paths/methods match the client surface, so the reference cannot drift
+from what the CLI actually calls.
 
 ## Table of Contents
 
@@ -81,7 +85,7 @@ curl -s -X POST http://localhost:8090/v1/context \
 
 | Method | Path | Client | Purpose |
 |---|---|---|---|
-| GET | `/v1/health` | `health()` | Liveness, status, `schema_version` |
+| GET | `/v1/health` | `health()` | Liveness, status, `schema_version`, `release_version` |
 | GET | `/v1/capabilities` | `capabilities()` | Pro feature flags |
 | POST | `/v1/context` | `query()` | Structured-context QA |
 
@@ -91,14 +95,17 @@ curl -s -X POST http://localhost:8090/v1/context \
 
 #### GET `/v1/health`
 
-Liveness probe. Returns `{"status": "ok", "schema_version": 3}`. A client whose
-expected schema version differs forces a clean re-ingest (e.g. after the
-absolute→relative `source_uri` migration).
+Liveness probe. Returns `{"status": "ok", "schema_version": 3, "release_version": "1.0.28"}`.
+A client whose expected schema version differs forces a clean re-ingest (e.g. after the
+absolute→relative `source_uri` migration). `release_version` is the semver the running
+container was built as, when it knows — the container's own claim, not proof (it is an
+env var, so `docker run -e` can override it); clients fall back to the release they
+tracked when the field is absent.
 
 **Response**
 
 ```json
-{ "status": "ok", "schema_version": 3 }
+{ "status": "ok", "schema_version": 3, "release_version": "1.0.28" }
 ```
 
 #### GET `/v1/capabilities`
@@ -496,9 +503,9 @@ Record a decision.
 
 **Response** — `{ status, nodeId, rev }`.
 
-#### GET `/v1/decisions`
+#### POST `/v1/decisions`
 
-List decisions. **Query**: `limit`, `topic`. **Response** — array of `GraphNode`.
+List decisions. **Body**: `limit`, `topic`. **Response** — array of `GraphNode`.
 
 ### Patches & Provenance
 
@@ -764,7 +771,7 @@ interface PatchCommitResult { status: string; rev: number; }
 ### HealthResponse
 
 ```ts
-interface HealthResponse { status: string; schema_version?: number; }
+interface HealthResponse { status: string; schema_version?: number; release_version?: string; }
 ```
 
 ### CapabilitiesResponse

@@ -156,17 +156,6 @@ describe("canonical watch refresh", () => {
       fs.realpathSync(topLevel.stdout.trim()) === fs.realpathSync(repoRoot);
 
     if (inThisRepo) {
-      // -v, not --quiet: the exit code alone also counts a rule from the
-      // user's global core.excludesFile or .git/info/exclude. A contributor
-      // whose personal ignore file says `node_modules` (no slash -- a common
-      // spelling) could then restore the directory-only rule here, make
-      // ix-cli/node_modules committable again, and still see this pass. The
-      // source has to be this repo's own .gitignore.
-      const explain = (target: string): string =>
-        spawnSync("git", ["check-ignore", "-v", "--no-index", target], {
-          cwd: packageRoot,
-          encoding: "utf8",
-        }).stdout.trim();
       // git -v prints `<source>:<line>:<pattern>\t<pathname>`. Splitting the
       // source off on the first ":" yields "C" for a Windows path -- which
       // happens to differ from ".gitignore" and so still fails the assertion,
@@ -174,8 +163,56 @@ describe("canonical watch refresh", () => {
       const sourceOf = (out: string): string =>
         /^(.+):\d+:/.exec(out.split("\t")[0] ?? "")?.[1] ?? "";
 
-      expect(sourceOf(explain(cacheRoot)), `git does not ignore ${cacheRoot} via this repo's .gitignore`)
-        .toBe(".gitignore");
+      // -v, not --quiet: the exit code alone also counts a rule from the
+      // user's global core.excludesFile or .git/info/exclude. A contributor
+      // whose personal ignore file says `node_modules` (no slash -- a common
+      // spelling) could then restore the directory-only rule here, make
+      // ix-cli/node_modules committable again, and still see this pass. The
+      // source has to be this repo's own .gitignore.
+      //
+      // `git check-ignore` refuses outright for a path that lies beyond a
+      // symbolic link -- `fatal: pathspec '...' is beyond a symbolic link`, on
+      // stderr, with nothing on stdout. Reading stdout alone turned that
+      // refusal into `sourceOf("") === ""` and failed the assertion blaming
+      // this repo's .gitignore, which is the one thing that is not wrong.
+      //
+      // It is not a corner case: symlinking `ix-cli/node_modules` at a sibling
+      // clone's install is how a worktree borrows dependencies, and it is the
+      // very practice that produced the committed symlink of #545 this test
+      // exists to pin -- so the test was unavailable in the layout its own
+      // subject matter comes from. Git has no answer to give there, which is
+      // the same position as being outside a work tree, so say so and let the
+      // caller fall back to the structural half of the claim. (#585)
+      const explain = (target: string): { source: string; answerable: boolean } => {
+        const probe = spawnSync("git", ["check-ignore", "-v", "--no-index", target], {
+          cwd: packageRoot,
+          encoding: "utf8",
+        });
+        if (probe.status !== 0 && /beyond a symbolic link/.test(probe.stderr ?? "")) {
+          return { source: "", answerable: false };
+        }
+        return { source: sourceOf(probe.stdout.trim()), answerable: true };
+      };
+
+      const cache = explain(cacheRoot);
+      if (cache.answerable) {
+        expect(cache.source, `git does not ignore ${cacheRoot} via this repo's .gitignore`)
+          .toBe(".gitignore");
+      } else {
+        // git refuses `node_modules/.cache` only because `node_modules` is a
+        // *leading* symlink component -- it answers for the symlink itself, and
+        // `cacheRoot` is under it by construction. Asserting that
+        // `relative(packageRoot, cacheRoot)` starts with "node_modules" would be
+        // a tautology (childBuildCacheRoot joins that literal), so it would pass
+        // with every rule deleted from .gitignore. Ask the question that is
+        // actually answerable instead.
+        const nodeModules = explain(path.join(packageRoot, "node_modules"));
+        expect(nodeModules.answerable, "git could not answer for node_modules itself").toBe(true);
+        expect(
+          nodeModules.source,
+          `git does not ignore ${packageRoot}/node_modules via this repo's .gitignore`,
+        ).toBe(".gitignore");
+      }
 
       // And pin the rule that ignores it, not just today's outcome. `cacheRoot`
       // is a real directory, so the old `node_modules/` rule matched it too and
@@ -197,12 +234,33 @@ describe("canonical watch refresh", () => {
         [repoRootOf("core-ingestion/dist"), "core-ingestion/dist"],
       ];
       for (const [probe, rule] of probes) {
-        // An existing directory matches a trailing-slash rule too, so a probe
-        // that happens to be a real build directory proves nothing. Ask about a
-        // sibling path that cannot exist instead.
-        const target = fs.existsSync(probe) ? path.join(probe, "__ix_ignore_probe__") : probe;
+        // An existing real directory matches a trailing-slash rule too, so a
+        // probe that happens to be a real build directory proves nothing -- ask
+        // about a sibling path that cannot exist instead.
+        //
+        // Only a *real* directory needs that trick, and `fs.existsSync` follows
+        // symlinks, so it used to take the sibling branch for a symlinked
+        // `ix-cli/dist` too -- the exact layout a worktree borrowing a build
+        // from the main clone has, and the one that produced the committed
+        // node_modules symlink of #545. That made the leading path cross a
+        // symlink, git refused, and the dist / coverage / core-ingestion
+        // assertions all vanished into the `continue` below, silently, in the
+        // one layout where the defect is materially present.
+        //
+        // lstat instead: a symlink is not a directory to git, so a directory-only
+        // `dist/` rule does NOT match it while `dist` does. The symlink path
+        // itself is therefore already the probe this test wants, and descending
+        // into it is the only thing that made git refuse.
+        const probeStat = fs.existsSync(probe) ? fs.lstatSync(probe) : null;
+        const target = probeStat?.isDirectory() ? path.join(probe, "__ix_ignore_probe__") : probe;
+        const answer = explain(target);
+        // A symlinked artifact directory is the one layout git will not answer
+        // for. Nothing is knowable about the rule from here, and asserting on
+        // the empty string would blame .gitignore for git's refusal -- the
+        // defect this test itself hit in #585.
+        if (!answer.answerable) continue;
         expect(
-          sourceOf(explain(target)),
+          answer.source,
           `the '${rule}' ignore rule is directory-only again; a symlink or file with that name is committable (Ix#545)`,
         ).toBe(".gitignore");
       }
