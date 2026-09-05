@@ -1,8 +1,10 @@
 # TRAIN REPORT — the open PR, everything about it, and what lives where
 
+> **2026-09-05 supersede note (read first):** the draft is now **PR #605** — #604 was closed and recreated **draft-from-open** (same branch/head `0869a137`, same body) because GitHub's ready-open auto code-owner review request cannot be removed once a PR is a draft (community #69208, 422 ×3) while a draft-from-open gets **no review request at all**. #605: requested reviewers NONE, CI 29/30 (sole red = the CodeQL infra race), body reframed to welcome feedback. Universal rule: KB #6646; dispatch §0/RULE 0 updated. Current state + the full 15-variant TUI-logo showcase: `state.md` + `pr-605-illustrated-showcase.html`. The numbered facts below about the branch/head/files/tests remain accurate; where they say #604, read #605.
+
 **Generated 2026-09-05 · run-dir `repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/` · local-only (zero upstream writes this session)**
 
-Companion visual: `pr-604-illustrated-report.html` (self-contained, logo embedded — open in any browser or the Preview tab).
+Companion visual: `pr-605-illustrated-showcase.html` (self-contained — every banner rendered live from the PR-head renderer; open in any browser or the Preview tab).
 
 ---
 

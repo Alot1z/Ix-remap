@@ -164,13 +164,18 @@ if (process.argv.includes("--live")) {
       add("live", `toolscan main moved off 2f88671b → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the hermetic-CI head)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
     if (br.object.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9") {
-      add("live", `fork logo branch moved off 0869a137 → ${br.object.sha.slice(0, 10)} (dispatch pins 0869a137 — the #604 draft head)`);
+      add("live", `fork logo branch moved off 0869a137 → ${br.object.sha.slice(0, 10)} (dispatch pins 0869a137 — the #605 draft head)`);
     }
     const p604 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/604");
-    if (!p604.draft) add("live", "PR #604 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
-    if (p604.head.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9")
-      add("live", `PR #604 head moved: ${p604.head.sha.slice(0, 10)} (dispatch pins 0869a137)`);
-    else console.log(`live: #604 draft ok (head ${p604.head.sha.slice(0, 7)})`);
+    if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
+    const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
+    if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
+    if (p605.head.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9")
+      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 0869a137)`);
+    else console.log(`live: #605 draft ok (head ${p605.head.sha.slice(0, 7)})`);
+    const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
+    const rrs = (rr605.users || []).map((u) => u.login);
+    if (rrs.length) add("live", `PR #605 has requested reviewers: ${rrs.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
   } catch (e) {
     add("live", `probe failed (treat as gate-missing signal, not truth): ${e.message.slice(0, 100)}`);
   }

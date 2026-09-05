@@ -2,13 +2,13 @@
 
 **STATUS · READINESS · IMPLEMENTED · EVIDENCE · TESTS · RUNTIME · LIMITATIONS · NEXT**
 
-> Drafted from the live state captured this session. Final issue lands after item 9 executes. Until then: `#604` stays a draft, zero upstream writes beyond the already-live draft + toolscan main.
+> **2026-09-05 supersede note (read first):** the live draft is now **#605** (draft-from-open, zero requested reviewers — #604 closed after its ready-open auto code-owner request proved unremovable on a draft, KB #6646). All #604 references below read #605; head/body/CI state unchanged except the reviewer count (none) and CI 29/30 on the re-run suite. Final issue lands after item 9 executes. Until then: `#605` stays a draft, zero upstream writes beyond the already-live draft + toolscan main.
 
 ## STATUS
 The campaign's external dependency closed (KageBinary merged the whole open PR train including #591, KEEP-by-merge). The v7 queue is **items 2–8 DONE**; **item 9 (train release) PREPARED and awaiting owner go**; **item 10 is this report**. The train is one draft PR (#604) plus two toolscan main commits live; everything else is held local.
 
 ## READINESS
-- **#604 (logo banner):** DRAFT, mergeable, head `0869a137`, **23/24 CI green** (all six originally-failing jobs fixed); one documented CodeQL infra-race residual, not a finding. **Ready to release on your go.**
+- **#605 (logo banner):** DRAFT (draft-from-open, zero requested reviewers), mergeable, head `0869a137`, **29/30 CI green** (all six originally-failing jobs fixed); one documented CodeQL infra-race residual, not a finding. **Ready to release on your go.**
 - **toolscan:** hermetic suite + first CI live on main (`2f88671b`), CI run `33971010614` all green on both platforms.
 - **Installer fix / C1/C3 / sweep / wave / KB:** drafted or closed locally; nothing submitted; nothing opens until item 9.
 - **Release-blockers: none.** (The #547 wave is the maintainer's sequencing, not ours, and not a train dependency.)
@@ -48,7 +48,7 @@ The campaign's external dependency closed (KageBinary merged the whole open PR t
 - Nothing speculative promoted in KB: 3 VERIFIED + 5 OBSERVED rows, all TRUSTED with provenance.
 
 ## NEXT (each with its authorization)
-1. **Train release (item 9)** — *your explicit go*: mark #604 ready (GraphQL), optionally open the installer README-fix draft, post the coordinated note, re-verify CI. Tier A covers the mechanics; the go is yours.
+1. **Train release (item 9)** — *your explicit go*: mark #605 ready (GraphQL — note this auto-requests the code owner, expected at release), optionally open the installer README-fix draft, post the coordinated note, re-verify CI. Tier A covers the mechanics; the go is yours.
 2. **4(c) proposal** — *your authorization* (changes the validator's accepted-input contract): open as its own proposal, not folded into the train.
 3. **B4(a) Ix-consumer parity filing** — *train release first, then your go*: separate consumer-parity filing.
 4. **#547 rebase (ARMED)** — *all three plugin gates land + your go*; identity routing answered first (train = Alot1z, wave branch = Hiro's fork).
