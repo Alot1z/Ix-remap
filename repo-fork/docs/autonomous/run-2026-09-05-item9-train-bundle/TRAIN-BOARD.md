@@ -19,7 +19,7 @@
 |---|---|---|
 | #605 logo banner (draft-from-open) | ix-infrastructure/Ix | DRAFT @ `0869a137` · reviewers none · 29/30 CI |
 | #604 (superseded original) | ix-infrastructure/Ix | closed 15:45Z → #605 |
-| toolscan work | Alot1z/toolscan | 0 PRs — direct commits on main (repo convention) |
+| toolscan work | Alot1z/toolscan | 0 PRs — direct commits on main (repo convention); head `a3e33771e3` since 15:56Z (owner NUL-byte hardening push, superseding `2f88671b`) |
 | New issues | — | **0 open** (issue drafts are impossible on GitHub — see below) |
 
 ## Prepared-as-drafts (local kits, open only at item 9 with the owner's go)
