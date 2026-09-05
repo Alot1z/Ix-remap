@@ -977,6 +977,7 @@ components:
       properties:
         status: { type: string }
         schema_version: { type: integer, description: On-disk graph format version }
+        release_version: { type: string, description: Backend release semver, as claimed by the running container's build environment. Absent from backends that do not know their release. The container's own claim, not proof — an env var, so `docker run -e` can override it. }
     CapabilitiesResponse:
       type: object
       properties:
