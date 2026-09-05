@@ -19,7 +19,7 @@ Companion visual: `pr-605-illustrated-showcase.html` (self-contained — every b
 | Base | `main` @ `39d0734` (current merged main) |
 | Size | **+702 / −5 · 11 files · 3 commits · zero new assets** |
 | Opened / updated | 2026-09-05 13:21Z / 13:57Z (live probe 15:15Z) |
-| Body | Train-framed: "DRAFT — part of a larger train, not ready for review", verbatim-verified |
+| Body | Train-framed welcome-feedback standard: "DRAFT — part of a larger train", feedback welcomed at any stage, issues addressed on-branch and merged without conflict, nothing promised beyond the PR — verbatim-verified |
 
 ### The 3 commits on the branch
 
