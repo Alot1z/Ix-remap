@@ -1,0 +1,7 @@
+docs: harness-detector design — registry contract, probe battery, hermetic cases
+
+Plan-only design for Ix-native harness detection: normalised descriptor
+table over hosts.ts (7 hosts), the probe-verified battery (positive,
+negative, fail-ability pin, cross-check), hermetic fixture rules with no
+network, mutation tests in both directions, the Windows copy-default
+rationale, and registry-filtered module sets. No code.
