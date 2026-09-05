@@ -156,4 +156,56 @@ describe("unresolved targets in machine formats", () => {
       targets: ["MissingFrom", "MissingTo"],
     });
   });
+
+  // locate joins the same contract (#539) but deliberately keeps its own body
+  // rather than adopting reportUnresolvedTarget's `{error, message}` shape:
+  // shipped plugins read `diagnostics` off it, and the point of #539 is that
+  // the exit code becomes informative without the payload going away.
+  it("returns a non-zero status from ix locate while keeping its result body", async () => {
+    const { registerLocateCommand } = await import("../commands/locate.js");
+    const result = await run(registerLocateCommand, ["locate", "DefinitelyMissing", "--format", "json"]);
+
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      resolvedTarget: null,
+      resolutionMode: "none",
+      systemPath: null,
+      diagnostics: ["No graph entity found."],
+    });
+  });
+
+  it("exits non-zero for an AMBIGUOUS locate, in every format (#547)", async () => {
+    // The one command that used to disagree. This exited 0 in the first draft
+    // of #539, reasoned as "several candidates is an answer, not a miss" --
+    // #547 settled the opposite for the eight graph commands, and locate
+    // reporting the same condition with a different status is worse than
+    // either rule on its own. It is also the contradiction #539 opens with:
+    // the llm branch already prints `error code=ambiguous_target`, so exiting
+    // 0 told a machine caller the command succeeded while handing it an error.
+    const { registerLocateCommand } = await import("../commands/locate.js");
+    search.mockResolvedValue([
+      { id: "first-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/first.ts" } },
+      { id: "second-id", kind: "function", name: "Duplicate", provenance: { sourceUri: "src/second.ts" } },
+    ]);
+
+    for (const format of ["json", "llm", "text"] as const) {
+      process.exitCode = undefined;
+      const result = await run(registerLocateCommand, ["locate", "Duplicate", "--format", format]);
+      expect(process.exitCode, `format=${format}`).toBe(1);
+      // ...and the body still says what it always said. The exit code becomes
+      // informative without the payload going away, which is #539's whole point.
+      if (format === "json") expect(JSON.parse(result.stdout).resolutionMode).toBe("ambiguous");
+      if (format === "llm") expect(result.stdout).toContain("ambiguous_target");
+    }
+  });
+
+  it("emits an llm error record and a non-zero status from ix locate", async () => {
+    const { registerLocateCommand } = await import("../commands/locate.js");
+    const result = await run(registerLocateCommand, ["locate", "DefinitelyMissing", "--format", "llm"]);
+
+    expect(process.exitCode).toBe(1);
+    // This record was already being emitted -- while exiting 0, which is the
+    // contradiction #539 opens with.
+    expect(result.stdout).toContain("unresolved_target");
+  });
 });
