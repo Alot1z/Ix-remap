@@ -9,7 +9,7 @@
 // pixels (the brand gradient stays sharp inside the mark).
 //
 // Library use:
-//   import { renderLogo } from "./scripts/render-logo.mjs";
+//   import { renderLogo } from "./ix-cli/scripts/render-logo.mjs";
 //   const ansi = renderLogo({ width: 56, color: "truecolor" });   // -> string
 //   const info = renderLogo({ width: 56, json: true });           // -> object
 //
@@ -17,7 +17,7 @@
 //   node scripts/render-logo.mjs [--width N] [--color auto|truecolor|256|ascii]
 //                                 [--bg brand|none] [--file path] [--json]
 // Exit codes: 0 ok · 1 usage/file error · 2 unsupported/truncated (toolscan-aligned)
-import { readFileSync, statSync } from "node:fs";
+import { openSync, closeSync, readSync, fstatSync, constants as fsConstants } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,12 +37,38 @@ export class LogoError extends Error {
 }
 
 // --- PNG decode (depth 8, truecolor/truecolor+alpha/grayscale, no interlace) ---
+// Read the input through ONE open handle: stat the handle, not the path.
+// statSync(path)+readFileSync(path) resolve the path independently, so the size
+// guard can bless a different file than the one read (CodeQL js/file-system-
+// race, high), and readFileSync on a FIFO blocks forever — --file is a
+// user-supplied flag, so both are reachable. O_NONBLOCK makes the open itself
+// non-blocking; fstat on the handle then rejects non-regular files (FIFOs,
+// devices) and enforces the size cap against the exact inode that is read.
+function readPngFile(fileArg) {
+  let fd;
+  try { fd = openSync(fileArg, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK); }
+  catch { throw new LogoError(`file not found: ${fileArg}`, 1); }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new LogoError(`not a regular file: ${fileArg}`, 1);
+    if (st.size > MAX_FILE_BYTES) throw new LogoError(`file exceeds ${MAX_FILE_BYTES} bytes: ${fileArg}`, 2);
+    const buf = Buffer.alloc(st.size);
+    try {
+      let read = 0;
+      while (read < st.size) {
+        const n = readSync(fd, buf, read, st.size - read, read);
+        if (n === 0) break;
+        read += n;
+      }
+    } catch (e) { throw new LogoError(`unreadable file: ${e.message}`, 1); }
+    return { buf, bytes: st.size };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function decodePng(fileArg) {
-  let stat;
-  try { stat = statSync(fileArg); } catch { throw new LogoError(`file not found: ${fileArg}`, 1); }
-  if (stat.size > MAX_FILE_BYTES) throw new LogoError(`file exceeds ${MAX_FILE_BYTES} bytes: ${fileArg}`, 2);
-  let buf;
-  try { buf = readFileSync(fileArg); } catch (e) { throw new LogoError(`unreadable file: ${e.message}`, 1); }
+  const { buf, bytes } = readPngFile(fileArg);
   let off = 8, ihdr, idat = [];
   while (off + 12 <= buf.length) {
     const len = buf.readUInt32BE(off), type = buf.toString("ascii", off + 4, off + 8);
@@ -76,7 +102,7 @@ function decodePng(fileArg) {
       img[y * stride + x] = v & 0xff;
     }
   }
-  return { img, w, h, stride, color, bpp, bytes: stat.size };
+  return { img, w, h, stride, color, bpp, bytes };
 }
 
 // --- palette (ANSI-256) ---
