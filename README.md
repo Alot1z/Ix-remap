@@ -228,14 +228,14 @@ guessing. It follows the [Claude Code skill
 format](https://code.claude.com/docs/en/skills) and the
 [agents.md](https://agents.md) standard, and any skill-compatible harness loads
 the same `skills/ix/` tree natively from its own skills directory — Claude Code
-(`~/.claude/skills`), Agents (`~/.agents/skills`), Codex CLI, Gemini CLI,
-Cursor, and more.
+(`~/.claude/skills`), Agents (`~/.agents/skills`), Codex CLI (`~/.codex/skills`),
+and Cursor (`~/.cursor/skills-cursor`).
 
 **Install it** — `scripts/install-skill.sh` probes which agent harnesses are
 installed on this machine and deploys `skills/ix` to every one of them (Claude
 Code's `~/.claude/skills`, Agents' `~/.agents/skills` per
-[agents.md](https://agents.md), Codex's `~/.codex/skills`, Gemini's
-`~/.gemini/skills`, Cursor's `~/.cursor/skills`, and more — the same detection
+[agents.md](https://agents.md), Codex's `~/.codex/skills`, and
+Cursor's `~/.cursor/skills-cursor` — the same detection
 `ix mcp install` uses). Detection is embedded; when
 [toolscan](https://github.com/Alot1z/toolscan) is available (`TOOLSCAN_PATH`
 set — never a bare-name PATH lookup, so nothing is executed unless you opt in)
@@ -247,7 +247,7 @@ harness ids to install only those:
 ```bash
 bash scripts/install-skill.sh          # every harness found
 bash scripts/install-skill.sh --dry-run
-bash scripts/install-skill.sh claude gemini
+bash scripts/install-skill.sh claude agents
 ```
 
 Then start a new session and ask your agent to set it up:
