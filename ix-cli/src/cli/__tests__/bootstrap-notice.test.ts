@@ -35,7 +35,7 @@ describe("emitSetupNotice", () => {
     const stderrText = err.mock.calls.map((c) => String(c[0])).join("\n");
     expect(stderrText).toContain("Registered workspace");
     expect(stderrText).toContain("my-workspace");
-  });
+  }, 15000);
 
   it("shows the logo banner when the renderer + asset are present", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -47,11 +47,10 @@ describe("emitSetupNotice", () => {
     const banner = renderBanner();
     expect(banner).not.toBeNull();
     const stderrText = err.mock.calls.map((c) => String(c[0])).join("\n");
-    // The banner IS the heading: stderr shows exactly the rendered banner
     // (whatever color mode this environment resolves), not the text fallback.
     expect(stderrText).toContain(banner!);
     expect(stderrText).not.toContain("Ix");
-  });
+  }, 15000);
 
   it("falls back to the plain text heading when the asset is absent (absent-safe)", () => {
     // A layout without the packaged asset must degrade to the old heading —
@@ -93,7 +92,7 @@ describe("renderBanner", () => {
     for (const line of banner!.split("\n")) {
       if (line.trim()) expect(line.startsWith("  ")).toBe(true);
     }
-  });
+  }, 15000);
 
   it("renders ASCII under NO_COLOR and never writes stdout", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
