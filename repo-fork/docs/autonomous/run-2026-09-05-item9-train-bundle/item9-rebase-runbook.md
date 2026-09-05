@@ -57,6 +57,34 @@ conflict-free result already includes it.
    full `ix-cli` suite + `tsc --noEmit` + lint on Windows (runners re-run
    ubuntu/macos at push); golden byte-identity + `--bg none` pins must stay
    green; `git diff --name-status FETCH_HEAD _p` = the 13 banner files only.
+
+   **UPDATE 2026-09-05 (post-review fix round):** #609 MERGED → main is now
+   `8c0e6b00`; KageBinary's #605 review (3 findings + design note) is
+   addressed on the fix head **`17d2da4`** (branch `feat/tui-logo-banner`,
+   local; 5 commits over `8c0e6b00`, diff = 13 files, +797/−7): renderer+asset
+   moved INTO `ix-cli/` and imported in-process (dynamic import behind a
+   package-relative probe — static import crashed the watch child runtime
+   cache, found by running the suite), npm-pack + release-staging deliverability
+   pins (staging gate refuses to publish without the inputs), TOCTOU fixed via
+   open-once/fstat-handle read, preview PNGs dropped from the branch (preserved
+   on `meta/logo-previews` + run-dir copies for the PR body). Verified on the
+   fix head: **full suite 1755 passed / 21 skipped, typecheck clean, compiled
+   `dist/cli/banner.js` renders (25 lines) in the installed layout, `npm pack`
+   carries all three inputs, banner pins green.** Release-day tree identity is
+   now `36add793…` (fix head), superseding `95b0ad37…` above; the rebase onto
+   a future main repeats the same merge-tree/identity check.
+
+   **PROVEN GREEN 2026-09-05 on exactly this tree:** `tsc --noEmit` clean;
+   full suite **1752 passed / 21 skipped (1773), 95/95 files** — including
+   the Windows `parse-pool` timing test, which passed this run; banner pins
+   **21/21**. Gotcha for release-day execution: in a bare scratch clone,
+   `npm test` fails inside `build-core-ingestion.mjs` (`npm ci` needs network
+   / the scratch has no deps) and `tsc` is absent. Workaround proven: copy
+   `ix-cli/node_modules` AND `core-ingestion/node_modules` from a working
+   tree, run `node scripts/build-core-ingestion.mjs` once, then
+   `npx vitest run` + `npx tsc --noEmit`. (10 of 11 initial failures were the
+   missing `core-ingestion/dist`, not the code; the 11th was parse-pool,
+   green on the real pass.)
 4. **Pre-push range scan** (rewritten history gate):
    `git log --format='%B' e8ab1926..HEAD | node <agent-principles>/tools/scan-stdin.mjs`
    — must exit 0 (messages preserved verbatim from the four original commits;
