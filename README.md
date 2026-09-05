@@ -219,18 +219,35 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/ix-infrastructure/ix-cursor-plugin/main/install.ps1 | iex
 ```
 
-## Claude Code / .agents Skill
+## Agent Skill (any harness)
 
-[`skills/ix/`](skills/ix/SKILL.md) is a self-contained **Claude Code skill** (also
-loaded natively through the `.agents` surface) that teaches any LLM agent to drive the
-`ix` CLI: build the graph, explain symbols, trace flows, analyze impact, and
-detect smells — instead of grepping and guessing.
+[`skills/ix/`](skills/ix/SKILL.md) is a single, self-contained **agent skill** that
+teaches any LLM agent to drive the `ix` CLI: build the graph, explain symbols,
+trace flows, analyze impact, and detect smells — instead of grepping and
+guessing. It follows the [Claude Code skill
+format](https://code.claude.com/docs/en/skills) and the
+[agents.md](https://agents.md) standard, and any skill-compatible harness loads
+the same `skills/ix/` tree natively from its own skills directory — Claude Code
+(`~/.claude/skills`), Agents (`~/.agents/skills`), Codex CLI, Gemini CLI,
+Cursor, and more.
 
-**Install it** (deploys to `~/.claude/skills/ix` and `~/.agents/skills/ix` so it
-works in every project):
+**Install it** — `scripts/install-skill.sh` probes which agent harnesses are
+installed on this machine and deploys `skills/ix` to every one of them (Claude
+Code's `~/.claude/skills`, Agents' `~/.agents/skills` per
+[agents.md](https://agents.md), Codex's `~/.codex/skills`, Gemini's
+`~/.gemini/skills`, Cursor's `~/.cursor/skills`, and more — the same detection
+`ix mcp install` uses). Detection is embedded; when
+[toolscan](https://github.com/Alot1z/toolscan) is available (`TOOLSCAN_PATH`
+set — never a bare-name PATH lookup, so nothing is executed unless you opt in)
+its discovery output additionally scans the common install roots beyond PATH
+(`~/.local/bin`, `%LOCALAPPDATA%`, ...) — a purely additive seam: without it
+the built-in probes decide, so a clean machine and CI behave exactly the same. Pass `--dry-run` to see the targets, or list
+harness ids to install only those:
 
 ```bash
-bash scripts/install-skill.sh
+bash scripts/install-skill.sh          # every harness found
+bash scripts/install-skill.sh --dry-run
+bash scripts/install-skill.sh claude gemini
 ```
 
 Then start a new session and ask your agent to set it up:
@@ -251,8 +268,8 @@ powershell -ExecutionPolicy Bypass -File skills/ix/scripts/bootstrap.ps1 .
 The skill follows the progressive-disclosure layout — a lean `SKILL.md` with the
 full command reference, output-format rules, and troubleshooting split into
 `references/`, plus `scripts/` for first-run setup — so it is portable to Claude
-Code, the `.agents` surface, and any other skill-compatible agent. Edit `skills/ix/` and
-re-run `scripts/install-skill.sh` to update your installed copy. To produce a
+Code, Agents, and any other skill-compatible agent. Edit `skills/ix/` and
+re-run `scripts/install-skill.sh` to update every installed copy. To produce a
 distributable zip:
 
 ```bash
