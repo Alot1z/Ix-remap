@@ -37,6 +37,7 @@
 - **Cross-links live:** #605 body now names #609/#610; #609 names #605/#610; #610 carries Refs #608 + names #605/#609. No new issue opened — a docs-only README fix warrants none (KB #6653; #608 is the sole related issue, already open). C3 stays held per its own kit gate.
 - **Checker hardened:** `dispatch-check.mjs --live` now pins #609/#610 (must be draft with zero requested reviewers) alongside #605.
 - Triage for the round: ix-platform-paths + ix-review-upstream (ix-agent-triage). Scratch files (`.`-prefixed) cleaned or kept as probes in this run-dir; corrected-file build/verification scratch at `.scratch/`.
+- **CI note (#610, 2026-09-05):** on a CONTRIBUTING.md-only diff, the suite's one red check is the **pre-existing Windows `parse-pool.test.ts:137` timing assertion** (run `101343377885`, `windows-2022 · node 22`) — the same timing-sensitive area #607 exists to fix; unrelated to this docs change, not re-run. #609 is fully green (24 success). #605 unchanged (50 success + the documented CodeQL race).
 
 ## Pending
 - Owner go on item 9 (the only mark-ready moment): rebase #605 onto `e8ab1926`, then mark #605/#609/#610 ready together. Until then nothing is marked ready; C3 and all other kits stay held-local; zero further upstream writes.
