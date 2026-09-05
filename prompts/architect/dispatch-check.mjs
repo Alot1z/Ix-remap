@@ -163,8 +163,8 @@ if (process.argv.includes("--live")) {
     if (tsRef.object.sha !== "4c0b2d11b9667d8f93fac135b6e8cca995d4a81b")
       add("live", `toolscan main moved off 4c0b2d11 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the brand-pass head; prior a3e33771 superseded by an owner push 2026-09-05 16:43Z)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
-    if (br.object.sha !== "17d2da44bb0cde6bbbec4bbab267b522447cd852") {
-      add("live", `fork logo branch moved off 17d2da44 → ${br.object.sha.slice(0, 10)} (dispatch pins 17d2da44 — the fix head pushed 2026-09-05; prior c05c3a77 draft head superseded by the gated rewrite-push)`);
+    if (br.object.sha !== "2f9604772c19575ab9207138f6363523634dd44b") {
+      add("live", `fork logo branch moved off 2f96047 → ${br.object.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green fix head; prior 17d2da44 superseded by the test-budget commit)`);
     }
     // meta/logo-previews must exist at the regenerated (bar-free) preview head:
     try {
@@ -176,8 +176,8 @@ if (process.argv.includes("--live")) {
     if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
     const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
     if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true until the owner marks ready)");
-    if (p605.head.sha !== "17d2da44bb0cde6bbbec4bbab267b522447cd852")
-      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 17d2da44 — the review-fix head)`);
+    if (p605.head.sha !== "2f9604772c19575ab9207138f6363523634dd44b")
+      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green head)`);
     else console.log(`live: #605 draft ok (head ${p605.head.sha.slice(0, 7)})`);
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);

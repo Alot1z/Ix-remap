@@ -143,3 +143,12 @@ conflict-free result already includes it.
   and messages stay exactly as the four original commits (never rewritten).
 - The push is the only live write in this runbook and happens only inside
   item-9 execution with the owner's go.
+
+## MARK-READY — ALL CONDITIONS MET (2026-09-06 session)
+
+- Fix head **`2f96047`** pushed (adds the CI-budget commit on top of `17d2da44`).
+- **CI: ALL 27 checks pass** on `2f96047`, including `CI Passed`, `Test (ubuntu-latest · node 22)`
+  (the 3 banner pins had timed out at the 5s default under coverage; now budgeted like the
+  byte-identity pins), all CodeQL jobs, all Test/Package matrix jobs.
+- **The ONLY remaining step: `gh pr ready 605`** (or API: PATCH pulls/605 draft=false) — owner go.
+- Post-ready: watch KageBinary's re-review; #611/#612 are the follow-up discussion surfaces.
