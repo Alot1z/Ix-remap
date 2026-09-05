@@ -85,10 +85,37 @@ conflict-free result already includes it.
    `npx vitest run` + `npx tsc --noEmit`. (10 of 11 initial failures were the
    missing `core-ingestion/dist`, not the code; the 11th was parse-pool,
    green on the real pass.)
+
+   **UPDATE 2026-09-05 (PUSHED — fix head is live):** `feat/tui-logo-banner`
+   = **`17d2da44`** on the fork (lease-armed push, post-push re-scan CLEAN;
+   the compare-scan false positive from main's own pre-guard history is
+   documented below). PR body edited: Rendered-preview → `meta/logo-previews`
+   (branch created on the fork @ `7bd67132`, raw URLs verified HTTP 200),
+   pack/release pins described in "What this ships", head line = `17d2da44`.
+   Review reply posted (comment `5554982515`) addressing all 3 findings +
+   design note. Upstream issue **#611** opened (installer output labels +
+   per-host summary) from the held U1/U2 draft. Preview PNGs regenerated
+   from the goldens WITHOUT the unset-background bar (previous conversion
+   painted pre-SGR cells black; terminal shows the user's default bg).
+   Remaining to mark-ready: wait for CI green on `17d2da44` (incl. CodeQL),
+   then flip draft→ready — #609 already merged, so this is now the last
+   train component.
 4. **Pre-push range scan** (rewritten history gate):
-   `git log --format='%B' e8ab1926..HEAD | node <agent-principles>/tools/scan-stdin.mjs`
-   — must exit 0 (messages preserved verbatim from the four original commits;
+   `git log --format='%B' 8c0e6b00..HEAD | node <agent-principles>/tools/scan-stdin.mjs`
+   — must exit 0 (messages preserved verbatim from the original commits;
    no watermark lines).
+   **Lessons from the 2026-09-05 execution:** (a) scan the range from the
+   BASE MAIN commit (`8c0e6b00..HEAD`), not `oldRemoteHead...HEAD` — a
+   rewritten-history compare vs the old fork point drags in main's own
+   pre-guard commits (`e8ab1926`, `5f352b69` carry legacy Claude footers
+   from before KB #6590's guard) and false-refuses a clean push. (b) The
+   scratch clone needs the real fork remote: `git remote add fork
+   https://github.com/Alot1z/Ix-remap.git` (the snapshot-era clones chain
+   from local dirs). (c) A git-binary push (`--force-with-lease`) is the
+   documented path for locally rewritten history — API ref-update alone
+   cannot upload new objects. (d) `gh api -f title=@file` reads the LITERAL
+   string as the value — read the file into a shell var first (cost: issue
+   #611 opened with a wrong title for ~30 s, fixed by PATCH).
 5. **Lease-armed push** to the fork:
    `gh-commit.mjs push Alot1z/Ix-remap feat/tui-logo-banner <full 40-char new sha> --force-expect c05c3a7764020a68ba2616709484ed1379161a92`
    (API-side lease: only succeeds if the remote head is still the old sha).
@@ -98,9 +125,17 @@ conflict-free result already includes it.
 7. **PR #605 head updates automatically.** Verify: `draft` still `true`,
    `requested_reviewers` still empty, CI re-runs on the new head, the body's
    Rendered-preview image URLs still resolve (they point at
-   `output-samples/banner-48/80-truecolor.png` on the branch — the rebase
-   preserves both blobs byte-for-byte, so the raw URLs survive the force-push).
-   Then the mark-ready step runs (#605 + #609 together).
+   `meta/logo-previews`, a refs-only branch that force-pushes to the feature
+   branch never touch — this is exactly why the previews were moved off the
+   PR branch).
+   **MARK-READY SEQUENCE (final, 2026-09-05):**
+   1. CI green on `17d2da44` (all required checks + CodeQL run completes).
+   2. `gh pr ready 605` (or API equivalent) — the ONLY train component left;
+      #609 merged standalone at `8c0e6b00`, so the original "mark together"
+      pairing is obsolete: mark ready when CI is green, no coordination left.
+   3. Post-release: follow upstream issue #611 for the U1/U2 output polish;
+      the local `chore/installer-ux-polish` branch (`44fbb54`) holds the
+      partial implementation and can be offered as a PR on owner go.
 
 ## Guards
 

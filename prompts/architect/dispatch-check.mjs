@@ -163,15 +163,21 @@ if (process.argv.includes("--live")) {
     if (tsRef.object.sha !== "4c0b2d11b9667d8f93fac135b6e8cca995d4a81b")
       add("live", `toolscan main moved off 4c0b2d11 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the brand-pass head; prior a3e33771 superseded by an owner push 2026-09-05 16:43Z)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
-    if (br.object.sha !== "c05c3a7764020a68ba2616709484ed1379161a92") {
-      add("live", `fork logo branch moved off c05c3a77 → ${br.object.sha.slice(0, 10)} (dispatch pins c05c3a77 — the #605 draft head with the banner preview PNGs)`);
+    if (br.object.sha !== "17d2da44bb0cde6bbbec4bbab267b522447cd852") {
+      add("live", `fork logo branch moved off 17d2da44 → ${br.object.sha.slice(0, 10)} (dispatch pins 17d2da44 — the fix head pushed 2026-09-05; prior c05c3a77 draft head superseded by the gated rewrite-push)`);
     }
+    // meta/logo-previews must exist at the regenerated (bar-free) preview head:
+    try {
+      const meta = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/meta/logo-previews");
+      if (meta.object.sha !== "7bd671325e0e1b539a43a8f3a6f86b98a96a14a2")
+        add("live", `meta/logo-previews moved off 7bd67132 → ${meta.object.sha.slice(0, 10)} (dispatch pins the regenerated bar-free preview PNGs the #605 body links)`);
+    } catch { add("live", "meta/logo-previews branch MISSING on the fork — #605 body preview URLs would 404"); }
     const p604 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/604");
     if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
     const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
-    if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
-    if (p605.head.sha !== "c05c3a7764020a68ba2616709484ed1379161a92")
-      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins c05c3a77)`);
+    if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true until the owner marks ready)");
+    if (p605.head.sha !== "17d2da44bb0cde6bbbec4bbab267b522447cd852")
+      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 17d2da44 — the review-fix head)`);
     else console.log(`live: #605 draft ok (head ${p605.head.sha.slice(0, 7)})`);
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);
