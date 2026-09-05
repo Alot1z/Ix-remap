@@ -101,7 +101,7 @@ tracked when the field is absent.
 **Response**
 
 ```json
-{ "status": "ok", "schema_version": 3 }
+{ "status": "ok", "schema_version": 3, "release_version": "1.0.28" }
 ```
 
 #### GET `/v1/capabilities`
@@ -767,7 +767,7 @@ interface PatchCommitResult { status: string; rev: number; }
 ### HealthResponse
 
 ```ts
-interface HealthResponse { status: string; schema_version?: number; }
+interface HealthResponse { status: string; schema_version?: number; release_version?: string; }
 ```
 
 ### CapabilitiesResponse
