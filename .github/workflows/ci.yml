@@ -528,13 +528,62 @@ jobs:
           '
 
   # ── Aggregate gate ───────────────────────────────────────────────────────
+  # ── Link gate ────────────────────────────────────────────────────────────
+  # Probes every external URL in the repo's markdown and fails on 404/410, so
+  # a link that stops resolving cannot merge. Zero dependencies (Node fetch),
+  # so no npm ci — runs in seconds. The allowlist is self-cleaning: an entry
+  # that no longer appears in any scanned file fails the gate, so an allowed
+  # dead link forces its own removal once the fixing PR merges.
+  links:
+    name: Dead-link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Check markdown links
+        run: node ix-cli/scripts/check-links.mjs
+
   # One stable required-status-check context. Branch protection requires only
   # this job, so the matrix can be reshaped without orphaning required checks.
   # Fails if any upstream job failed OR was skipped/cancelled.
+  # ── Flag-reference parity gate (#576) ───────────────────────────────────
+  # The flag reference (skills/ix/references/flags.md, #578) must stay in step
+  # with the *registered* commander tree: a registered flag without a doc row,
+  # or a doc row for a flag the CLI no longer registers, fails this job with
+  # the flag named. It reads the built CLI (dist/), never a regex over source —
+  # the same surface dump-cli-surface.mjs inventories. Inactive (green) while
+  # flags.md is absent, so it activates exactly when the reference ships and is
+  # strict from then on.
+  doc-parity:
+    name: Flag-reference parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ix-cli/package-lock.json
+      - name: Install (ix-cli)
+        working-directory: ix-cli
+        run: npm ci --silent
+      - name: Build (the gate reads dist/, what ships)
+        working-directory: ix-cli
+        run: npm run build
+      - name: Registered flags vs flag reference
+        working-directory: ix-cli
+        run: node scripts/check-doc-parity.mjs
+
   ci-success:
     name: CI Passed
     if: always()
-    needs: [static, test, e2e, api-parity, harness-install-smoke, harness-install-smoke-windows]
+    needs: [static, test, e2e, api-parity, doc-parity, links, harness-install-smoke, harness-install-smoke-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
@@ -543,11 +592,15 @@ jobs:
           echo "test=${{ needs.test.result }}"
           echo "e2e=${{ needs.e2e.result }}"
           echo "api-parity=${{ needs.api-parity.result }}"
+          echo "doc-parity=${{ needs.doc-parity.result }}"
+          echo "links=${{ needs.links.result }}"
           echo "harness-install-smoke=${{ needs.harness-install-smoke.result }}"
           echo "harness-install-smoke-windows=${{ needs.harness-install-smoke-windows.result }}"
           [ "${{ needs.static.result }}" = "success" ] \
             && [ "${{ needs.test.result }}" = "success" ] \
             && [ "${{ needs.e2e.result }}" = "success" ] \
             && [ "${{ needs.api-parity.result }}" = "success" ] \
+            && [ "${{ needs.doc-parity.result }}" = "success" ] \
+            && [ "${{ needs.links.result }}" = "success" ] \
             && [ "${{ needs.harness-install-smoke.result }}" = "success" ] \
             && [ "${{ needs.harness-install-smoke-windows.result }}" = "success" ]
