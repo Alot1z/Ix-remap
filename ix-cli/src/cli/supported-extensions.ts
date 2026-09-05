@@ -11,7 +11,7 @@ export const SUPPORTED_EXTENSIONS = new Set<string>([
   ".py", ".pyi", ".java", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
   ".cu", ".cuh",
   ".cs", ".go", ".rb", ".rs", ".php", ".kt", ".kts", ".swift",
-  ".scala", ".sc",
+  ".scala", ".sc", ".sbt",
   ".yaml", ".yml",
   ".dockerfile",
   ".sql",
