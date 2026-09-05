@@ -26,7 +26,7 @@ Side-by-side proof that the train speaks with one voice: `draft-body-comparison.
 
 ## What the PR would carry (when opened, at item 9, with your go)
 
-1. **Branch:** new fork branch off upstream main (re-base to the current head at open time) carrying **only** `README.md` with the three corrections from `installer-docs-fix.draft.md` (native-loading overclaim trimmed · deploy targets corrected to `~/.cursor/skills-cursor` · `claude gemini` → `claude agents`).
+1. **Branch:** new fork branch off upstream main (re-base to the current head at open time — now `e8ab1926`) carrying **only** `README.md` with the three corrections from `installer-docs-fix.draft.md` (native-loading overclaim trimmed · deploy targets corrected to `~/.cursor/skills-cursor` · `claude gemini` → `claude agents`). **Build the README diff from the live text at open time**: the draft quotes pre-wrap line breaks, and the live file wraps differently — all three corrections are content-verified present once each at `e8ab1926` (preflight 2026-09-05, `kit-and-suite-preflight.md`), so a whitespace-flexible replace is unambiguous.
 2. **Open:** against `ix-infrastructure/Ix` `main`, **as a draft** (`draft: true` at create) with title/body verbatim from the two files above, via the gated `gh-pr.mjs`-equivalent path (verbatim, watermark-free).
 3. **Post-open verify:** `GET /pulls/{n}/requested_reviewers` empty (draft-from-open gets no code-owner request — KB #6646); if anything is present, remove or recreate per RULE 0.
 4. **CI:** the harness-install smoke jobs run on the branch (docs-only change — expected green; the corrected example is also the registry's own negative pin).

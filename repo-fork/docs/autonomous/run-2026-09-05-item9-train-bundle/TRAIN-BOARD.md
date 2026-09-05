@@ -37,6 +37,7 @@
 
 ## Counts
 - Campaign queue: **7 executed + 2 prepared (9/10)** of items 2–10.
+- Wave closed out (2026-09-05): **#547 + #559 merged upstream** (`df30296` → `e8ab1926`) after the three plugin gates — all maintainer-sequenced, zero involvement from us.
 - New PRs opened by us this campaign: **1** (#605 draft; #604 closed). Zero merged yet — train releases together.
 - New issues filed by us upstream: **2** — #608 open (code-owner auto-request, paired with its held fix-PR kit, Refs #608) + #606 closed-with-note (harness-detector proposal parked per the no-orphan-issues rule; reopens with its PR).
 - KB rows added from this session: **#6646, #6649, #6650, #6653, #6654** (all TRUSTED).

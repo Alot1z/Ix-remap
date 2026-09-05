@@ -2,16 +2,16 @@
 
 **STATUS · READINESS · IMPLEMENTED · EVIDENCE · TESTS · RUNTIME · LIMITATIONS · NEXT**
 
-> **2026-09-05 supersede note (read first):** the live draft is now **#605** (draft-from-open, zero requested reviewers — #604 closed after its ready-open auto code-owner request proved unremovable on a draft, KB #6646). All #604 references below read #605; head/body/CI state unchanged except the reviewer count (none) and CI 29/30 on the re-run suite. Final issue lands after item 9 executes. Until then: `#605` stays a draft, zero upstream writes beyond the already-live draft + toolscan main.
+> **2026-09-05 supersede note (read first):** the live draft is now **#605** (draft-from-open, zero requested reviewers — #604 closed after its ready-open auto code-owner request proved unremovable on a draft, KB #6646). All #604 references below read #605. **Later the same day: the #547/#559 wave merged** (main `e8ab1926`) and the #605 rebase onto it is preflighted clean; #608 (code-owner issue) is open and paired to a held fix-PR kit. Final issue lands after item 9 executes. Until then: `#605` stays a draft, zero upstream writes beyond the already-live draft + toolscan main.
 
 ## STATUS
-The campaign's external dependency closed (KageBinary merged the whole open PR train including #591, KEEP-by-merge). The v7 queue is **items 2–8 DONE**; **item 9 (train release) PREPARED and awaiting owner go**; **item 10 is this report**. The train is one draft PR (#604) plus two toolscan main commits live; everything else is held local.
+The campaign's external dependencies have all closed: KageBinary merged the open PR train (incl. #591, KEEP-by-merge), and on **2026-09-05 the #547/#559 exit-code wave merged** — plugin gates `ix-claude-plugin#37` + `#38` + `ix-openclaw-plugin#33` (15:35–15:44Z), then #547 → `df30296` and #559 → `e8ab1926` (15:47/15:57Z, main head). The v7 queue is **items 2–8 DONE**; **item 9 (train release) PREPARED and awaiting owner go**; **item 10 is this report**. The train is one draft PR (#605) plus toolscan main commits live; everything else is held local.
 
 ## READINESS
 - **#605 (logo banner):** DRAFT (draft-from-open, zero requested reviewers), mergeable, head `0869a137`, **29/30 CI green** (all six originally-failing jobs fixed); one documented CodeQL infra-race residual, not a finding. **Ready to release on your go.**
 - **toolscan:** hermetic suite + first CI live on main (`2f88671b`), CI run `33971010614` all green on both platforms.
 - **Installer fix / C1/C3 / sweep / wave / KB:** drafted or closed locally; nothing submitted; nothing opens until item 9.
-- **Release-blockers: none.** (The #547 wave is the maintainer's sequencing, not ours, and not a train dependency.)
+- **Release-blockers: none.** (The #547/#559 wave merged 2026-09-05 — see STATUS; it was the maintainer's sequencing throughout, and it is not a train dependency. Its only consequence for the train: #605's branch base moved, and the rebase onto `e8ab1926` is preflighted clean + byte-identical — `item9-rebase-runbook.md`.)
 
 ## IMPLEMENTED
 - **Merge train (external):** #591 (toolscan seam) + the rest merged by KageBinary; main `39d0734`.
@@ -20,7 +20,7 @@ The campaign's external dependency closed (KageBinary merged the whole open PR t
 - **Installer audit (item 2):** findings a–e re-derived at line level from live main; README-only drafted fix held local.
 - **Sweep residuals (item 5):** 45-thread union probed; #547 page-2 closed (12 comments verbatim); discussions probed (zero mentions); zero replies warranted; zero writes.
 - **C1/C3 (item 6):** plan-only proposals (manifest harness registry; list/update/remove lifecycle verbs), CI costs stated.
-- **Wave monitor (item 7):** no movement; #37 UNKNOWN → verified real PR (probe-artifact 404).
+- **Wave monitor (item 7):** CLOSED OUT — snapshot at 14:21Z showed no movement; the wave then landed in full (gates + #547/#559 merged, main `e8ab1926`); ARMED #547 rebase MOOT; record in the item-7 run-dir.
 - **KB close-out (item 8):** rows #6638–#6645 added, verify-gate PASS, promoted TRUSTED.
 - **This bundle (item 9 prep):** `TRAIN-REPORT.md`, `pr-604-illustrated-report.html` (logo embedded), `ITEM-9-BUNDLE.md`.
 
