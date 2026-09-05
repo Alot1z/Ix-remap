@@ -21,4 +21,6 @@
 
 ## The summary in one line
 
-**#605** draft @ `0869a13` · 0 reviewers · 29/30 CI (CodeQL race only) — and the *only* other open PR in the three repos is **#607, the code owner's own** (not ours, not a draft). Zero fork PRs, zero toolscan PRs, one open issue (#608, ours + paired), one parked-closed issue (#606). #604 stays closed. Nothing else is open.
+**#605** draft @ `0869a13` · 0 reviewers · CI green except the documented CodeQL race — and the *only* other open PR in the three repos is **#607, the code owner's own** (not ours, not a draft). Zero fork PRs, zero toolscan PRs, one open issue (#608, ours + paired), one parked-closed issue (#606). #604 stays closed. Nothing else is open.
+
+**Update (same date):** upstream main advanced to `e8ab1926` when the #547/#559 wave merged — #605 now sits behind main and carries a rebase-onto-new-head before mark-ready (body updated accordingly; live draft state unchanged: draft @ `0869a13`, reviewers 0).

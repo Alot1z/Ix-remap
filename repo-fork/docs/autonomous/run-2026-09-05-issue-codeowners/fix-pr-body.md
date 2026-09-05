@@ -10,7 +10,7 @@ Refs #608 — the issue records the behavior behind this note; the platform root
 
 ## What this ships
 
-One line added to **CONTRIBUTING.md** (Development Workflow, step 4 — the canonical "open a PR" instruction), grounded at main `39d0734`:
+One line added to **CONTRIBUTING.md** (Development Workflow, step 4 — the canonical "open a PR" instruction), grounded at current main `e8ab1926`:
 
 ```
 4. Open a PR using the pull request template — work-in-progress opens as a draft;
@@ -30,4 +30,4 @@ That is the whole change. CONTRIBUTING's workflow list is where contributors rea
 ## Validation
 
 - Consistent with GitHub's documented behavior (verified live 2026-09-05: #605 draft-from-open carried zero requested reviewers; ready-opened #604 auto-requested the code owner and the request could not be removed).
-- Exact diff grounded against CONTRIBUTING.md at main `39d0734`.
+- Exact diff re-verified against CONTRIBUTING.md at main `e8ab1926` (main advanced past `39d0734` on 2026-09-05 when the #547/#559 wave merged; step 4 is unchanged there).

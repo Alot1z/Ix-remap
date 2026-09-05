@@ -15,16 +15,16 @@
 | **Installer README-fix draft** | `installer-docs-fix.draft.md` (README-only: gemini example → `claude agents`, `~/.cursor/skills-cursor`, 4-id registry wording) | held local, nothing submitted |
 | **C1/C3 proposals** | plan-only docs (manifest registry, lifecycle verbs) | held local, not promised |
 | **KB close-out** | rows #6638–#6645 TRUSTED | agent-knowledge-base |
-| **Wave gates (#547, #33/#37/#38)** | no movement; maintainer's own sequencing; NOT a train dependency | wave snapshot 14:21Z |
+| **Wave #547/#559** | **MERGED 2026-09-05** onto main `e8ab1926` (maintainer's own sequencing — after the 14:21Z snapshot); was NOT a train dependency; consequence: #605's branch sits behind main → rebase before mark-ready | compare probe (2 commits) |
 | **CodeQL residual on #605** | known infra race (ref-moved SARIF), byte-identical renderer already passed a genuine analysis | documented §0; clears maintainer-side |
 
 **Release-blocking? None.** The only red check on the train (CodeQL race) is a documented infra artifact with a positive prior analysis on byte-identical content; it clears on a maintainer re-run or the next branch update.
 
 ## 2 · The exact mark-ready sequence (runs only on your go)
 
-1. **Pre-flight (read-only):** re-probe §0 rows — #605 still draft at `0869a137` with zero requested reviewers, toolscan HEAD `a3e33771` (moved 15:56Z by the owner NUL-byte hardening push; pin refreshed 2026-09-05 per KB #6644), wave gates unchanged; run `dispatch-check.mjs` fast + `--live` (must be ALL GREEN).
+1. **Pre-flight (read-only):** re-probe §0 rows — #605 still draft at `0869a137` with zero requested reviewers, toolscan HEAD `a3e33771` (moved 15:56Z by the owner NUL-byte hardening push; pin refreshed 2026-09-05 per KB #6644), wave MERGED — main head `e8ab1926` (re-probe it), so #605's branch sits behind main; run `dispatch-check.mjs` fast + `--live` (must be ALL GREEN).
 2. **Draft-body standard check (checklist added 2026-09-05):** every prepared train body (#605 live, the installer kit, any new kit) passes the four checks — `Status: DRAFT — part of a larger train` header naming the set · verbatim feedback line (“Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict.”) · accuracy line scoped to the PR's own change · explicit scope section promising nothing beyond the PR. Grep the run-dirs for “please do not review” / “ignore this” framing — zero hits allowed; any hit is a defect fixed before anything opens (RULE 0 §5.9; KB #6646, #6653). Proof artifact: `draft-body-comparison.html`.
-3. **Mark #605 ready** — GraphQL `markPullRequestReadyForReview` on `ix-infrastructure/Ix#605` (REST `PATCH` silently ignores draft; verified §5.9 live). Note: marking ready WILL auto-request the code owner (GitHub behavior at mark-ready) — that is expected and correct at release time.
+3. **Rebase, then mark #605 ready** — first rebase head `0869a137` onto current main (`e8ab1926`, post-wave) via the gated push path + range re-scan, re-verify CI (the CodeQL race clears on the branch update), then GraphQL `markPullRequestReadyForReview` on `ix-infrastructure/Ix#605` (REST `PATCH` silently ignores draft; verified §5.9 live). Note: marking ready WILL auto-request the code owner (GitHub behavior at mark-ready) — that is expected and correct at release time.
 4. **Open the installer README-fix PR** (fork branch → `ix-infrastructure/Ix`, **as a DRAFT**, train-framed body, README-only content from `installer-docs-fix.draft.md`) — Tier A permits the draft open; your go decides whether it also marks ready here or waits.
 5. **Coordinated note** on the released PR(s): names the train set (logo banner · installer docs fix · toolscan hardening), states what each ships.
 6. **Re-verify** CI to completion on the released heads (probe check-runs, zero new failures), then **item 10** final report.

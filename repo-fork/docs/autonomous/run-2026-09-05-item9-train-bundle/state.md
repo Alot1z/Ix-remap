@@ -29,6 +29,7 @@
 - **#608 fix kit grounded:** CONTRIBUTING.md Development Workflow step 4 is the single honest home (one added line, docs-only; PR template has no review-flow section → no change there). Kit title/body updated to the concrete change, Refs #608, held for train release.
 - KB **#6653** (no orphan issues — issues open only alongside their PR; close-with-note is the hold) added, gate PASS, promoted TRUSTED. Full historical thread sweep: zero new rows (campaign fully mined).
 - Workspace renamed `ix-workspace` → `github-workspace` (plain descriptive name; commits `b22f7c9`+`82b2bdf`, no remote).
+- **E1–E8 compliance pass (2026-09-05, `e1-e8-kit-compliance.md`):** upstream main advanced to `e8ab1926` — the #547/#559 exit-code wave merged (awaiting-external NONE). All four upstream-facing bodies re-grounded at the new head: installer + C3 kits PASS unchanged; #608 fix kit re-grounded (`39d0734`→`e8ab1926`, CONTRIBUTING step 4 verified unchanged); **#605 live body fixed for genuine E1 violations** — stale CI count and the now-false "current main (`39d0734`)" claim — via the gated verbatim edit (draft kept, reviewers zero, live-verified). #605 now carries a rebase-onto-`e8ab1926` before mark-ready (recorded in ITEM-9-BUNDLE §2 step 3).
 
 ## Pending
 - Owner go on item 9 (the only mark-ready moment). Until then: nothing ready, nothing else opens, zero upstream writes. Installer README-fix + the #608 fix kit stay held-local draft files.
