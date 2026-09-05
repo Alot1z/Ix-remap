@@ -1,13 +1,21 @@
 # WAVE MONITOR — snapshot 2026-09-05 14:21Z (v7 queue item 7)
 
+> **CLOSED OUT 2026-09-05 (later the same day):** this snapshot is the pre-merge
+> record. The wave **landed in full** 15:35–15:57Z — gates `ix-claude-plugin#37`
+> (`210abdf`) + `#38` (`9222899`) + `ix-openclaw-plugin#33` (`89afc31`) merged,
+> then **#547** → main commit `df30296` (15:47Z) and **#559** → main commit
+> **`e8ab1926`** (15:57Z, main head). ARMED #547 rebase: **MOOT** (merged
+> upstream, no push from us). Full close-out: `state.md` in this run-dir.
+
 Mode: monitor-only, read-only. Zero upstream writes. Feed for the item 9
 train decision.
 
-## Verdict: NO MOVEMENT on the entire wave surface
+## Verdict (at snapshot time): NO MOVEMENT on the entire wave surface
 
-Everything sits exactly where the maintainer's state-of-record comment left
+Everything sat exactly where the maintainer's state-of-record comment left
 it (05:34:22Z). The ARMED #547 rebase trigger (gates land + owner
-authorization) has **not** fired.
+authorization) had **not** fired at 14:21Z — it fired later that same hour
+as the maintainer merged the gates and both wave PRs.
 
 ## Probed state (2026-09-05T14:21:21Z, live API)
 
