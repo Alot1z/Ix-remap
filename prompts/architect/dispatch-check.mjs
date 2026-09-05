@@ -163,27 +163,30 @@ if (process.argv.includes("--live")) {
     if (tsRef.object.sha !== "4c0b2d11b9667d8f93fac135b6e8cca995d4a81b")
       add("live", `toolscan main moved off 4c0b2d11 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the brand-pass head; prior a3e33771 superseded by an owner push 2026-09-05 16:43Z)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
-    if (br.object.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9") {
-      add("live", `fork logo branch moved off 0869a137 → ${br.object.sha.slice(0, 10)} (dispatch pins 0869a137 — the #605 draft head)`);
+    if (br.object.sha !== "c05c3a7764020a68ba2616709484ed1379161a92") {
+      add("live", `fork logo branch moved off c05c3a77 → ${br.object.sha.slice(0, 10)} (dispatch pins c05c3a77 — the #605 draft head with the banner preview PNGs)`);
     }
     const p604 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/604");
     if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
     const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
     if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
-    if (p605.head.sha !== "0869a137618152f907aea3d92cc0f2f0020cd8a9")
-      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 0869a137)`);
+    if (p605.head.sha !== "c05c3a7764020a68ba2616709484ed1379161a92")
+      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins c05c3a77)`);
     else console.log(`live: #605 draft ok (head ${p605.head.sha.slice(0, 7)})`);
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);
     if (rrs.length) add("live", `PR #605 has requested reviewers: ${rrs.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
-    // train drafts #609/#610 (opened 2026-09-05, owner's go — Tier A.3): draft + zero reviewers
-    for (const n of [609, 610]) {
-      const p = await apiThrow(`/repos/ix-infrastructure/Ix/pulls/${n}`);
-      if (!p.draft) add("live", `PR #${n} is NOT a draft — RULE 0 violated (dispatch pins draft:true)`);
-      const rr = await apiThrow(`/repos/ix-infrastructure/Ix/pulls/${n}/requested_reviewers`);
-      const rrsN = (rr.users || []).map((u) => u.login);
-      if (rrsN.length) add("live", `PR #${n} has requested reviewers: ${rrsN.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
-    }
+    // train draft #609 (opened 2026-09-05, owner's go — Tier A.3): draft + zero reviewers
+    const p609 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/609");
+    if (!p609.draft) add("live", "PR #609 is NOT a draft — RULE 0 violated (dispatch pins draft:true)");
+    const rr609 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/609/requested_reviewers");
+    const rrs609 = (rr609.users || []).map((u) => u.login);
+    if (rrs609.length) add("live", `PR #609 has requested reviewers: ${rrs609.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
+    // #610 + #608 were closed 2026-09-05 at the owner's call (superseded-by-process, KB #6658/#6653)
+    const p610 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/610");
+    if (p610.state !== "closed") add("live", "PR #610 not closed — expected closed (owner closed it 2026-09-05 as superseded-by-process)");
+    const i608 = await apiThrow("/repos/ix-infrastructure/Ix/issues/608");
+    if (i608.state !== "closed") add("live", "Issue #608 not closed — expected closed with its PR (KB #6653, no orphan issues)");
   } catch (e) {
     add("live", `probe failed (treat as gate-missing signal, not truth): ${e.message.slice(0, 100)}`);
   }
