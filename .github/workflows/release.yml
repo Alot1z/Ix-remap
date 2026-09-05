@@ -280,8 +280,19 @@ jobs:
           COMPASS_STAGED=0
           ARCHIVE_LIST="$(mktemp)"
           trap 'rm -f "$ARCHIVE_LIST"' EXIT
-          mkdir -p "$STAGING/cli" "$STAGING/core-ingestion" "$STAGING/compass"
-          cp -rL ix-cli/dist ix-cli/node_modules ix-cli/package.json "$STAGING/cli/"
+          mkdir -p "$STAGING/cli" "$STAGING/cli/scripts" "$STAGING/cli/assets" "$STAGING/core-ingestion" "$STAGING/compass"
+          # The banner renderer + asset ship INSIDE the cli tree: renderBanner()
+          # imports ../../scripts/render-logo.mjs relative to dist/cli, so every
+          # delivery layout needs them beside it. The npm tarball is pinned by a
+          # test in bootstrap-notice.test.ts; this staging copy is the release
+          # counterpart, and the gate below refuses to publish a tarball that
+          # would silently print the plain-text heading instead of the banner —
+          # the exact failure mode that shipped once because both files lived at
+          # the repo root, outside every packaged layout.
+          cp -rL ix-cli/scripts/render-logo.mjs ix-cli/scripts/render-logo.d.mts "$STAGING/cli/scripts/"
+          cp -rL ix-cli/assets/logo.png "$STAGING/cli/assets/"
+          test -f "$STAGING/cli/scripts/render-logo.mjs" && test -f "$STAGING/cli/assets/logo.png" \
+            || { echo "::error::banner inputs missing from staging (cli/scripts/render-logo.mjs, cli/assets/logo.png) — the setup notice would silently lose the logo"; exit 1; }
           cp -rL core-ingestion/dist core-ingestion/node_modules core-ingestion/package.json "$STAGING/core-ingestion/"
           if [ -f compass-dist/index.html ]; then
             cp -r compass-dist/* "$STAGING/compass/"

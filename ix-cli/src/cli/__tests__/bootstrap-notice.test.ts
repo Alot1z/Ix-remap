@@ -4,11 +4,17 @@ import { renameSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { emitSetupNotice } from "../bootstrap.js";
 import { renderBanner, resetBannerCacheForTests } from "../banner.js";
-import { renderLogo, resolveColorMode, LogoError } from "../../../../scripts/render-logo.mjs";
+import { renderLogo, resolveColorMode, LogoError } from "../../../scripts/render-logo.mjs";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
-const SCRIPTS = join(fileURLToPath(import.meta.url), "..", "..", "..", "..", "..", "scripts");
-const RENDERER = join(SCRIPTS, "render-logo.mjs");
+// The renderer + asset now live INSIDE the package (fix for the review
+// finding that the first banner PR shipped them at the repo root, where no
+// install layout — npm tarball or release staging — ever carried them). These
+// bases serve both the behavioral pins below and the deliverability pin.
+const PKG_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", ".."); // ix-cli/
+const RENDERER = join(PKG_ROOT, "scripts", "render-logo.mjs");
+const LOGO_ASSET = join(PKG_ROOT, "assets", "logo.png");
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,22 +53,24 @@ describe("emitSetupNotice", () => {
     expect(stderrText).not.toContain("Ix");
   });
 
-  it("falls back to the plain text heading when the renderer is absent (absent-safe)", () => {
-    // A layout without scripts/render-logo.mjs must degrade to the old heading —
-    // never throw, never leave the notice block empty. Within-file tests run
-    // sequentially, so the temporary rename is invisible to the other pins.
+  it("falls back to the plain text heading when the asset is absent (absent-safe)", () => {
+    // A layout without the packaged asset must degrade to the old heading —
+    // never throw, never leave the notice block empty. The renderer reads the
+    // asset at call time, so renaming it exercises exactly that layout.
+    // Within-file tests run sequentially, so the temporary rename is invisible
+    // to the other pins (and afterEach resets the banner cache).
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const rendererBackup = RENDERER + ".bak";
-    renameSync(RENDERER, rendererBackup);
+    const assetBackup = LOGO_ASSET + ".bak";
+    renameSync(LOGO_ASSET, assetBackup);
     try {
       emitSetupNotice(true, false, "ws");
       const stderrText = err.mock.calls.map((c) => String(c[0])).join("\n");
       expect(stderrText).toContain("Ix");
       expect(stderrText).not.toContain("▀");
     } finally {
-      renameSync(rendererBackup, RENDERER);
+      renameSync(assetBackup, LOGO_ASSET);
     }
     expect(out).not.toHaveBeenCalled();
   });
@@ -96,6 +104,34 @@ describe("renderBanner", () => {
     );
     expect(raw).not.toMatch(/\x1b\[/); // no escapes in no-color mode
     expect(out).not.toHaveBeenCalled();
+  });
+});
+
+describe("banner deliverability (the inputs must ship)", () => {
+  // History: the first banner PR kept scripts/render-logo.mjs + assets/logo.png
+  // at the repo ROOT — a layout no delivery path packs (npm publishes from
+  // ix-cli/; release staging copies exactly three trees) — so every installed
+  // run silently fell back to the plain heading while all tests (run from a
+  // checkout, where the files exist) passed. These pins turn that failure loud
+  // at PR time: if the inputs leave the package or the staging tree, CI fails.
+
+  it("npm pack carries the renderer and the asset inside the tarball", () => {
+    const res = spawnSync("npm", ["pack", "--dry-run", "--json"], {
+      cwd: PKG_ROOT,
+      encoding: "utf8",
+      shell: process.platform === "win32",
+    });
+    expect(res.status).toBe(0);
+    const packed = (JSON.parse(res.stdout)[0].files as { path: string }[]).map((f) => f.path);
+    expect(packed).toContain("scripts/render-logo.mjs");
+    expect(packed).toContain("assets/logo.png");
+  }, 30_000); // budget, not a weaker assertion: npm pack is slow under full-suite load
+
+  it("release staging carries them beside dist/cli, with a gate that refuses to publish without them", () => {
+    const wf = readFileSync(join(PKG_ROOT, "..", ".github", "workflows", "release.yml"), "utf8");
+    expect(wf).toContain("ix-cli/scripts/render-logo.mjs");
+    expect(wf).toContain("ix-cli/assets/logo.png");
+    expect(wf).toContain("banner inputs missing");
   });
 });
 
@@ -197,6 +233,7 @@ describe("output stability (golden fixtures)", () => {
   // invocation (width-color[-bg-none]); the pin re-renders and compares, so
   // accidental visual drift fails CI. Update goldens ONLY in a dedicated,
   // stated commit that says what changed and why.
+  // Goldens remain a repo-root artifact shared by the renderer's own docs.
   const GOLDENS_DIR = join(fileURLToPath(import.meta.url), "..", "..", "..", "..", "..", "output-samples");
   const goldens = readdirSync(GOLDENS_DIR).filter((f) => f.endsWith(".ans"));
 
