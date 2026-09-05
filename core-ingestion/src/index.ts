@@ -1989,6 +1989,79 @@ function unwrapRustCfgMacros(source: string): string {
   return parts.join('');
 }
 
+/**
+ * Blanks out CUDA kernel-launch configurations (`<<<grid, block>>>`) so that
+ * tree-sitter-cpp sees an ordinary call expression.
+ *
+ * The launch syntax is not valid C++: the grammar fails on it and, worse,
+ * recovers by dropping the whole call — so the edge from host code to the
+ * kernel it launches is lost, which is the one edge worth having in a CUDA
+ * file. Blanking the config in-place (preserving every character position and
+ * newline, as with the Rust macro unwrapper above) turns `k<<<a,b>>>(x)` into
+ * `k        (x)`, which parses cleanly and yields the call.
+ *
+ * Hand-scanned rather than pattern-matched. The natural regex
+ * (`/<<<[^;]*?>>>(?=\s*\()/g`) is quadratic on `<`-heavy input — a file of
+ * 16k `<` took 67ms and grew 4x per doubling — and ingest input is an
+ * arbitrary repository, so that is a denial-of-service vector, not a
+ * micro-optimisation. This scanner never revisits a character: each failed
+ * search advances the cursor past the region it just rejected.
+ *
+ * A launch config is always followed immediately by the argument list, so
+ * requiring `(` after the closing `>>>` is what keeps this off ordinary C++ —
+ * nested templates (`vector<vector<vector<int>>>`), shift operators and
+ * `"<<<HEAD>>>"` in a string literal are all left alone. Stopping the search
+ * at `;` keeps a stray `<<<` in a comment from reaching a later `>>>`.
+ */
+const _isSpace = (ch: string) => ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r';
+
+function blankCudaLaunchConfigs(source: string): string {
+  if (!source.includes('<<<')) return source;
+
+  const out: string[] = [];
+  let copiedTo = 0;
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const open = source.indexOf('<<<', cursor);
+    if (open === -1) break;
+
+    // Find the closing `>>>`, giving up at `;` — a launch config never spans a
+    // statement boundary.
+    let scan = open + 3;
+    while (scan < source.length && source[scan] !== ';' && !source.startsWith('>>>', scan)) {
+      scan += 1;
+    }
+
+    if (!source.startsWith('>>>', scan)) {
+      // Hit `;` or end of file. No `<<<` inside the region just scanned can
+      // reach a closing `>>>` either, so skip the whole thing.
+      cursor = scan + 1;
+      continue;
+    }
+
+    const close = scan + 3;
+    let afterConfig = close;
+    while (afterConfig < source.length && _isSpace(source[afterConfig])) afterConfig += 1;
+
+    if (source[afterConfig] !== '(') {
+      // A `>>>` that is not a launch — e.g. closing nested templates. Resume
+      // after it; the region behind us cannot match.
+      cursor = close;
+      continue;
+    }
+
+    out.push(source.slice(copiedTo, open));
+    out.push(source.slice(open, close).replace(_blankNonNewline, ' '));
+    copiedTo = close;
+    cursor = close;
+  }
+
+  if (copiedTo === 0) return source;
+  out.push(source.slice(copiedTo));
+  return out.join('');
+}
+
 // ---------------------------------------------------------------------------
 // Main parse function
 // ---------------------------------------------------------------------------
@@ -2101,6 +2174,13 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     // character positions and line numbers) so the inner items become top-level.
     if (language === SupportedLanguages.Rust) {
       parseSource = unwrapRustCfgMacros(parseSource);
+    }
+
+    // CUDA: neutralise kernel-launch configs so the host -> kernel call survives.
+    // Gated on the extension rather than the language so .cpp/.hpp parsing stays
+    // byte-identical.
+    if (filePath.endsWith('.cu') || filePath.endsWith('.cuh')) {
+      parseSource = blankCudaLaunchConfigs(parseSource);
     }
     const tree = parser.parse(parseSource, undefined, { bufferSize: parseSource.length + 1 });
     const cacheKey = isTsx ? 'tsx' as const : language;
