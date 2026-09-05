@@ -49,6 +49,12 @@ export interface LockHandle {
 function lockMaxMs(): number {
   const raw = process.env.IX_MAP_LOCK_MAX_MS;
   if (!raw) return DEFAULT_LOCK_MAX_MS;
+  // Matched, not parsed. `Number.parseInt` reads any prefix, so an operator
+  // following the env table and writing `20m` got TWENTY MILLISECONDS: every
+  // held lock reads as abandoned on the next process's first look, and
+  // single-flight goes inert for the map lock and the stitch lock alike. The
+  // stitch cooldown backstops one of those; the map lock has nothing.
+  if (!/^\d+$/.test(raw)) return DEFAULT_LOCK_MAX_MS;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_LOCK_MAX_MS;
 }
@@ -57,8 +63,22 @@ function lockPathFor(key: string): string {
   let canonicalKey: string;
   try { canonicalKey = realpathSync.native(key); }
   catch { canonicalKey = resolve(key); }
-  const h = createHash("sha256").update(canonicalKey).digest("hex").slice(0, 16);
-  return join(lockDir(), `map-${h}.lock`);
+  return namedLockPath("map", canonicalKey);
+}
+
+/**
+ * Lock file for an arbitrary key, hashed verbatim.
+ *
+ * The map lock canonicalises its key first because it is a filesystem path and
+ * two spellings of one directory must take the same lock. A key that is not a
+ * path -- a backend endpoint, say -- must NOT go through realpath: it does not
+ * name a file, so realpath fails and the fallback `resolve()` would join it to
+ * the current working directory, giving one endpoint a different lock per
+ * directory the command happens to run from.
+ */
+export function namedLockPath(namespace: string, key: string): string {
+  const h = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return join(lockDir(), `${namespace}-${h}.lock`);
 }
 
 /** True when a PID is alive on this host. signal 0 = existence check, no-op. */
@@ -100,8 +120,20 @@ function isStale(meta: LockMeta | null): boolean {
  * acquisition retried once.
  */
 export function acquireMapLock(workspaceRoot: string, label: string): LockHandle | null {
+  return acquireLockAt(lockPathFor(workspaceRoot), label);
+}
+
+/**
+ * Acquire the lock stored at `path`, with the same semantics as
+ * [[acquireMapLock]]: a LockHandle on success, null when a live holder owns it.
+ *
+ * Split out so a caller that is not keyed by a workspace root -- the stitch
+ * guard, which is keyed by backend endpoint because the stitch join is
+ * cross-workspace -- gets the identical, already-proven acquisition, staleness
+ * and release behaviour instead of a second implementation of it.
+ */
+export function acquireLockAt(path: string, label: string): LockHandle | null {
   try { mkdirSync(lockDir(), { recursive: true }); } catch { /* best effort */ }
-  const path = lockPathFor(workspaceRoot);
   const meta: LockMeta = { pid: process.pid, host: hostname(), startedAt: Date.now(), label };
 
   const tryCreate = (): boolean => {
