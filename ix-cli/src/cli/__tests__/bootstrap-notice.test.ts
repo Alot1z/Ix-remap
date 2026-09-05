@@ -12,6 +12,7 @@ const RENDERER = join(SCRIPTS, "render-logo.mjs");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   resetBannerCacheForTests();
 });
 
@@ -69,6 +70,13 @@ describe("emitSetupNotice", () => {
 
 describe("renderBanner", () => {
   it("returns a non-empty banner containing half-block cells", () => {
+    // renderBanner() spawns the renderer with the inherited env; CI runners
+    // may have TERM unset/dumb (resolving to the ASCII fallback, which has no
+    // half-blocks). Pin the environment so this always exercises the color
+    // path — the assertion itself stays exact.
+    vi.stubEnv("TERM", "xterm-256color");
+    vi.stubEnv("NO_COLOR", "");
+    vi.stubEnv("COLORTERM", "");
     const banner = renderBanner();
     expect(banner).not.toBeNull();
     expect(banner!.includes("▀")).toBe(true);
@@ -125,7 +133,10 @@ describe("render-logo CLI contract", () => {
     const viaCli = run(["--width", "24", "--color", "ascii"]);
     const viaLib = renderLogo({ width: 24, color: "ascii" });
     expect(viaLib).toBe(viaCli);
-  });
+  }, 30_000); // budget, not a weaker assertion: the in-process render decodes the
+  // full PNG (~16M byte-samples), and v8 coverage instrumentation inflates
+  // that fixed cost ~10x (measured ~7s vs ~0.7s) on every coverage run; the
+  // byte-identity assertion above stays exact.
 
   it("resolveColorMode honors NO_COLOR / COLORTERM / TERM", () => {
     expect(resolveColorMode("auto", { NO_COLOR: "1" } as NodeJS.ProcessEnv)).toBe("ascii");
@@ -159,7 +170,7 @@ describe("render-logo CLI contract", () => {
     const viaCli = run(["--width", "24", "--color", "ascii", "--bg", "none"]);
     const viaLib = renderLogo({ width: 24, color: "ascii", bg: "none" });
     expect(viaLib).toBe(viaCli);
-  });
+  }, 30_000); // budget, not a weaker assertion (see the sibling lib≡CLI pin)
 
   it("--bg none is reported honestly in the JSON block; default is brand", () => {
     expect(JSON.parse(run(["--width", "16", "--bg", "none", "--json"])).bg).toBe("none");
