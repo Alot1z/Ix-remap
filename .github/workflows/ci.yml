@@ -373,7 +373,9 @@ jobs:
 
           install_out=$(bash scripts/install-skill.sh --dry-run)
           printf '%s\n' "$install_out"
-          grep -Fq 'would install: /tmp/ix-harness-home/.claude/skills/ix' <<<"$install_out"
+          grep -Fq 'would install [claude]: /tmp/ix-harness-home/.claude/skills/ix' <<<"$install_out"
+          grep -Fq 'Add --json for a machine-readable report' <<<"$install_out"
+          bash scripts/install-skill.sh --help | grep -Fq 'Valid harness ids:'
           test ! -e "$HOME/.claude/skills/ix"
 
           shell_json=$(bash scripts/install-skill.sh --dry-run --json)
@@ -479,7 +481,9 @@ jobs:
           install_out=$(bash scripts/install-skill.sh --dry-run)
           printf '%s\n' "$install_out"
           dest="$HOME/.claude/skills/ix"
-          grep -Fq "would install: $dest" <<<"$install_out"
+          grep -Fq "would install [claude]: $dest" <<<"$install_out"
+          grep -Fq 'Add --json for a machine-readable report' <<<"$install_out"
+          bash scripts/install-skill.sh --help | grep -Fq 'Valid harness ids:'
           test ! -e "$dest"
 
           shell_json=$(bash scripts/install-skill.sh --dry-run --json)

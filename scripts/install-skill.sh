@@ -36,19 +36,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/skills/ix"
 [ -f "$SRC/SKILL.md" ] || { echo "error: $SRC/SKILL.md not found" >&2; exit 1; }
 
-FORCE=0
-DRY_RUN=0
-JSON=0
-EXPLICIT=()
-for arg in "$@"; do
-  case "$arg" in
-    --force) FORCE=1 ;;
-    --dry-run) DRY_RUN=1 ;;
-    --json) JSON=1 ;;
-    -*) echo "error: unknown option $arg" >&2; exit 1 ;;
-    *) EXPLICIT+=("$arg") ;;
-  esac
-done
+# Argument parsing runs after the harness registry is read (below) so --help
+# can list the real registry ids; nothing between here and the read uses flags.
 
 # A machine-readable report replaces the human output: one object per harness
 # with the action this run takes (would-install | would-refuse | installed |
@@ -84,6 +73,29 @@ if [ "${#IDS[@]}" = "0" ]; then
   echo "error: harness registry produced no entries" >&2
   exit 1
 fi
+
+# --- Argument parsing (--help lists the real registry ids) -------------------
+FORCE=0
+DRY_RUN=0
+JSON=0
+EXPLICIT=()
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --json) JSON=1 ;;
+    --help|-h)
+      echo "Usage: bash scripts/install-skill.sh [options] [harness-ids...]"
+      echo "  --force     overwrite a same-name foreign skill"
+      echo "  --dry-run   show the targets, write nothing"
+      echo "  --json      machine-readable report (same shape as ix mcp install)"
+      echo "  --help      this message"
+      echo "Valid harness ids: ${IDS[*]}"
+      exit 0 ;;
+    -*) echo "error: unknown option $arg" >&2; echo "       try: bash scripts/install-skill.sh --help" >&2; exit 1 ;;
+    *) EXPLICIT+=("$arg") ;;
+  esac
+done
 
 # --- Explicit harness id selection (unknown ids are an error, not a no-op) ---
 if [ "${#EXPLICIT[@]}" -gt 0 ]; then
@@ -148,7 +160,7 @@ for ((i = 0; i < ${#IDS[@]}; i++)); do
     continue
   fi
   if [ "$DRY_RUN" = "1" ]; then
-    say "would install: $dest"
+    say "would install [$id]: $dest"
     DECISIONS+=("$id"$'\t'"would-install"$'\t'"$dest"$'\t'"$via")
     installed=$((installed + 1))
     continue
@@ -158,7 +170,7 @@ for ((i = 0; i < ${#IDS[@]}; i++)); do
     rm -rf "$dest"
   fi
   cp -R "$SRC" "$dest"
-  say "Installed: $dest"
+  say "Installed [$id]: $dest"
   DECISIONS+=("$id"$'\t'"installed"$'\t'"$dest"$'\t'"$via")
   installed=$((installed + 1))
 done
@@ -184,6 +196,7 @@ fi
 if [ "$DRY_RUN" = "1" ]; then
     echo
     echo "Dry run: $installed harness(es) would receive the skill."
+    echo "Add --json for a machine-readable report (same shape as ix mcp install)."
     # The preview and the real run must agree: a conflict in the real run
     # exits 1, so a preview that predicts a refusal exits 1 too.
     [ "$conflicts" = "0" ] || exit 1
