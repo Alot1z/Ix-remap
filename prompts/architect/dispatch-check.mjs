@@ -175,13 +175,20 @@ if (process.argv.includes("--live")) {
     const p604 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/604");
     if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
     const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
-    if (!p605.draft) add("live", "PR #605 is NOT a draft — RULE 0 violated (dispatch pins draft:true until the owner marks ready)");
+    // #605 marked ready 2026-09-06 via the staged mechanics (owner ticked go, item 8) —
+    // the draft pin is retired; pin ready-state + the CI-green head.
+    if (p605.draft) add("live", "PR #605 is a draft again — marked ready 2026-09-06; investigate state regression");
     if (p605.head.sha !== "2f9604772c19575ab9207138f6363523634dd44b")
       add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green head)`);
-    else console.log(`live: #605 draft ok (head ${p605.head.sha.slice(0, 7)})`);
+    else console.log(`live: #605 ready ok (head ${p605.head.sha.slice(0, 7)})`);
     const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
     const rrs = (rr605.users || []).map((u) => u.login);
-    if (rrs.length) add("live", `PR #605 has requested reviewers: ${rrs.join(",")} — RULE 0: no review requests on drafts (KB #6646)`);
+    // KB #6646: the code-owner request fires AT mark-ready and pending requests on a
+    // once-drafted PR are unremovable (GitHub bug #69208) — josephismikhail is the
+    // EXPECTED post-ready state; flag only absence or drift.
+    if (!rrs.includes("josephismikhail"))
+      add("live", `PR #605 requested reviewers = [${rrs.join(",")}] — expected [josephismikhail] (code-owner request fired at mark-ready, KB #6646; never attempt removal — GitHub bug #69208)`);
+    else console.log("live: #605 code-owner request josephismikhail present (KB #6646 expected; do not remove)");
     // train PR #609: MERGED 2026-09-05 (main → 8c0e6b00) — pin merge state,
     // not draft state (a merged PR keeps its historical review-request record,
     // so the old draft pin false-fails forever after the merge).
