@@ -25,7 +25,13 @@ export type Outcome =
   /** Doctor only: host is present and the name is free, but nothing points at us. */
   | "not-registered"
   /** Doctor only: ours, but the launcher path it records is gone. */
-  | "stale";
+  | "stale"
+  /** Install + doctor: the host is present but its registration could not be
+   * read, so nothing was learned about the name. Never counted as a conflict:
+   * a conflict means a *parsed* foreign registration for `ix-memory`; here
+   * nothing was parsed. The name is still treated as occupied (never written
+   * without `--force`) — this changes only what the report calls it. */
+  | "unreadable";
 
 /** Which probe decided a host's presence. */
 type DetectionVia = "toolscan" | "path" | "config-dir" | "none";
@@ -140,6 +146,9 @@ function outcomeFor(registration: Registration, force: boolean): Exclude<Outcome
   // Already ours, just pointing at a launcher that no longer exists. Rewriting
   // it is the repair, and it needs no --force: nothing of the user's is at risk.
   if (registration === "stale") return null;
+  // Occupied but unreadable: nothing was parsed, so this is not a conflict —
+  // but the name is still occupied and must not be written without --force.
+  if (registration === "unknown") return force ? null : "unreadable";
   return force ? null : "conflict";
 }
 
@@ -301,7 +310,7 @@ const DOCTOR_OUTCOME: Record<Registration, Outcome> = {
   none: "not-registered",
   stale: "stale",
   other: "conflict",
-  unknown: "conflict",
+  unknown: "unreadable",
 };
 
 export async function runDoctor(

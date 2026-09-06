@@ -93,7 +93,58 @@ describe("ix mcp install", () => {
 
     // Guessing "free" here is the one wrong guess that destroys a config.
     expect(host.registerCalls).toBe(0);
+    // An unreadable config is not a conflict: nothing was parsed, so no foreign
+    // registration was found. The safe-don't-write behavior is pinned by
+    // registerCalls; the honest classification is "unreadable".
+    expect(report.hosts[0]?.outcome).toBe("unreadable");
+  });
+
+  it("never counts an unreadable config as a name conflict", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runInstall({ hosts: [host] });
+
+    expect(report.conflicts).toBe(0);
+  });
+
+  it("still counts a parsed foreign registration as a conflict", async () => {
+    const host = fakeHost("taken", "other");
+
+    const report = await runInstall({ hosts: [host] });
+
     expect(report.hosts[0]?.outcome).toBe("conflict");
+    expect(report.conflicts).toBe(1);
+  });
+
+  it("doctor reports an unreadable config as unreadable, not as a conflict", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runDoctor({ hosts: [host] });
+
+    expect(report.hosts[0]?.outcome).toBe("unreadable");
+  });
+
+  it("the human summary names only real conflicts in the ix-memory-held line", async () => {
+    const murky = fakeHost("murky", "unknown");
+    const taken = fakeHost("taken", "other");
+
+    const report = await runInstall({ hosts: [murky, taken] });
+
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.join(" "));
+    };
+    try {
+      const { renderInstall } = await import("../commands/mcp.js");
+      renderInstall(report, "text", true);
+    } finally {
+      console.log = orig;
+    }
+    const summary = logs.filter((l) => l.includes("already use the name")).join("\n");
+    // One parsed foreign registration, one unreadable config: the line must
+    // count only the real conflict.
+    expect(summary).toContain("1 host(s)");
   });
 
   it("replaces a conflicting registration only when --force is given", async () => {
@@ -103,6 +154,19 @@ describe("ix mcp install", () => {
 
     expect(host.registerCalls).toBe(1);
     expect(report.hosts[0]?.outcome).toBe("registered");
+  });
+
+  it("overwrites an unreadable registration only when --force is given", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runInstall({ hosts: [host], force: true });
+
+    // Unreadable is occupied like "other": --force is what authorizes the
+    // overwrite; the outcome and write-count must match the conflict path.
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]?.outcome).toBe("registered");
+    // The no-force counterpart — no write, outcome "unreadable" — is pinned
+    // above by "treats an unreadable registration as occupied rather than free".
   });
 
   it("is idempotent when the name already points at ix mcp", async () => {
