@@ -45,6 +45,40 @@ cd ix-cli && npm test
 4. Open a PR using the pull request template
 5. Ensure CI passes before merge
 
+## Review Process
+
+### What reviewers check
+
+- **Behavior over intent.** A PR is judged by what its code does when run, not
+  by what its description promises. Cite the commands and their output for
+  every behavioral claim.
+- **Stream discipline.** Assertions that read combined output can mask
+  failures. Compare stdout and stderr separately when output routing matters.
+- **Hermetic tests.** Tests use fixture environments (`HOME`/`USERPROFILE`
+  redirection, temp dirs), never developer-machine paths, and declare
+  platform behavior explicitly — macOS, Ubuntu, and Windows differ in path
+  and shell semantics.
+- **Option classification.** Every CLI option is accounted for in tests;
+  adding an option without updating its test is a review finding.
+- **Exit codes are contract.** A documented failure path must actually exit
+  non-zero, in dry-run and real modes alike.
+
+### Review requests
+
+- GitHub requests review from code owners when a PR is **marked ready for
+  review**, not while it is a draft. Keep a PR in draft while iterating to
+  keep reviewer queues quiet.
+- A pending code-owner request cannot be removed by the PR author once it
+  fires. If one appears where it is not needed, say so on the PR thread and a
+  maintainer will dismiss it after triage.
+
+### Working through findings
+
+- Address findings point per point in the thread, with reproduced evidence —
+  actual command output beats general agreement.
+- If a finding cannot be reproduced, say so and show exactly which commands
+  you ran; the reviewer re-runs them before the PR moves forward.
+
 ## Branch Naming
 
 ```
