@@ -159,9 +159,13 @@ if (process.argv.includes("--live")) {
     console.log(`live: #591 merged ${pr.merged_at} (${String(pr.merge_commit_sha).slice(0, 7)}) | #602 merged ${p602.merged_at}`);
     const ts = await apiThrow("/repos/Alot1z/toolscan");
     if (ts.license?.spdx_id !== "MIT") add("live", `toolscan license regressed: ${JSON.stringify(ts.license)}`);
+    // toolscan PR#1 (feat/agent-skill-package) was READYED and MERGED by the owner 2026-09-06T00:18:39Z — main advanced to the merge commit.
+    const pr1 = await apiThrow("/repos/Alot1z/toolscan/pulls/1");
+    if (!pr1.merged)
+      add("live", `toolscan PR#1 no longer merged (state ${pr1.state}, merged=${pr1.merged}) — expected post-merge state 2026-09-06T00:18:39Z`);
     const tsRef = await apiThrow("/repos/Alot1z/toolscan/git/ref/heads/main");
-    if (tsRef.object.sha !== "4c0b2d11b9667d8f93fac135b6e8cca995d4a81b")
-      add("live", `toolscan main moved off 4c0b2d11 → ${tsRef.object.sha.slice(0, 10)} (dispatch pins the brand-pass head; prior a3e33771 superseded by an owner push 2026-09-05 16:43Z)`);
+    if (tsRef.object.sha !== "86b0da0c475a7a46db7dceba7c2b57c9c014f688")
+      add("live", `toolscan main moved off the #1 merge commit 86b0da0c → ${tsRef.object.sha.slice(0, 10)} (merge landed 2026-09-06T00:18:39Z; prior pins a3e33771/4c0b2d11 superseded by the merge)`);
     const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
     if (br.object.sha !== "2f9604772c19575ab9207138f6363523634dd44b") {
       add("live", `fork logo branch moved off 2f96047 → ${br.object.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green fix head; prior 17d2da44 superseded by the test-budget commit)`);
