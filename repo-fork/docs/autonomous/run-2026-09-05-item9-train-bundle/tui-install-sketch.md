@@ -61,3 +61,12 @@ $ bash scripts/install-skill.sh --tui        (or: ix install, once upstreamed)
 - MCP/plugin wiring details (issue #612 rows are proposals; engine hooks land per maintainer direction).
 - Any persistent state — the TUI is stateless per invocation.
 - Colors beyond the banner's existing 5-tone palette.
+
+## Prototype status (2026-09-06)
+
+`tui-install.mjs` (this dir) implements the sketch: registry-sourced ids,
+argv-only state, engine passthrough. Exercised end-to-end against the
+re-derived UX branch (chore/installer-ux-output): dry-run parity (U1-labeled
+lines identical), --json honesty, apply mode (engine performed the install),
+unknown-id fail-closed. Interactive prompts need a real TTY — untested here
+by construction, documented as the limitation.
