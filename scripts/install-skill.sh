@@ -36,8 +36,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/skills/ix"
 [ -f "$SRC/SKILL.md" ] || { echo "error: $SRC/SKILL.md not found" >&2; exit 1; }
 
-# Argument parsing runs after the harness registry is read (below) so --help
-# can list the real registry ids; nothing between here and the read uses flags.
 
 # A machine-readable report replaces the human output: one object per harness
 # with the action this run takes (would-install | would-refuse | installed |
@@ -45,8 +43,53 @@ SRC="$ROOT/skills/ix"
 # (toolscan | path | config-dir | none), mirroring `ix mcp install`'s report.
 # CI asserts the JSON fields instead of grepping the human lines.
 
-# --- Read the harness registry (hosts.ts via the helper, no built CLI) ------
 HELPER="$ROOT/ix-cli/scripts/skill-harnesses.mjs"
+
+# --- Argument parsing --------------------------------------------------------
+#
+# BEFORE the registry read below, deliberately. Both the node requirement and
+# the probe `exit 1`, so parsing after them meant `--help` on a machine without
+# node answered
+#     error: node is required to read the harness registry
+# and `--bogus` did too -- reporting the toolchain instead of the option. Usage
+# and option validation must not depend on a toolchain; someone reaching for
+# --help is often someone who has not got one yet.
+#
+# Listing the REAL registry ids is still worth having, so --help asks for them
+# separately and treats failure as silence: they enrich a help message, they are
+# never a reason to withhold one.
+usage() {
+  echo "Usage: bash scripts/install-skill.sh [options] [harness-ids...]"
+  echo "  --force     overwrite a same-name foreign skill"
+  echo "  --dry-run   show the targets, write nothing"
+  echo "  --json      machine-readable report (same shape as ix mcp install)"
+  echo "  --help      this message"
+  # Best effort. `|| true` because this runs under `set -e` and a missing node,
+  # a broken helper or an empty probe must all leave --help exiting 0.
+  local ids=""
+  if command -v node >/dev/null 2>&1; then
+    ids="$(node "$HELPER" --probe 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')" || true
+  fi
+  [ -n "${ids// /}" ] && echo "Valid harness ids: ${ids% }"
+  return 0
+}
+
+FORCE=0
+DRY_RUN=0
+JSON=0
+EXPLICIT=()
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --json) JSON=1 ;;
+    --help|-h) usage; exit 0 ;;
+    -*) echo "error: unknown option $arg" >&2; echo "       try: bash scripts/install-skill.sh --help" >&2; exit 1 ;;
+    *) EXPLICIT+=("$arg") ;;
+  esac
+done
+
+# --- Read the harness registry (hosts.ts via the helper, no built CLI) ------
 if [ ! -f "$HELPER" ]; then
   echo "error: $HELPER not found (the harness registry helper)" >&2
   exit 1
@@ -73,29 +116,6 @@ if [ "${#IDS[@]}" = "0" ]; then
   echo "error: harness registry produced no entries" >&2
   exit 1
 fi
-
-# --- Argument parsing (--help lists the real registry ids) -------------------
-FORCE=0
-DRY_RUN=0
-JSON=0
-EXPLICIT=()
-for arg in "$@"; do
-  case "$arg" in
-    --force) FORCE=1 ;;
-    --dry-run) DRY_RUN=1 ;;
-    --json) JSON=1 ;;
-    --help|-h)
-      echo "Usage: bash scripts/install-skill.sh [options] [harness-ids...]"
-      echo "  --force     overwrite a same-name foreign skill"
-      echo "  --dry-run   show the targets, write nothing"
-      echo "  --json      machine-readable report (same shape as ix mcp install)"
-      echo "  --help      this message"
-      echo "Valid harness ids: ${IDS[*]}"
-      exit 0 ;;
-    -*) echo "error: unknown option $arg" >&2; echo "       try: bash scripts/install-skill.sh --help" >&2; exit 1 ;;
-    *) EXPLICIT+=("$arg") ;;
-  esac
-done
 
 # --- Explicit harness id selection (unknown ids are an error, not a no-op) ---
 if [ "${#EXPLICIT[@]}" -gt 0 ]; then
