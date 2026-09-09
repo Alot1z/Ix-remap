@@ -1,0 +1,219 @@
+#!/usr/bin/env node
+// dispatch-check.mjs — mechanical verifier for BUILDER-PROMPT-COMPLETE.md.
+// Campaign tooling: lives beside the dispatch, NOT in any repo tree. Zero
+// network by default; --live adds read-only API re-probes of the §0 rows.
+//
+// Checks (each failure names the offending line):
+//   1. every §N reference resolves to an existing section header (N.M sub-refs
+//      resolve when a full N.M section header exists, else as section+sub-item)
+//   2. §1 queue items numbered contiguously from 1, count == the dispatch's
+//      own "queue-length: N" declaration (v5+; default 5 for v3-era files)
+//   3. every RECONCILIATION LEDGER "queue item N" target exists in §1
+//   4. the three tombstoned files carry the tombstone header
+//   5. every §0 executed-state row carries a date (YYYY-MM-DD) or probe marker
+//   6. no duplicated section headers
+//
+// Usage: node dispatch-check.mjs [--live]
+// Exit: 0 all green · 1 failures found
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DISPATCH = join(HERE, "BUILDER-PROMPT-COMPLETE.md");
+const TOMBSTONES = ["MISSION-UNIVERSAL-HOW-CONTRACT.md", "MISSION-2026-09-IX-PR-CAMPAIGN.md", "BUILDER-PROTOCOL.md"];
+const TOMBSTONE_MARK = "TOMBSTONED — SUPERSEDED";
+
+const failures = [];
+const add = (check, msg) => failures.push(`[${check}] ${msg}`);
+
+const text = readFileSync(DISPATCH, "utf8");
+const lines = text.split("\n");
+const at = (n) => `line ${n + 1}: ${lines[n].trim().slice(0, 90)}`;
+
+// --- collect section headers (## N. Title and ## 0.5-style) ---
+const sectionNums = new Set();
+const headerCount = new Map();
+for (let i = 0; i < lines.length; i++) {
+  const m = lines[i].match(/^##\s+(?:⚰️\s*)?([0-9]+(?:\.[0-9]+)?)\.?\s/);
+  if (m) {
+    sectionNums.add(m[1]);
+    headerCount.set(lines[i], (headerCount.get(lines[i]) ?? 0) + 1);
+  }
+}
+
+// --- check 1: §N and §N.M references resolve (N.M = item M inside section N) ---
+const refRe = /§([0-9]+(?:\.[0-9]+)?)/g;
+const sectionRange = new Map(); // num -> [startLine, endLine]
+{
+  const heads = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(?:⚰️\s*)?([0-9]+(?:\.[0-9]+)?)\.?\s/);
+    if (m) heads.push({ num: m[1], line: i });
+  }
+  heads.forEach((h, idx) => sectionRange.set(h.num, [h.line, idx + 1 < heads.length ? heads[idx + 1].line : lines.length]));
+}
+const subItemExists = (sec, item) => {
+  const range = sectionRange.get(sec);
+  if (!range) return false;
+  for (let i = range[0]; i < range[1]; i++) {
+    if (new RegExp(`^${item}\\.\\s+\\*\\*`).test(lines[i])) return true;
+    if (/^###\s/.test(lines[i]) && lines[i].includes(`${item}.`)) return true;
+    if (new RegExp(`^###\\s+${sec}\\.${item}\\.?\\s`).test(lines[i])) return true; // full "### N.M" sub-section header
+  }
+  return false;
+};
+for (let i = 0; i < lines.length; i++) {
+  for (const m of lines[i].matchAll(refRe)) {
+    const ref = m[1];
+    if (!sectionNums.has(ref)) {
+      if (ref.includes(".")) {
+        const [sec, item] = ref.split(".");
+        if (!sectionNums.has(sec) || !subItemExists(sec, item)) add("§-ref", `unresolved §${ref} — ${at(i)}`);
+      } else add("§-ref", `unresolved §${ref} — ${at(i)}`);
+    }
+  }
+}
+
+// --- check 2: §1 queue items contiguous ---
+{
+  const q1 = lines.findIndex((l) => /^##\s+1\.\s/.test(l));
+  if (q1 === -1) add("queue", "§1 not found");
+  else {
+    const nums = [];
+    for (let i = q1 + 1; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i])) break;
+      const m = lines[i].match(/^([0-9]+)\.\s+\*\*/);
+      if (m) nums.push({ n: Number(m[1]), line: i });
+    }
+    nums.forEach((it, idx) => {
+      if (it.n !== idx + 1) add("queue", `expected item ${idx + 1}, found ${it.n} — ${at(it.line)}`);
+    });
+    const declared = Number((text.match(/queue-length:\s*(\d+)/) || [])[1] || 5);
+    if (nums.length !== declared) add("queue", `queue has ${nums.length} items but the dispatch declares queue-length: ${declared}`);
+  }
+}
+
+// --- check 3: ledger targets exist ---
+{
+  const ledger = lines.findIndex((l) => /^##\s+0\.5\s/.test(l));
+  if (ledger === -1) add("ledger", "§0.5 RECONCILIATION LEDGER not found");
+  else {
+    for (let i = ledger; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i]) && i !== ledger) break;
+      for (const m of lines[i].matchAll(/queue item ([0-9]+)/g)) {
+        const target = Number(m[1]);
+        const q1 = lines.findIndex((l) => /^##\s+1\.\s/.test(l));
+        let found = false;
+        for (let j = q1 + 1; j < lines.length && !found; j++) {
+          if (/^##\s/.test(lines[j])) break;
+          if (new RegExp(`^${target}\\.\\s+\\*\\*`).test(lines[j])) found = true;
+        }
+        if (!found) add("ledger", `RESTORED "queue item ${target}" has no §1 target — ${at(i)}`);
+      }
+    }
+  }
+}
+
+// --- check 4: tombstones present ---
+for (const f of TOMBSTONES) {
+  const p = join(HERE, f);
+  if (!existsSync(p)) { add("tombstone", `${f} missing entirely`); continue; }
+  const head = readFileSync(p, "utf8").slice(0, 400);
+  if (!head.includes(TOMBSTONE_MARK)) add("tombstone", `${f} has no tombstone header in its first 400 chars`);
+}
+
+// --- check 5: §0 rows carry a date or probe marker ---
+{
+  const s0 = lines.findIndex((l) => /^##\s+0\.\s/.test(l));
+  const s05 = lines.findIndex((l) => /^##\s+0\.5\s/.test(l));
+  if (s0 === -1 || s05 === -1) add("state-rows", "§0 or §0.5 not found");
+  else {
+    for (let i = s0; i < s05; i++) {
+      if (lines[i].startsWith("|") && !/^\|[-\s|:]+\|$/.test(lines[i]) && !/^\|\s*(Fact|Item)\s*\|/.test(lines[i])) {
+        if (!/[0-9]{4}-[0-9]{2}-[0-9]{2}|probe|OBSERVED|VERIFIED|re-probe/i.test(lines[i])) {
+          add("state-rows", `§0 row without date/probe marker — ${at(i)}`);
+        }
+      }
+    }
+  }
+}
+
+// --- check 6: duplicate section headers ---
+for (const [h, n] of headerCount) {
+  if (n > 1) add("dup-header", `header appears ${n}× — "${h.trim().slice(0, 70)}"`);
+}
+
+// --- optional live probes ---
+if (process.argv.includes("--live")) {
+  try {
+    const { apiThrow } = await import("file:///C:/Users/Mose/.agents/skills/agent-principles/tools/gh-api.mjs");
+    // Post-merge era (v5): #591 and #602 are merged main; the logo branch and
+    // toolscan license are the live own-repo state.
+    const pr = await apiThrow("/repos/ix-infrastructure/Ix/pulls/591");
+    if (!pr.merged) add("live", "PR #591 not merged — §0 merge table stale");
+    else if (!String(pr.merge_commit_sha || "").startsWith("39d0734"))
+      add("live", `#591 merge commit unexpected: ${String(pr.merge_commit_sha || "?").slice(0, 7)} (dispatch says 39d0734…)`);
+    const p602 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/602");
+    if (!p602.merged) add("live", "PR #602 not merged — §0 merge table stale");
+    console.log(`live: #591 merged ${pr.merged_at} (${String(pr.merge_commit_sha).slice(0, 7)}) | #602 merged ${p602.merged_at}`);
+    const ts = await apiThrow("/repos/Alot1z/toolscan");
+    if (ts.license?.spdx_id !== "MIT") add("live", `toolscan license regressed: ${JSON.stringify(ts.license)}`);
+    // toolscan PR#1 (feat/agent-skill-package) was READYED and MERGED by the owner 2026-09-06T00:18:39Z — main advanced to the merge commit.
+    const pr1 = await apiThrow("/repos/Alot1z/toolscan/pulls/1");
+    if (!pr1.merged)
+      add("live", `toolscan PR#1 no longer merged (state ${pr1.state}, merged=${pr1.merged}) — expected post-merge state 2026-09-06T00:18:39Z`);
+    const tsRef = await apiThrow("/repos/Alot1z/toolscan/git/ref/heads/main");
+    if (tsRef.object.sha !== "86b0da0c475a7a46db7dceba7c2b57c9c014f688")
+      add("live", `toolscan main moved off the #1 merge commit 86b0da0c → ${tsRef.object.sha.slice(0, 10)} (merge landed 2026-09-06T00:18:39Z; prior pins a3e33771/4c0b2d11 superseded by the merge)`);
+    const br = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/feat/tui-logo-banner");
+    if (br.object.sha !== "2f9604772c19575ab9207138f6363523634dd44b") {
+      add("live", `fork logo branch moved off 2f96047 → ${br.object.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green fix head; prior 17d2da44 superseded by the test-budget commit)`);
+    }
+    // meta/logo-previews must exist at the regenerated (bar-free) preview head:
+    try {
+      const meta = await apiThrow("/repos/Alot1z/Ix-remap/git/ref/heads/meta/logo-previews");
+      if (meta.object.sha !== "7bd671325e0e1b539a43a8f3a6f86b98a96a14a2")
+        add("live", `meta/logo-previews moved off 7bd67132 → ${meta.object.sha.slice(0, 10)} (dispatch pins the regenerated bar-free preview PNGs the #605 body links)`);
+    } catch { add("live", "meta/logo-previews branch MISSING on the fork — #605 body preview URLs would 404"); }
+    const p604 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/604");
+    if (p604.state !== "closed") add("live", "PR #604 not closed — expected closed after the no-reviewer recreation (dispatch pins closed)");
+    const p605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605");
+    // #605 marked ready 2026-09-06 via the staged mechanics (owner ticked go, item 8) —
+    // the draft pin is retired; pin ready-state + the CI-green head.
+    if (p605.draft) add("live", "PR #605 is a draft again — marked ready 2026-09-06; investigate state regression");
+    if (p605.head.sha !== "2f9604772c19575ab9207138f6363523634dd44b")
+      add("live", `PR #605 head moved: ${p605.head.sha.slice(0, 10)} (dispatch pins 2f96047 — the CI-green head)`);
+    else console.log(`live: #605 ready ok (head ${p605.head.sha.slice(0, 7)})`);
+    const rr605 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/605/requested_reviewers");
+    const rrs = (rr605.users || []).map((u) => u.login);
+    // KB #6646: the code-owner request fires AT mark-ready and pending requests on a
+    // once-drafted PR are unremovable (GitHub bug #69208) — josephismikhail is the
+    // EXPECTED post-ready state; flag only absence or drift.
+    if (!rrs.includes("josephismikhail"))
+      add("live", `PR #605 requested reviewers = [${rrs.join(",")}] — expected [josephismikhail] (code-owner request fired at mark-ready, KB #6646; never attempt removal — GitHub bug #69208)`);
+    else console.log("live: #605 code-owner request josephismikhail present (KB #6646 expected; do not remove)");
+    // train PR #609: MERGED 2026-09-05 (main → 8c0e6b00) — pin merge state,
+    // not draft state (a merged PR keeps its historical review-request record,
+    // so the old draft pin false-fails forever after the merge).
+    const p609 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/609");
+    if (!p609.merged && p609.state !== "closed") {
+      add("live", "PR #609 expected merged (upstream merged it 2026-09-05) — state: " + p609.state);
+    }
+    // #610 + #608 were closed 2026-09-05 at the owner's call (superseded-by-process, KB #6658/#6653)
+    const p610 = await apiThrow("/repos/ix-infrastructure/Ix/pulls/610");
+    if (p610.state !== "closed") add("live", "PR #610 not closed — expected closed (owner closed it 2026-09-05 as superseded-by-process)");
+    const i608 = await apiThrow("/repos/ix-infrastructure/Ix/issues/608");
+    if (i608.state !== "closed") add("live", "Issue #608 not closed — expected closed with its PR (KB #6653, no orphan issues)");
+  } catch (e) {
+    add("live", `probe failed (treat as gate-missing signal, not truth): ${e.message.slice(0, 100)}`);
+  }
+}
+
+// --- report ---
+if (failures.length) {
+  console.error(`dispatch-check: FAIL (${failures.length})`);
+  for (const f of failures) console.error("  ✗ " + f);
+  process.exit(1);
+}
+console.log(`dispatch-check: ALL GREEN — ${sectionNums.size} sections, tombstones ${TOMBSTONES.length}/${TOMBSTONES.length}${process.argv.includes("--live") ? ", live probes ok" : ""}`);

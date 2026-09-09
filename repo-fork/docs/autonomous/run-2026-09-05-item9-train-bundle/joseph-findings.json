@@ -1,0 +1,190 @@
+{
+  "user": {
+    "login": "josephismikhail",
+    "name": "Joseph Mikhail",
+    "bio": "Co-founder @ Ix",
+    "blog": "josephmikhail.dev",
+    "company": "@ix-infrastructure ",
+    "location": "San Diego, CA",
+    "public_repos": 2,
+    "followers": 7,
+    "following": 4,
+    "created_at": "2019-10-16T00:12:52Z",
+    "html_url": "https://github.com/josephismikhail",
+    "type": "User"
+  },
+  "orgs": [],
+  "orgDetails": [],
+  "repos": [
+    {
+      "name": "josephismikhail/josephmikhail.dev",
+      "desc": "",
+      "lang": "HTML",
+      "pushed": "2026-08-11T18:14:56Z",
+      "stars": 0,
+      "archived": false
+    },
+    {
+      "name": "josephismikhail/claudex",
+      "desc": "Windows-first Claude Code translation proxy with stable terminal sessions and mixed-provider model routing.",
+      "lang": "MDX",
+      "pushed": "2026-07-16T14:00:53Z",
+      "stars": 0,
+      "archived": false
+    }
+  ],
+  "events": [
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T16:48:32Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T13:18:49Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T12:54:09Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-05T01:02:35Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/parse-pool-worker-segfaul"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T13:33:35Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PullRequestEvent",
+      "created": "2026-09-05T04:55:23Z",
+      "repo": "ix-infrastructure/Ix",
+      "action": "merged",
+      "pull": "#597 undefined"
+    },
+    {
+      "type": "PullRequestEvent",
+      "created": "2026-09-05T04:54:49Z",
+      "repo": "ix-infrastructure/Ix",
+      "action": "merged",
+      "pull": "#598 undefined"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-04T14:48:51Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/parse-pool-worker-segfaul"
+    },
+    {
+      "type": "CreateEvent",
+      "created": "2026-09-04T04:31:59Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "fix/parse-pool-worker-segfault"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-04T01:01:40Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/main"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T23:52:42Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T00:03:22Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/567-watch-dedup-temp-dir"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-04T00:12:52Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T20:57:59Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T20:53:46Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T20:31:07Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T01:27:07Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T01:33:04Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-02T20:45:24Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/560-commit-failure-breake"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T18:36:09Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-02T23:44:26Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/trivy-fast-uri"
+    },
+    {
+      "type": "CreateEvent",
+      "created": "2026-09-02T22:45:11Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "fix/trivy-fast-uri"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-03T17:13:05Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/568-stitch-single-flight"
+    },
+    {
+      "type": "PushEvent",
+      "created": "2026-09-02T21:28:26Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "refs/heads/fix/567-watch-dedup-temp-dir"
+    },
+    {
+      "type": "CreateEvent",
+      "created": "2026-09-02T18:05:15Z",
+      "repo": "ix-infrastructure/Ix",
+      "ref": "fix/567-watch-dedup-temp-dir"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+docs(install): correct README install-surface claims for the harness registry

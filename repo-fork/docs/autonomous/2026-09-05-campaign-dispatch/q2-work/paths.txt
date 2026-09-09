@@ -1,0 +1,1 @@
+docs/harness-detector-design.md

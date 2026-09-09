@@ -1,0 +1,13 @@
+docs(api): document release_version on /v1/health
+
+The backend sends release_version on every /v1/health response but the
+OpenAPI schema and the README prose/table omitted it, so a client reading
+the reference would never learn the field exists. Adds the property to the
+HealthResponse schema and updates the endpoint row + response example,
+with the same env-var-not-proof caveat the client type carries.
+
+Closes #599.
+
+The commit-time parity gate added by #587 checks schema NAMES against
+types.ts (HealthResponse exists on both sides), so this property-level
+drift passed it — a property-level comparison is the follow-up class.

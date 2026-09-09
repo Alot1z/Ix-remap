@@ -1,0 +1,487 @@
+{
+  "generated": "2026-09-05T01:49:29.033Z",
+  "threads": [
+    {
+      "number": 368,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(skill): ship the ix agent skill and the HTTP API reference",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 1,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-08-10T03:17:29Z",
+        "body": "Pushed the fixes to this branch rather than sending you round another loop — everything below is on `0c9087c`, and the original commit is untouched underneath it so nothing you wrote is lost.\n\n**Scoped it to the two pieces that belong in this repo:** the `ix` skill and the API reference. The API doc"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 371,
+      "kind": "issue",
+      "state": "closed",
+      "title": "ix patches is registered nowhere — registerPatchesCommand is dead code",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 390,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(cli): register the patches command instead of stubbing it",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 422,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(mcp): enrich Ix MCP tools with structured outputs, semantic annotations, and stronger agent interoperability",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-08-14T01:53:55Z",
+        "body": "Second pass found one more, fixed in `6313fbe`.\n\n### `structuredContent` was attached to tools with no `outputSchema`\n\n`withStructuredContent` sits inside `runJson`, and `runJson` serves **five** tools, not two — `ix_map`, `ix_ingest`, and the three Pro tools. So `ix_briefing` and `ix_decisions` wer"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 423,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(agent): unify Ix context, provenance, and investigation workflows for agents",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-08-14T01:54:09Z",
+        "body": "Second pass, this time on the bundle logic rather than the persistence paths. Found one correctness bug, fixed in `06471f6`.\n\n### Every entity got the target's staleness\n\n```js\nconst stale = facts.stale;          // the TARGET's staleness\n...\nentities.push({ id: node.id, ..., stale });   // stamped "
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 443,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(ingest): resolve renamed type imports, with a default-import guard",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 1,
+      "lastComment": {
+        "by": "Alot1z",
+        "at": "2026-08-16T01:02:33Z",
+        "body": "Found and independently verified an additional ingest correctness regression in the current #443 implementation: a renamed import (`import { Base as LocalBase } from \"./m\"`) falls back to any symbol in the provider file — including a class method — so `extends LocalBase` emits a confident wrong EXTE"
+      },
+      "lastByMe": true
+    },
+    {
+      "number": 445,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(ingest): resolve tsconfig module mappings, with authority + security fixes",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "Alot1z",
+        "at": "2026-08-16T01:02:34Z",
+        "body": "Found and independently verified an additional ingest correctness regression in the current #445 implementation: a configured module mapping names the module authoritatively, but the renamed-import fallback still binds `import { Base as LocalBase } from \"@core\"` to a class method `W.Base` — a member"
+      },
+      "lastByMe": true
+    },
+    {
+      "number": 446,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(php): resolve imports by namespace, with clause-scoping and DoS fixes",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 5,
+      "lastComment": {
+        "by": "Alot1z",
+        "at": "2026-08-16T01:02:32Z",
+        "body": "Found and independently verified one more PHP resolution regression in the current #446 implementation: `phpTypeFqcn` drops any entity carrying a `container`, and `findEnclosing`'s inclusive line ranges falsely nest two same-line sibling declarations — so `<?php namespace Vendor\\Package; class A {} "
+      },
+      "lastByMe": true
+    },
+    {
+      "number": 455,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(context): validate saved investigation state on read, not just on write",
+      "author": "josephismikhail",
+      "authoredByMe": false,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "josephismikhail",
+        "at": "2026-08-19T16:56:14Z",
+        "body": "Ran a code review over this branch and fixed what it found. Twelve findings; every one verified against the real schema before acting on it, since several turned on what zod actually accepts.\n\nThe headline: **the read-side check was layered on a schema too loose to carry it.** `contextBundleSchema` "
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 458,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(context): surface effective/requested/saved budgets on `ix context --diff`",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 3,
+      "lastComment": {
+        "by": "Alot1z",
+        "at": "2026-09-04T08:25:37Z",
+        "body": "Acknowledged and agreed — #464 is the better home for `58aea40` now that the llm record stream exists to carry the budget record, and stacking on #456 is what the `--format llm` half needed. Noted on the `parseRequestedBudgets` point: the code was right and the comment was wrong — values that are re"
+      },
+      "lastByMe": true
+    },
+    {
+      "number": 462,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(cli): reject contradictory mode/output flag combinations",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": true
+    },
+    {
+      "number": 463,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(context): add `ix context --list` for discovery",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 464,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(context): surface effective/requested/saved budgets on `ix context --diff`",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 491,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(context): make sanitizeId injective for astral ids, with coverage",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 492,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(view): return JSON 404 for unimplemented __ix routes instead of SPA HTML",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    },
+    {
+      "number": 547,
+      "kind": "PR",
+      "state": "open",
+      "title": "fix(cli): fail unresolved graph commands",
+      "author": "Hiro-Chiba",
+      "authoredByMe": false,
+      "commentCount": 11,
+      "lastComment": {
+        "by": "Hiro-Chiba",
+        "at": "2026-09-04T19:46:22Z",
+        "body": "Thanks. Agreed. I updated `reportResolutionFailure` so an ambiguous graph operation, including an out-of-range `--pick`, exits 1 while preserving the `ambiguous_target` candidates and `pick_out_of_range` diagnostic. `locate` remains unchanged under #559. The docs and PR body now state this contract,"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 571,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(ingest): stop ix map piling stitch queries onto a backend that is still running the last one",
+      "author": "josephismikhail",
+      "authoredByMe": false,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-03T00:03:53Z",
+        "body": "Second pass, still at `ab4eb5d`. Eight further findings that survived checking, and two I am flagging as **rejected** so nobody spends time on them.\n\n### Rejected\n\n- **`stitchKey` and default ports.** The concern is that `https://ix.example` and `https://ix.example:443` would hash to different locks"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 572,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(ingest): stop turning one failed bulk commit into one doomed request per patch",
+      "author": "josephismikhail",
+      "authoredByMe": false,
+      "commentCount": 1,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-03T00:06:06Z",
+        "body": "Reviewed at `ccab3c4`. This one is in better shape than its sibling — I went looking for the same residue I found on #571 and mostly did not find it. Round 4 removed `isCommitLockConflict` cleanly (`COMMIT_LOCK_CONFLICT_PATTERNS` is still live in the retry list, nothing orphaned), and the integratio"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 578,
+      "kind": "PR",
+      "state": "open",
+      "title": "docs: a complete per-command flag reference, generated from the CLI itself",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 2,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-03T18:49:19Z",
+        "body": "Pushed `4b8523d`: a section for **`ix help [topic]`**, which was the one registered command this reference missed.\n\nIt surfaced while adding the command-coverage direction to #584's parity gate (pushed there as `b7cdb63`). With that direction in place, the gate reports exactly one gap against this f"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 584,
+      "kind": "PR",
+      "state": "open",
+      "title": "ci(parity): gate registered flags against the flag reference (#576)",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 7,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-04T17:53:19Z",
+        "body": "The lost commits are back and every finding I raised is fixed. Re-verified on `6e2d3ba`, from a built `ix-cli/`.\n\n## The four parsing findings\n\n| | before | on `6e2d3ba` |\n|---|---|---|\n| `--doc` with no value | inactive notice, **exit 0** | `error: option '--doc <value>' argument missing`, exit 1 |"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 587,
+      "kind": "PR",
+      "state": "open",
+      "title": "docs: API-reference parity gate (four surfaces)",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 6,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-04T17:51:48Z",
+        "body": "`adadd96` fixes the hole I reported — verified against the real gate on this head, not just by reading the regex:\n\n```\nprobe: this.request<unknown>(\"/v1/bogus-probe\");\n   exit=1  unclassified client call verb: this.request(...) near line 599 — extend check-api-parity\n```\n\nThat was exit 0 before. Cle"
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 590,
+      "kind": "PR",
+      "state": "open",
+      "title": "ci: fail on dead markdown links",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 5,
+      "lastComment": {
+        "by": "KageBinary",
+        "at": "2026-09-04T17:55:27Z",
+        "body": "`4812866` is back on the branch and it does what the commit says. Re-verified on that head by running the gate, not by reading it.\n\n## `proseOf` is gone, and the coverage more than doubled\n\n```\n$ grep -n proseOf ix-cli/scripts/check-links.mjs\n(no matches)\n\n$ node ix-cli/scripts/check-links.mjs\nwarn "
+      },
+      "lastByMe": false
+    },
+    {
+      "number": 591,
+      "kind": "PR",
+      "state": "open",
+      "title": "feat(install): drive harness presence from toolscan discovery",
+      "author": "Alot1z",
+      "authoredByMe": true,
+      "commentCount": 10,
+      "lastComment": {
+        "by": "Alot1z",
+        "at": "2026-09-05T01:42:43Z",
+        "body": "One measured heads-up for this PR's CI job, filed here because it's your review that adds it: I ran `check-api-parity.mjs` against current `main` (main's own `api.ts`, `types.ts`, `docs/api/*`) and it exits 1 with two pre-existing gaps:\n\n```\nundocumented endpoint: POST /v1/decisions\nstale doc entry:"
+      },
+      "lastByMe": true
+    },
+    {
+      "number": 592,
+      "kind": "PR",
+      "state": "open",
+      "title": "fix(test): stop the ignore assertion blaming .gitignore when git will not answer",
+      "author": "KageBinary",
+      "authoredByMe": false,
+      "commentCount": 0,
+      "lastComment": null,
+      "lastByMe": false
+    }
+  ],
+  "involvesOnly": [
+    {
+      "number": 602,
+      "kind": "PR",
+      "state": "open",
+      "title": "docs(api): document release_version on /v1/health",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 601,
+      "kind": "PR",
+      "state": "open",
+      "title": "fix(ix-cli): stop ambient home-dir markers from vetoing multi-repo detection",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 600,
+      "kind": "PR",
+      "state": "open",
+      "title": "docs(api): document release_version on /v1/health (#599)",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 599,
+      "kind": "issue",
+      "state": "open",
+      "title": "docs: /v1/health response omits release_version from the OpenAPI spec",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 589,
+      "kind": "PR",
+      "state": "open",
+      "title": "docs(readme): point the Docs link at the in-repo docs",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 588,
+      "kind": "issue",
+      "state": "open",
+      "title": "docs(readme): the Docs nav link points at a 404",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 586,
+      "kind": "issue",
+      "state": "open",
+      "title": "docs/api reference has drifted from the client; add a committed parity gate and a harness-agnostic skill install",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 576,
+      "kind": "issue",
+      "state": "open",
+      "title": "RFC: add a docs-parity check to CI so a registered command or flag cannot merge without a doc mention",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 575,
+      "kind": "issue",
+      "state": "open",
+      "title": "docs: flag-level documentation covers 26/77 implemented flags — request a per-command flags pass and a committed parity check",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 574,
+      "kind": "issue",
+      "state": "open",
+      "title": "CONTRIBUTING: Backend Development section instructs contributors to clone a repo that external contributors cannot access",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 573,
+      "kind": "issue",
+      "state": "open",
+      "title": "docs: ix savings has no command documentation — usage, flags, and llm output are undocumented",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 474,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(view): prevent __ix routes from serving HTML for API requests",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 472,
+      "kind": "PR",
+      "state": "closed",
+      "title": "test(cli): comprehensive coverage for mode/output flag conflict detection",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 471,
+      "kind": "PR",
+      "state": "closed",
+      "title": "test(cli): comprehensive coverage for mode/output flag conflict detection",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 469,
+      "kind": "PR",
+      "state": "closed",
+      "title": "test(cli): comprehensive coverage for mode/output flag conflict detection",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 457,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(context): add `ix context --list` for discovery",
+      "author": "Alot1z",
+      "mentionsMe": true
+    },
+    {
+      "number": 456,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(context): emit llm-format records for `ix context --diff`",
+      "author": "Alot1z",
+      "mentionsMe": true
+    },
+    {
+      "number": 448,
+      "kind": "PR",
+      "state": "closed",
+      "title": "fix(php): capture grouped use imports",
+      "author": "Alot1z",
+      "mentionsMe": false
+    },
+    {
+      "number": 393,
+      "kind": "PR",
+      "state": "closed",
+      "title": "feat(view): real /__ix/remap endpoint with loopback guard; fix WSL bootstrap",
+      "author": "Alot1z",
+      "mentionsMe": false
+    }
+  ]
+}

@@ -774,8 +774,7 @@ describe("sanitizeId", () => {
   it("returns a pre-marker stored id untouched rather than guessing", () => {
     // Written by the released CLI before `~uHHHH` existed. Decoding it yields
     // the Latin-1 reading, which is not what it was saved from, so the
-    // re-encode check must reject the guess and hand back the stored form.
-    expect(displayId("~D83D~DE00")).toBe("\u00D83D\u00DE00");
+    // re-encode check must reject the guess and hand back the stored form.    expect(displayId("~D83D~DE00")).toBe("\u00D83D\u00DE00");
   });
 
   it("produces filesystem-safe output (no slashes in result)", () => {

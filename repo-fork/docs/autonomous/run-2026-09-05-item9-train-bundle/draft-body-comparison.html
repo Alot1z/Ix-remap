@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Draft bodies — train speaks with one voice</title>
+<style>
+ body{background:#0b1120;color:#c9d6ee;font-family:'Segoe UI',system-ui,sans-serif;margin:0;padding:2rem 1.5rem}
+ h1{font-size:1.15rem;margin:0 0 .25rem} .sub{color:#7d93bd;font-size:.8rem;margin-bottom:1.2rem}
+ .verdict{background:#0e1830;border:1px solid #243b6b;border-radius:10px;padding:.8rem 1rem;margin-bottom:1.4rem;font-size:.85rem;line-height:1.5}
+ .verdict b{color:#7fd4ff}
+ .cols{display:flex;gap:1.2rem;align-items:flex-start;flex-wrap:wrap}
+ .col{flex:1 1 46%;min-width:420px;background:#0e1830;border:1px solid #243b6b;border-radius:10px;overflow:hidden}
+ .colhead{padding:.55rem .9rem;border-bottom:1px solid #243b6b}
+ .colhead .n{font-size:.9rem;font-weight:600;color:#c9d6ee} .colhead .t{font-size:.72rem;color:#7fd4ff}
+ .colhead .s{font-size:.68rem;color:#5f7ec2}
+ .body{padding:.9rem 1.1rem 1.2rem;font-size:.85rem;line-height:1.55}
+ .body h1{font-size:1rem;margin:.4rem 0 .3rem} .body h2{font-size:.88rem;color:#9fc1ff;margin:1rem 0 .3rem;border-bottom:1px solid #1a2f6e;padding-bottom:.15rem}
+ .body h3{font-size:.82rem;color:#b6ccff;margin:.8rem 0 .25rem}
+ .body p{margin:.35rem 0} .body hr{border:none;border-top:1px dashed #2a4a8e;margin:.7rem 0}
+ .body ul{margin:.3rem 0;padding-left:1.2rem} .body li{margin:.22rem 0}
+ .body code{background:#050a1e;border:1px solid #1a2f6e;border-radius:4px;padding:.05rem .3rem;font-family:'Cascadia Mono',Consolas,monospace;font-size:.78em;color:#7fd4ff}
+ .body pre{background:#050a1e;border:1px solid #1a2f6e;border-radius:6px;padding:.5rem .7rem;overflow:auto;font-family:'Cascadia Mono',Consolas,monospace;font-size:.75em;color:#7fd4ff;white-space:pre}
+ .shared{outline:1px dashed #3a6bd0;outline-offset:3px}
+ .foot{margin-top:1.2rem;color:#5f7ec2;font-size:.72rem}
+</style></head><body>
+<h1>Train draft bodies, side by side — do they speak with one voice?</h1>
+<div class="sub">Rendered as reviewers will see them (markdown → review view) · local comparison, zero live writes · 2026-09-05</div>
+<div class="verdict">
+<b>Shared voice:</b> both open with the identical <b>Status: DRAFT — part of a larger train</b> header naming the same coordinated set, and both carry the identical verbatim feedback line:
+<code>"Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict."</code>
+<br><b>One intentional variance</b> (per-PR accuracy, same sentence shape): the tail line differs only in its subject — <i>#605: "The content below is accurate; the head may still move."</i> vs <i>installer: "The change below is accurate and complete; the branch may still move."</i> — deliberately scoped to what each PR ships (content vs a change set). Verdict: <b>one voice.</b>
+</div>
+<div class="cols">
+<div class="col"><div class="colhead"><div class="n">#605 logo banner — LIVE body</div><div class="t">LIVE · ix-infrastructure/Ix #605 · draft-from-open · reviewers none</div><div class="s">live API (2026-09-05), byte-equal to .logo-pr-body-v2.md</div></div><div class="body"><h2>Status: DRAFT — part of a larger train</h2>
+<p>This pull request is intentionally a <strong>draft</strong> and one component of a coordinated set the author is landing together (terminal logo banner · installer polish from the merged-surface audit · toolscan output-contract hardening). It will be marked ready only when every part of the train is green and the whole set is released at once.</p>
+<p>Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict. The content below is accurate; the head may still move.</p>
+<hr>
+<h2>What this ships</h2>
+<p>The one-time setup notice (<code>ix</code> first run in a workspace) prints the Ix logo as a terminal banner instead of the plain text heading.</p>
+<ul><li><code>scripts/render-logo.mjs</code> renders <code>assets/logo.png</code> at print time. Zero dependencies: PNG chunk decode → inflate → unfilter → coverage-thresholded supersampling → flat 5-tone snap → half-block output. The PNG is the only maintained art; the terminal render is derived from it on every run.</li><li>Truecolor with ANSI-256 and ASCII fallbacks. <code>--color auto</code> honors <code>NO_COLOR</code>, <code>TERM=dumb</code>, <code>FORCE_COLOR</code>; the no-color path emits zero escape bytes.</li><li><code>--bg none</code> paints only the logo's own pixels (unbacked <code>▀</code>/<code>▄</code> half-blocks), so the mark reads cleanly on light terminal themes. <code>--bg brand</code> (default) keeps the current backdrop. <code>--json</code> reports <code>bg</code> honestly.</li><li>Absent-safe: a layout without the renderer or the asset falls back to the plain text heading — the banner is decoration, never load-bearing. stderr-only, so <code>--format json|llm</code> output stays clean.</li><li>Golden fixtures in <code>output-samples/</code> (truecolor/256/ascii × brand/none) with output-stability pins.</li><li><code>assets/logo.png</code> already exists on main — no binary asset is added, only the renderer, wiring, tests, and goldens.</li><li>Rebased onto main at the last branch update (<code>39d0734</code>); main's workspace-canonicalization change in <code>bootstrap.ts</code> is preserved (verified on a fresh clone of main). Upstream main has since advanced to <code>e8ab1926</code> (the #547/#559 exit-code wave merged, 2026-09-05); a final rebase onto that head runs before this PR is marked ready.</li></ul>
+<h2>Tests</h2>
+<ul><li>Focused suite: 21 pins in <code>bootstrap-notice.test.ts</code> — stderr-not-stdout, absent-safe renderer/asset, NO_COLOR zero-escapes, exit-code contracts, <code>--bg none</code> invariants (backdrop constant never appears as a background; library ≡ CLI byte-for-byte; JSON honesty), and byte-identity against the goldens.</li><li>Mutation-checked locally: breaking the no-color contract turns the NO_COLOR pin red; disabling the <code>--bg none</code> emission path turns its pin red. Both restored green.</li><li>Full <code>ix-cli</code> suite on the merged head (Windows): 95 files, 1704 passed / 21 skipped; <code>tsc --noEmit</code> clean.</li></ul>
+<h2>CI state (updated after the hermeticity fix)</h2>
+<p>Head <code>0869a13</code>: <strong>all checks green except the single documented CodeQL infra-race run</strong> (<code>101317167251</code>, started pre-recreation) — the six originally failing jobs (<code>Test</code> × ubuntu/macos × node 22/24, <code>CI Passed</code>) were fixed by the hermeticity change below and have passed on the head since the recreation re-ran the suite. The fix made the banner pins hermetic across runners — the half-block pin now pins its env (runners can resolve the ascii fallback otherwise), and the two lib≡CLI byte-identity pins got a realistic budget for the in-process full-PNG decode under v8 coverage (measured ~0.7 s → ~6.8 s with coverage instrumentation; assertions unchanged).</p>
+<p>One residual, not a finding: the same documented <strong>CodeQL</strong> infra race (run <code>101317167251</code>, "The file may have changed since it was checked" — it started before the recreation, and the branch head moved during analysis). It needs a maintainer-side re-run (admin rights; the author's token is contributor-only) or clears on the rebase onto current main.</p>
+<h2>Notes</h2>
+<ul><li>The aesthetic approach (rendering a repo asset as a first-run terminal banner) takes some inspiration from skills.sh (vercel-labs/skills); the implementation here is original zero-dependency code. Per the author's convention, no attribution appears in any committed file.</li><li>Part of a train with the installer README-claims fixes and toolscan contract hardening; this PR will be marked ready together with the rest.</li></ul></div></div>
+<div class="col"><div class="colhead"><div class="n">Installer README-fix — held draft kit body</div><div class="t">DRAFT KIT · opens only at item 9 with the owner's go</div><div class="s">installer-pr-body.md (item-2 run-dir)</div></div><div class="body"><h2>Status: DRAFT — part of a larger train</h2>
+<p>This pull request is intentionally a <strong>draft</strong> and one component of a coordinated set the author is landing together (terminal logo banner · installer polish from the merged-surface audit · toolscan output-contract hardening). It will be marked ready only when every part of the train is green and the whole set is released at once.</p>
+<p>Feedback and suggestions are welcome at any stage. Each point is addressed on this branch — folded in or answered — and merged without conflict. The change below is accurate and complete; the branch may still move.</p>
+<hr>
+<h2>What this ships</h2>
+<p>A <strong>docs-only correction</strong> of the README's install surface, from an audit of the merged surface against what the registry actually does (findings re-derived line-by-line from current main). It changes no product code and no registry entry — the harness registry (<code>ix-cli/scripts/skill-harnesses.mjs</code>) is correct as merged:</p>
+<ul><li><strong>Native-loading overclaim trimmed</strong> — the README's "Gemini CLI … and more" listing is removed. The registry is exactly four harness ids (<code>claude</code>, <code>agents</code>, <code>codex</code>, <code>cursor</code>); Gemini has no skills convention and is deliberately absent, so it cannot load natively.</li><li><strong>Deploy targets corrected</strong> — Gemini's <code>~/.gemini/skills</code> is removed (not a deploy target of this installer), and Cursor is corrected to its real destination <code>~/.cursor/skills-cursor</code> (the path the registry and the CI both pin).</li><li><strong>Documented example fixed</strong> — <code>bash scripts/install-skill.sh claude gemini</code> exits 1 (<code>error: unknown harness id 'gemini'</code>); the example now uses two valid registry ids: <code>bash scripts/install-skill.sh claude agents</code>.</li></ul>
+<h2>Scope (explicit)</h2>
+<ul><li>README.md only — one file, no registry change, no product code, no CI surface.</li><li>The gemini exclusion stays deliberate (deliberate absence is data, not an omission to fill).</li><li>The refuse-to-destroy guard is untouched; its satisfiability-by-a-foreign-<code>name: ix</code>-skill point is a risk-class note for the maintainer's assessment, not a docs fix.</li><li>The merged toolscan seam paragraph and link are upstream's own accepted text — untouched.</li><li>Nothing is promised beyond what this PR ships.</li></ul>
+<h2>Companion</h2>
+<p>This draft is part of the same coordinated set as #605 (terminal logo banner) and ships with it; both open as drafts and are marked ready together at the train release.</p>
+<h2>Validation</h2>
+<ul><li>The <code>claude gemini</code> example was run against the merged registry: exits 1 with <code>error: unknown harness id 'gemini'</code>; the CI's own negative pin asserts the same.</li><li>The corrected example and target paths match the registry's real ids and destinations (<code>~/.cursor/skills-cursor</code> pinned by the harness-install smoke jobs).</li><li>Diff is exactly README.md; no tests are affected (docs-only), but the harness-install smoke jobs still run on this branch and must stay green.</li></ul></div></div>
+</div>
+<div class="foot">Sources: left = live GET /pulls/605 (byte-equal to <code>.logo-pr-body-v2.md</code>); right = <code>run-2026-09-05-item2-installer-audit/installer-pr-body.md</code>. Neither body was modified to produce this page.</div>
+</body></html>

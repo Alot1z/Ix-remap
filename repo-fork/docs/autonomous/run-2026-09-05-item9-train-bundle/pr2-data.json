@@ -1,0 +1,29 @@
+{
+  "pr": {
+    "number": 604,
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "node_id": "PR_kwDORdC75M8AAAABCUqC4w",
+    "requested_reviewers": [
+      "josephismikhail"
+    ],
+    "head": "0869a13761",
+    "html_url": "https://github.com/ix-infrastructure/Ix/pull/604",
+    "updated_at": "2026-09-05T13:57:27Z"
+  },
+  "events": [
+    {
+      "event": "review_requested",
+      "actor": "Alot1z",
+      "reviewer": "josephismikhail",
+      "created_at": "2026-09-05T13:21:18Z"
+    }
+  ],
+  "codeowners": [
+    "* @josephismikhail",
+    "/.github/ @josephismikhail",
+    "/scripts/ @josephismikhail",
+    "/docker-compose.standalone.yml @josephismikhail"
+  ]
+}
