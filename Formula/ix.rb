@@ -1,8 +1,8 @@
 class Ix < Formula
   desc "Persistent memory for LLM systems — CLI for the Ix knowledge graph"
   homepage "https://github.com/ix-infrastructure/Ix"
-  url "https://github.com/ix-infrastructure/Ix/archive/refs/tags/v0.10.5.tar.gz"
-  sha256 "68dde32b8d6ee5f58971a1559c1e7b1ff74b4d41d4e739c4d9b7543f895cbc51"
+  url "https://github.com/ix-infrastructure/Ix/archive/refs/tags/v0.10.8.tar.gz"
+  sha256 "68eaec38dd23e0119ae237cae799fd004c719caf4e27b30a531ed925fe51fbf7"
   license "Apache-2.0"
   head "https://github.com/ix-infrastructure/Ix.git", branch: "main"
 
@@ -29,6 +29,21 @@ class Ix < Formula
 
       # Install the compiled CLI and its dependencies
       libexec.install "dist", "node_modules", "package.json"
+
+      # ...and the banner inputs, which are part of the CLI, not extras.
+      # `banner.js` resolves them as join(dirname(import.meta.url), "..", "..")
+      # -- i.e. libexec -- so without these the setup notice silently falls back
+      # to the plain text heading on every Homebrew install. Silently is the
+      # problem: renderBanner() is absent-safe by design and returns null rather
+      # than failing, so a missing input looks exactly like success.
+      #
+      # Ix#605 shipped this for the npm tarball and the release staging and
+      # missed Homebrew, which is a third delivery path with its own layout.
+      # Copied file-by-file rather than as whole directories: ix-cli/scripts/
+      # also holds the CI parity checkers and the core-ingestion build script,
+      # none of which belong in an installed prefix.
+      (libexec/"scripts").install "scripts/render-logo.mjs", "scripts/render-logo.d.mts"
+      (libexec/"assets").install "assets/logo.png"
 
       # Create a wrapper script that invokes node with the correct path
       (bin/"ix").write <<~EOS

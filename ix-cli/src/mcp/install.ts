@@ -10,6 +10,7 @@ import {
   type McpHost,
   type Registration,
 } from "./hosts.js";
+import { discoverTools, type ToolDiscovery } from "./discovery.js";
 import { IX_MCP_OSS_TOOL_NAMES, IX_MCP_PRO_TOOL_NAMES } from "./server.js";
 import { detectPro } from "./runner.js";
 
@@ -24,11 +25,27 @@ export type Outcome =
   /** Doctor only: host is present and the name is free, but nothing points at us. */
   | "not-registered"
   /** Doctor only: ours, but the launcher path it records is gone. */
-  | "stale";
+  | "stale"
+  /** Install + doctor: the host is present but its registration could not be
+   * read, so nothing was learned about the name. Never counted as a conflict:
+   * a conflict means a *parsed* foreign registration for `ix-memory`; here
+   * nothing was parsed. The name is still treated as occupied (never written
+   * without `--force`) — this changes only what the report calls it. */
+  | "unreadable";
+
+/** Which probe decided a host's presence. */
+type DetectionVia = "toolscan" | "path" | "config-dir" | "none";
 
 export interface HostReport extends HostStatus {
   outcome: Outcome;
   target: string;
+  /**
+   * Which probe decided presence: toolscan's scan, the PATH probe, a config
+   * directory, or `none` when the host is absent. Makes the toolscan seam
+   * auditable: a host toolscan found reads `toolscan` even when its CLI also
+   * happens to be on PATH.
+   */
+  detectedVia: DetectionVia;
   /** Why it was skipped, or how it failed. */
   note?: string;
 }
@@ -53,6 +70,11 @@ export interface InstallOptions {
   dryRun?: boolean;
   /** Replace a name held by something else. Off by default: never clobber. */
   force?: boolean;
+  /**
+   * Tool discovery (toolscan when available, embedded checks otherwise).
+   * Injectable so tests can feed a fixed discovery.
+   */
+  discover?: () => Promise<ToolDiscovery>;
 }
 
 /**
@@ -124,6 +146,9 @@ function outcomeFor(registration: Registration, force: boolean): Exclude<Outcome
   // Already ours, just pointing at a launcher that no longer exists. Rewriting
   // it is the repair, and it needs no --force: nothing of the user's is at risk.
   if (registration === "stale") return null;
+  // Occupied but unreadable: nothing was parsed, so this is not a conflict —
+  // but the name is still occupied and must not be written without --force.
+  if (registration === "unknown") return force ? null : "unreadable";
   return force ? null : "conflict";
 }
 
@@ -146,9 +171,57 @@ function selectHosts(all: McpHost[], only?: string[]): McpHost[] {
   return all.filter((host) => only.includes(host.id));
 }
 
-/** Whether the host is present. Falls back to the PATH probe. */
-async function hostInstalled(host: McpHost): Promise<boolean> {
-  return host.detectInstalled ? host.detectInstalled() : isOnPath(host.bin);
+/**
+ * Whether the host is present, and which probe decided.
+ *
+ * The toolscan seam only ever adds evidence: a harness whose CLI toolscan
+ * found is present no matter what the embedded probe says. It never overrides
+ * a negative — a config-dir host (cursor, vscode, opencode) is present with
+ * no CLI on PATH, and toolscan's bounded scan can truncate — so the embedded
+ * check still runs whenever toolscan does not name the bin.
+ *
+ * Probe order is also the honesty order for `detectedVia`: PATH is checked
+ * before the config-dir probe, so a host whose CLI resolves on PATH is
+ * reported as found *on PATH* rather than misattributed to its config
+ * directory (which cursor/vscode/opencode's combined check would otherwise
+ * claim).
+ */
+async function hostInstalled(
+  host: McpHost,
+  discovery: ToolDiscovery,
+): Promise<{ installed: boolean; via: DetectionVia }> {
+  // A toolscan entry must carry the path that makes its verdict executable:
+  // `inspect`/`register` run whatever `paths` names for an off-PATH harness,
+  // so a name-only entry (truncated scan) that flips presence here would fall
+  // through to a bare-name PATH exec that ENOENTs into a false `conflict`.
+  // Requiring the path degrades such entries to the embedded probes instead
+  // of inventing a presence toolscan did not actually establish.
+  if (
+    discovery.names.has(host.bin.toLowerCase()) &&
+    discovery.paths.has(host.bin.toLowerCase())
+  ) {
+    return { installed: true, via: "toolscan" };
+  }
+  if (await isOnPath(host.bin)) return { installed: true, via: "path" };
+  if (host.detectInstalled) {
+    return (await host.detectInstalled())
+      ? { installed: true, via: "config-dir" }
+      : { installed: false, via: "none" };
+  }
+  return { installed: false, via: "none" };
+}
+
+/**
+ * The absolute CLI path toolscan found for a host, if any.
+ *
+ * Without this, a harness whose CLI is installed off PATH (the seam's own
+ * motivating case) reads as an unreadable registration — `unknown`, which
+ * `install` reports as a conflict and `--force` turns into a failed
+ * registration. Toolscan's scan covers the install roots beyond PATH, so its
+ * reported path is exactly the command `inspect`/`register` must execute.
+ */
+function toolscanBin(host: McpHost, discovery: ToolDiscovery): string | undefined {
+  return discovery.paths.get(host.bin.toLowerCase());
 }
 
 function noteFor(registration: Registration, detail?: string): string | undefined {
@@ -170,35 +243,52 @@ function noteFor(registration: Registration, detail?: string): string | undefine
 
 export async function runInstall(options: InstallOptions = {}): Promise<InstallReport> {
   const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
 
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
+    const presence = await hostInstalled(host, discovery);
 
-    if (!(await hostInstalled(host))) {
-      reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
+    if (!presence.installed) {
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: false,
+        registration: "none",
+        outcome: "not-installed",
+      });
       continue;
     }
 
-    const { registration, detail } = await host.inspect();
+    const execBin = toolscanBin(host, discovery);
+    const { registration, detail } = await host.inspect(execBin);
     const blocked = outcomeFor(registration, options.force === true);
     if (blocked) {
-      reports.push({ ...base, installed: true, registration, outcome: blocked, note: noteFor(registration, detail) });
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: true,
+        registration,
+        outcome: blocked,
+        note: noteFor(registration, detail),
+      });
       continue;
     }
 
     if (options.dryRun) {
-      reports.push({ ...base, installed: true, registration, outcome: "would-register" });
+      reports.push({ ...base, detectedVia: presence.via, installed: true, registration, outcome: "would-register" });
       continue;
     }
 
     try {
-      await host.register();
-      reports.push({ ...base, installed: true, registration, outcome: "registered" });
+      await host.register(execBin);
+      reports.push({ ...base, detectedVia: presence.via, installed: true, registration, outcome: "registered" });
     } catch (error) {
       reports.push({
         ...base,
+        detectedVia: presence.via,
         installed: true,
         registration,
         outcome: "failed",
@@ -220,22 +310,33 @@ const DOCTOR_OUTCOME: Record<Registration, Outcome> = {
   none: "not-registered",
   stale: "stale",
   other: "conflict",
-  unknown: "conflict",
+  unknown: "unreadable",
 };
 
-export async function runDoctor(options: { hosts?: McpHost[]; only?: string[] } = {}): Promise<DoctorReport> {
+export async function runDoctor(
+  options: { hosts?: McpHost[]; only?: string[]; discover?: () => Promise<ToolDiscovery> } = {},
+): Promise<DoctorReport> {
   const hosts = selectHosts(options.hosts ?? createHosts(writeJsonConfig), options.only);
+  const discovery = await (options.discover ?? discoverTools)();
 
   const reports: HostReport[] = [];
   for (const host of hosts) {
     const base = { id: host.id, label: host.label, target: host.target };
-    if (!(await hostInstalled(host))) {
-      reports.push({ ...base, installed: false, registration: "none", outcome: "not-installed" });
+    const presence = await hostInstalled(host, discovery);
+    if (!presence.installed) {
+      reports.push({
+        ...base,
+        detectedVia: presence.via,
+        installed: false,
+        registration: "none",
+        outcome: "not-installed",
+      });
       continue;
     }
-    const { registration, detail } = await host.inspect();
+    const { registration, detail } = await host.inspect(toolscanBin(host, discovery));
     reports.push({
       ...base,
+      detectedVia: presence.via,
       installed: true,
       registration,
       outcome: DOCTOR_OUTCOME[registration],

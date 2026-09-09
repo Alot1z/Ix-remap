@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { formatExplain, relativePath, type ExplainResult, type EntityRef, type Diagnostic } from "../format.js";
-import { resolveFileOrEntity, isRawId } from "../resolve.js";
+import { resolveFileOrReport, isRawId } from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { collectFacts } from "../explain/facts.js";
 import { inferRole } from "../explain/role-inference.js";
@@ -11,14 +11,14 @@ import { renderExplanation } from "../explain/render.js";
 import { renderExplainLlm, renderExplainRawLlm } from "../explain/llm.js";
 import { printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
-import { renderSection, renderWarning, renderNote, reportUnresolvedTarget } from "../ui.js";
+import { renderSection, renderWarning, renderNote } from "../ui.js";
 
 export function registerExplainCommand(program: Command): void {
   program
     .command("explain <symbol>")
     .description("Explain an entity — infers role, importance, and structural context")
     .option("--kind <kind>", "Filter target entity by kind")
-    .option("--path <path>", "Prefer symbols from files matching this path substring")
+    .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--raw", "Show raw metadata dump (legacy format)")
@@ -26,11 +26,8 @@ export function registerExplainCommand(program: Command): void {
     .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; format: string; raw?: boolean }) => {
       const client = new IxClient(getEndpoint());
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) {
-        reportUnresolvedTarget(symbol, opts.format);
-        return;
-      }
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
 
       if (opts.raw) {
         await rawExplain(client, target, opts.format);

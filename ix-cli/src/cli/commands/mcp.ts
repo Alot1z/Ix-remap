@@ -13,6 +13,7 @@ const OUTCOME_STYLE: Record<Outcome, { mark: string; paint: (text: string) => st
   failed: { mark: "x", paint: chalk.red },
   "not-registered": { mark: "o", paint: chalk.yellow },
   stale: { mark: "!", paint: chalk.yellow },
+  unreadable: { mark: "?", paint: chalk.yellow },
   "not-installed": { mark: "-", paint: chalk.dim },
 };
 
@@ -24,6 +25,7 @@ const OUTCOME_TEXT: Record<Outcome, string> = {
   failed: "failed",
   "not-registered": "not registered",
   stale: "registered, but its launcher is gone",
+  unreadable: "unreadable — left alone",
   "not-installed": "not installed",
 };
 
@@ -39,12 +41,13 @@ function hostFields(host: HostReport): Array<[string, LlmValue]> {
     ["host", host.id],
     ["outcome", host.outcome],
     ["installed", host.installed],
+    ["detectedVia", host.detectedVia],
     ["registration", host.registration],
     ["note", host.note],
   ];
 }
 
-function renderInstall(report: InstallReport, format: string, dryRun: boolean): void {
+export function renderInstall(report: InstallReport, format: string, dryRun: boolean): void {
   if (format === "json") {
     console.log(JSON.stringify(report, null, 2));
     return;
@@ -128,7 +131,14 @@ export function registerMcpCommand(program: Command): void {
       const report = await runDoctor({ only: opts.host });
       renderDoctor(report, opts.format);
       const broken = report.hosts.some(
-        (host) => host.outcome === "conflict" || host.outcome === "not-registered" || host.outcome === "stale",
+        (host) =>
+          host.outcome === "conflict" ||
+          host.outcome === "not-registered" ||
+          host.outcome === "stale" ||
+          // An unreadable registration is exactly what doctor exists to find,
+          // so it keeps doctor's attention (and the non-zero exit) it had when
+          // it was classified as a conflict. Only the label changes.
+          host.outcome === "unreadable",
       );
       if (!report.ixOnPath || broken) process.exitCode = 1;
     });

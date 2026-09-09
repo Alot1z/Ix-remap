@@ -3,11 +3,11 @@ import chalk from "chalk";
 import { renderSection, renderKeyValue, renderNote, renderResolvedHeader, colorizeKind } from "../ui.js";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
 import { stripNulls } from "../format.js";
-import { llmLine, llmError } from "../llm.js";
+import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "object", "trait", "interface"]);
@@ -17,6 +17,7 @@ export function registerImpactCommand(program: Command): void {
     .command("impact <target>")
     .description("System risk analysis — what behavior is at risk if this changes")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--depth <n>", "Expansion depth for callers/importers (default 1, max 3)", "1")
     .option("--limit <n>", "Max top-impacted members to show", "10")
@@ -28,20 +29,15 @@ export function registerImpactCommand(program: Command): void {
     .action(
       async (
         symbol: string,
-        opts: { kind?: string; pick?: number; depth: string; limit: string; format: string }
+        opts: { kind?: string; path?: string; pick?: number; depth: string; limit: string; format: string }
       ) => {
         const client = new IxClient(getEndpoint());
         const limit = parseInt(opts.limit, 10);
         const depth = Math.min(Math.max(parseInt(opts.depth, 10) || 1, 1), 3);
 
-        const resolveOpts = { kind: opts.kind, pick: opts.pick };
-        const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-        if (!target) {
-          // The resolver already printed human guidance to stderr; for llm
-          // consumers emit a structured error record on stdout as well.
-          if (opts.format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
-          return;
-        }
+        const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
+        const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+        if (!target) return;
 
         if (opts.format === "text") printResolved(target);
 

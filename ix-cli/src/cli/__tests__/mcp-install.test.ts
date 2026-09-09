@@ -36,19 +36,28 @@ function tempDir(): string {
 function fakeHost(
   id: string,
   registration: Registration,
-  options: { installed?: boolean; fails?: boolean; detectInstalled?: () => Promise<boolean> } = {},
-): McpHost & { registerCalls: number } {
+  options: {
+    installed?: boolean;
+    fails?: boolean;
+    detectInstalled?: () => Promise<boolean>;
+    bin?: string;
+  } = {},
+): McpHost & { registerCalls: number; inspectBins: Array<string | undefined>; registerBins: Array<string | undefined> } {
   const host = {
     id,
     label: id,
-    bin: options.installed === false ? "definitely-not-a-real-binary-xyz" : "node",
+    bin: options.bin ?? (options.installed === false ? "definitely-not-a-real-binary-xyz" : "node"),
     target: `${id}-config`,
     registerCalls: 0,
+    inspectBins: [] as Array<string | undefined>,
+    registerBins: [] as Array<string | undefined>,
     ...(options.detectInstalled ? { detectInstalled: options.detectInstalled } : {}),
-    async inspect() {
+    async inspect(execBin?: string) {
+      host.inspectBins.push(execBin);
       return { registration };
     },
-    async register() {
+    async register(execBin?: string) {
+      host.registerBins.push(execBin);
       host.registerCalls += 1;
       if (options.fails) throw new Error("host CLI said no");
     },
@@ -63,7 +72,7 @@ describe("ix mcp install", () => {
     const report = await runInstall({ hosts: [host] });
 
     expect(host.registerCalls).toBe(1);
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "path" });
     expect(report.registered).toBe(1);
   });
 
@@ -84,7 +93,58 @@ describe("ix mcp install", () => {
 
     // Guessing "free" here is the one wrong guess that destroys a config.
     expect(host.registerCalls).toBe(0);
+    // An unreadable config is not a conflict: nothing was parsed, so no foreign
+    // registration was found. The safe-don't-write behavior is pinned by
+    // registerCalls; the honest classification is "unreadable".
+    expect(report.hosts[0]?.outcome).toBe("unreadable");
+  });
+
+  it("never counts an unreadable config as a name conflict", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runInstall({ hosts: [host] });
+
+    expect(report.conflicts).toBe(0);
+  });
+
+  it("still counts a parsed foreign registration as a conflict", async () => {
+    const host = fakeHost("taken", "other");
+
+    const report = await runInstall({ hosts: [host] });
+
     expect(report.hosts[0]?.outcome).toBe("conflict");
+    expect(report.conflicts).toBe(1);
+  });
+
+  it("doctor reports an unreadable config as unreadable, not as a conflict", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runDoctor({ hosts: [host] });
+
+    expect(report.hosts[0]?.outcome).toBe("unreadable");
+  });
+
+  it("the human summary names only real conflicts in the ix-memory-held line", async () => {
+    const murky = fakeHost("murky", "unknown");
+    const taken = fakeHost("taken", "other");
+
+    const report = await runInstall({ hosts: [murky, taken] });
+
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.join(" "));
+    };
+    try {
+      const { renderInstall } = await import("../commands/mcp.js");
+      renderInstall(report, "text", true);
+    } finally {
+      console.log = orig;
+    }
+    const summary = logs.filter((l) => l.includes("already use the name")).join("\n");
+    // One parsed foreign registration, one unreadable config: the line must
+    // count only the real conflict.
+    expect(summary).toContain("1 host(s)");
   });
 
   it("replaces a conflicting registration only when --force is given", async () => {
@@ -94,6 +154,19 @@ describe("ix mcp install", () => {
 
     expect(host.registerCalls).toBe(1);
     expect(report.hosts[0]?.outcome).toBe("registered");
+  });
+
+  it("overwrites an unreadable registration only when --force is given", async () => {
+    const host = fakeHost("murky", "unknown");
+
+    const report = await runInstall({ hosts: [host], force: true });
+
+    // Unreadable is occupied like "other": --force is what authorizes the
+    // overwrite; the outcome and write-count must match the conflict path.
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]?.outcome).toBe("registered");
+    // The no-force counterpart — no write, outcome "unreadable" — is pinned
+    // above by "treats an unreadable registration as occupied rather than free".
   });
 
   it("is idempotent when the name already points at ix mcp", async () => {
@@ -121,6 +194,116 @@ describe("ix mcp install", () => {
 
     expect(host.registerCalls).toBe(0);
     expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false });
+  });
+
+  it("runs the off-PATH CLI through the absolute path toolscan found", async () => {
+    // The bin is deliberately not on PATH; only the toolscan seam names it —
+    // and the seam must *execute* the discovered path, or inspect reads an
+    // unreadable registration (conflict) and register fails (ENOENT). That is
+    // the case this feature exists for.
+    const resolved = "/opt/off-path/bin/definitely-not-a-real-binary-xyz";
+    const host = fakeHost("found", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({
+        source: "toolscan",
+        names: new Set(["definitely-not-a-real-binary-xyz"]),
+        paths: new Map([["definitely-not-a-real-binary-xyz", resolved]]),
+      }),
+    });
+
+    expect(host.inspectBins).toEqual([resolved]);
+    expect(host.registerBins).toEqual([resolved]);
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "toolscan" });
+  });
+
+  it("falls back to the bare bin when toolscan found no path", async () => {
+    // Discovery may name a bin without reporting a path for it; execution must
+    // then go through normal PATH resolution rather than a stale override.
+    const host = fakeHost("found", "none");
+
+    await runInstall({
+      hosts: [host],
+      discover: async () => ({
+        source: "toolscan",
+        names: new Set(["node"]),
+        paths: new Map(),
+      }),
+    });
+
+    expect(host.inspectBins).toEqual([undefined]);
+    expect(host.registerBins).toEqual([undefined]);
+  });
+
+  it("degrades a name-only toolscan entry to the embedded probes when the bin is off PATH", async () => {
+    // KageBinary #591 round-2 finding: a toolscan entry that names a bin but
+    // carries no path would flip presence on the name alone, then fall through
+    // to a bare-name PATH exec that cannot find an off-PATH CLI — a clean
+    // `not-installed` became a false `conflict`. The presence verdict must
+    // require the path toolscan reported, degrading to the embedded probes.
+    const host = fakeHost("absent", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({
+        source: "toolscan",
+        names: new Set(["definitely-not-a-real-binary-xyz"]),
+        paths: new Map(),
+      }),
+    });
+
+    expect(host.inspectBins).toEqual([]);
+    expect(host.registerCalls).toBe(0);
+    expect(report.hosts[0]).toMatchObject({
+      outcome: "not-installed",
+      installed: false,
+      detectedVia: "none",
+    });
+  });
+
+  it("falls back to the embedded probe when toolscan did not find the CLI", async () => {
+    // toolscan ran but only found `node`; the fake bin is not on PATH either.
+    const host = fakeHost("absent", "none", { installed: false });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({ source: "toolscan", names: new Set(["node"]), paths: new Map() }),
+    });
+
+    // The seam is additive evidence only — a toolscan miss must not flip a
+    // genuinely absent host to installed.
+    expect(host.registerCalls).toBe(0);
+    expect(report.hosts[0]).toMatchObject({ outcome: "not-installed", installed: false, detectedVia: "none" });
+  });
+
+  it("keeps the config-dir probe for hosts toolscan does not name", async () => {
+    // cursor-like: no CLI on PATH and toolscan did not find it, but the config
+    // dir exists — the host must still read as installed.
+    const host = fakeHost("cursor", "none", {
+      bin: "definitely-not-a-real-binary-xyz",
+      detectInstalled: async () => true,
+    });
+
+    const report = await runInstall({
+      hosts: [host],
+      discover: async () => ({ source: "toolscan", names: new Set(["claude"]), paths: new Map() }),
+    });
+
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "config-dir" });
+  });
+
+  it("reports a host whose CLI is on PATH as detected on PATH, not via its config dir", async () => {
+    // cursor/vscode/opencode's combined check is on-PATH-or-config-dir; a host
+    // found by the PATH half of it must not be mislabelled `config-dir`.
+    const host = fakeHost("cursor", "none", { detectInstalled: async () => true });
+
+    const report = await runInstall({ hosts: [host] });
+
+    expect(host.registerCalls).toBe(1);
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "path" });
   });
 
   it("reports a failing host without aborting the rest", async () => {
@@ -173,10 +356,11 @@ describe("ix mcp install", () => {
 
     const report = await runInstall({ hosts: [host] });
 
-    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true });
+    expect(report.hosts[0]).toMatchObject({ outcome: "registered", installed: true, detectedVia: "config-dir" });
     expect(host.registerCalls).toBe(1);
   });
 });
+
 
 describe("ix mcp doctor", () => {
   it("separates a free name from one held by someone else", async () => {

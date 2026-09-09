@@ -6,14 +6,9 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatEdgeResults, relativePath } from "../format.js";
 import { parsePickOption } from "../options.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
-import { llmLine, llmError } from "../llm.js";
-
-/** Emit a structured llm error for a failed resolution, or nothing for other formats. */
-function llmUnresolved(format: string, symbol: string): void {
-  if (format === "llm") console.log(llmError("unresolved_target", `No entity resolved for "${symbol}".`));
-}
+import { llmLine } from "../llm.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,16 +17,17 @@ export function registerCallersCommand(program: Command): void {
     .command("callers <symbol>")
     .description("Show methods/functions that call the given symbol (cross-file)")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--limit <n>", "Max results to show", "50")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText("after", "\nExamples:\n  ix callers verify_token\n  ix callers processPayment --format json\n  ix callers parse --kind method --limit 20")
-    .action(async (symbol: string, opts: { kind?: string; pick?: number; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
-      const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
@@ -125,16 +121,17 @@ export function registerCallersCommand(program: Command): void {
     .command("callees <symbol>")
     .description("Show methods/functions called by the given symbol (cross-file)")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--limit <n>", "Max results to show", "50")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText("after", "\nExamples:\n  ix callees processPayment\n  ix callees parse --format json")
-    .action(async (symbol: string, opts: { kind?: string; pick?: number; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const calleeLimit = parseInt(opts.limit, 10);
-      const resolveOpts = { kind: opts.kind, pick: opts.pick };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
-      if (!target) { llmUnresolved(opts.format, symbol); return; }
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
+      const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
+      if (!target) return;
       if (opts.format === "text") printResolved(target);
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
