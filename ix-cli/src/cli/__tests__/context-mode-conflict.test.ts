@@ -27,7 +27,6 @@ import { reportFailure } from "../ui.js";
  *
  * REVIEW ITEMS APPLIED (KageBinary review of PR #472):
  * 1. Removed 3 HTTP-calling tests (diff edge-case integration that hits backend)
-<<<<<<< HEAD
  * 2. Injectivity test uses astral chars, and this PR fixes #478 so it passes
  * 3. Removed byte-identical duplicate tests
  * 4. Assert full message text in precedence tests (not partial /--resume/)
