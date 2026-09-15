@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import path from "node:path";

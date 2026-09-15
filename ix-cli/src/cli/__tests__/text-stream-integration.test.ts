@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 import { execFileSync, spawnSync } from "node:child_process";

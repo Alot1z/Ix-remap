@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Runs before every test file (vitest `setupFiles`).
 //
 // Strip an ambient IX_HOME. `config.ts` resolves the state directory through
