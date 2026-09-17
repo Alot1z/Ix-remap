@@ -1441,7 +1441,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
         id: node.id,
         name: node.name,
         kind: node.kind,
-        path: node.sourceUri ?? undefined,
+        path: node.path ?? node.sourceUri ?? undefined,
       }));
   for (const node of orderedNodes(contextNodes)) {
     if (seen.has(node.id)) continue;

@@ -117,6 +117,29 @@ describe("ix context evidence says where things are", () => {
     expect(b.truncation.entitiesTruncated).toBe(4);
   });
 
+  it("takes a compact summary's repository path, and still its sourceUri from older backends", () => {
+    const b = buildBundle({
+      resolved: { id: FILE, name: "config.ts", kind: "file", resolutionMode: "exact" },
+      facts: facts({ memberRefs: [], members: [], topDependentRefs: [], topDependents: [] }),
+      context: {
+        claims: [], conflicts: [], decisions: [], intents: [], nodes: [], edges: [],
+        nodeSummaries: [
+          { id: "s-new", kind: "function", name: "fromNew", rev: 1, sourceUri: null, path: "src/new.ts" },
+          { id: "s-old", kind: "function", name: "fromOld", rev: 1, sourceUri: "src/old.ts" },
+        ],
+        edgeSummaries: [],
+        metadata: { query: "", seedEntities: [], hopsExpanded: 1, asOfRev: 1 },
+      } as never,
+      provenance: {},
+      budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+      isStale: () => false,
+    });
+
+    const paths = Object.fromEntries(b.entities.map((e) => [e.name, e.path]));
+    expect(paths.fromNew).toBe("src/new.ts");
+    expect(paths.fromOld).toBe("src/old.ts");
+  });
+
   it("reads provenance from the chain /v1/provenance actually returns", () => {
     const b = bundle({
       provenance: {
