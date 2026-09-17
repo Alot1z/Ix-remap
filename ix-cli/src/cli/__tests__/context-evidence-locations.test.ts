@@ -156,6 +156,35 @@ describe("ix context evidence says where things are", () => {
     expect(b.entities).toHaveLength(50);
   });
 
+  it("says what the target imports and calls, ahead of what points back at it", () => {
+    // The answer to a question asked from an entry point is most often in a
+    // file that entry point imports. Before this the bundle only pointed
+    // inward -- members, callers, dependents -- and never named it.
+    const imports: EntityLocation[] = [
+      { id: "i-resolve", name: "resolve.ts", kind: "file", path: "src/cli/resolve.ts" },
+    ];
+    const callees: EntityLocation[] = [
+      { id: "c-scope", name: "ensureReadScope", kind: "function", path: "src/cli/resolve.ts",
+        lineStart: 56, lineEnd: 80 },
+    ];
+    const b = bundle({ facts: facts({ importRefs: imports, calleeRefs: callees }) });
+
+    const structural = b.evidence.filter((e) => e.kind === "structural").map((e) => e.title);
+    expect(structural).toContain("imports resolve.ts");
+    expect(structural).toContain("calls ensureReadScope");
+    expect(structural.indexOf("imports resolve.ts"))
+      .toBeLessThan(structural.indexOf("dependent stats.ts"));
+
+    const imported = b.evidence.find((e) => e.title === "imports resolve.ts");
+    expect(imported?.location).toEqual({ path: "src/cli/resolve.ts" });
+    expect(imported?.reason).toBe("the target imports this");
+    expect(b.evidence.find((e) => e.title === "calls ensureReadScope")?.location)
+      .toEqual({ path: "src/cli/resolve.ts", lineStart: 56, lineEnd: 80 });
+
+    // And they are entities, so the file an answer lives in is in the bundle.
+    expect(b.entities.map((e) => e.name)).toContain("resolve.ts");
+  });
+
   it("reads provenance from the chain /v1/provenance actually returns", () => {
     const b = bundle({
       provenance: {

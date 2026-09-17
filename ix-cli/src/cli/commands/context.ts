@@ -1433,6 +1433,10 @@ export function buildBundle(input: BuildInput): ContextBundle {
   };
   pushLocated([
     ...memberRefs.slice(0, LEADING_MEMBERS),
+    // What the target reaches, before what reaches it: an agent starting from
+    // an entry point is looking for where to go next.
+    ...(facts.importRefs ?? []),
+    ...(facts.calleeRefs ?? []),
     ...(facts.topCallerRefs ?? []),
     ...(facts.topDependentRefs ?? []),
   ]);
@@ -1630,6 +1634,22 @@ function rankEvidence(input: {
   ): Array<{ name: string; ref?: EntityLocation }> =>
     (refs ? refs.map((ref) => ({ name: ref.name, ref })) : names.map((name) => ({ name }))).slice(0, limit);
 
+  // Outward first. Everything below points inward -- what contains the target,
+  // what calls it -- and the file an answer lives in is most often one the
+  // target imports: measured on the benchmark task set, 6 of 19 tasks' answers
+  // are a direct import of their entry point, and none were in the bundle.
+  for (const ref of (input.facts.importRefs ?? []).slice(0, SHOWN_IMPORTS)) {
+    structural.push({
+      id: `imports:${ref.name}`, source: "facts.imports", title: `imports ${ref.name}`,
+      reason: "the target imports this", refs: [ref.id], ...locationField(ref),
+    });
+  }
+  for (const ref of input.facts.calleeRefs ?? []) {
+    structural.push({
+      id: `calls:${ref.name}`, source: "facts.callees", title: `calls ${ref.name}`,
+      reason: "the target calls this", refs: [ref.id], ...locationField(ref),
+    });
+  }
   for (const { name, ref } of related(input.facts.topCallers, input.facts.topCallerRefs, 3)) {
     structural.push({
       id: `caller:${name}`, source: "facts.callers", title: `caller ${name}`,
@@ -1799,6 +1819,10 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
 
 /** Members placed ahead of the backend's context nodes; the evidence shows as many. */
 const LEADING_MEMBERS = 10;
+
+/** Imports named in the evidence. The rest still enter the bundle as entities,
+ * where they cost a line each and can carry the answer's file. */
+const SHOWN_IMPORTS = 8;
 
 type Located = { path?: string; lineStart?: number; lineEnd?: number };
 

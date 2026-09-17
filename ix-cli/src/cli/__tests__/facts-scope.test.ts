@@ -39,9 +39,14 @@ function fakeClient(calls: Call[]): IxClient {
     async expand(id: string, opts?: { direction?: string; predicates?: string[]; hops?: number }) {
       calls.push({ method: "expand", id, predicates: opts?.predicates, hops: opts?.hops });
       const importedBy = id === TARGET && opts?.direction === "in" && opts.predicates?.includes("IMPORTS");
-      return importedBy
-        ? { nodes: [node(DEPENDENT, "user", "file")], edges: [{ src: DEPENDENT, dst: TARGET, predicate: "IMPORTS" }] }
-        : { nodes: [], edges: [] };
+      const calls_out = id === TARGET && opts?.direction === "out" && opts.predicates?.includes("CALLS");
+      if (importedBy) {
+        return { nodes: [node(DEPENDENT, "user", "file")], edges: [{ src: DEPENDENT, dst: TARGET, predicate: "IMPORTS" }] };
+      }
+      if (calls_out) {
+        return { nodes: [node(CALLEE, "callee", "function")], edges: [{ src: TARGET, dst: CALLEE, predicate: "CALLS" }] };
+      }
+      return { nodes: [], edges: [] };
     },
     async provenance(id: string) {
       calls.push({ method: "provenance", id });
@@ -56,14 +61,19 @@ describe("collectFacts scope", () => {
 
     const facts = await collectFacts(fakeClient(calls), TARGET, "config", "function", "context");
 
-    // One entity, five fixed expands, one provenance -- and nothing that
-    // grows with the graph.
-    expect(calls.filter((c) => c.method === "expand")).toHaveLength(5);
+    // One entity, six fixed expands (the sixth is the outbound IMPORTS the
+    // bundle navigates by), one provenance -- and nothing that grows with the
+    // graph.
+    expect(calls.filter((c) => c.method === "expand")).toHaveLength(6);
+    expect(calls.some((c) => c.method === "expand" && c.predicates?.[0] === "IMPORTS"
+                            && c.id === TARGET)).toBe(true);
     expect(calls.filter((c) => c.method === "entity").map((c) => c.id)).toEqual([TARGET]);
     expect(calls.some((c) => c.id === DEPENDENT)).toBe(false);
     expect(calls.some((c) => c.predicates?.includes("IN_REGION"))).toBe(false);
 
     expect(facts.topDependents).toEqual(["user"]);
+    // The fake graph's only outbound edge is the target's CALLS to CALLEE.
+    expect(facts.calleeRefs?.map((r) => r.name)).toEqual(["callee"]);
     expect(facts.historyLength).toBe(2);
     // Handed on so `ix context` does not fetch the same provenance twice.
     expect(calls.filter((c) => c.method === "provenance")).toHaveLength(1);

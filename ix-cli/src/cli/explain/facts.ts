@@ -58,6 +58,15 @@ export interface EntityFacts {
   topCallerRefs?: EntityLocation[];
   topDependentRefs?: EntityLocation[];
 
+  /**
+   * What the target itself reaches: the files it imports and the functions it
+   * calls. Everything else here points *inward* -- what contains the target,
+   * what calls it, what it defines -- and an agent starting from a command or
+   * an entry point has to go the other way to find an implementation.
+   */
+  importRefs?: EntityLocation[];
+  calleeRefs?: EntityLocation[];
+
   // History
   introducedRev?: number;
   historyLength: number;
@@ -95,6 +104,10 @@ type ExplainOnlyFact =
 export type ContextFacts = Omit<EntityFacts, ExplainOnlyFact> & { provenance?: unknown };
 
 const NO_DOWNSTREAM = { tree: [], truncated: false, nodesVisited: 0, maxDepthReached: 0 };
+
+/** Outbound facts kept: enough to navigate by, few enough to leave room for the rest. */
+const MAX_IMPORT_REFS = 12;
+const MAX_CALLEE_REFS = 4;
 
 /** Members probed for usage; the rest keep their structural order after them. */
 const MEMBER_USE_POOL = 40;
@@ -219,11 +232,12 @@ export async function collectFacts(
   const forExplain = scope === "explain";
 
   // Run parallel graph queries (including, for explain, a bounded downstream tree)
-  const [details, callersResult, calleesResult, dependentsResult, importersResult, membersResult, provenance, downstream, hierarchyPath] =
+  const [details, callersResult, calleesResult, importsResult, dependentsResult, importersResult, membersResult, provenance, downstream, hierarchyPath] =
     await Promise.all([
       client.entity(targetId),
       client.expand(targetId, { direction: "in", predicates: ["CALLS"] }),
       client.expand(targetId, { direction: "out", predicates: ["CALLS"] }),
+      client.expand(targetId, { direction: "out", predicates: ["IMPORTS"] }),
       client.expand(targetId, { direction: "in", predicates: ["CALLS", "IMPORTS", "REFERENCES"] }),
       client.expand(targetId, { direction: "in", predicates: ["IMPORTS"] }),
       client.expand(targetId, { direction: "out", predicates: ["CONTAINS"] }),
@@ -284,6 +298,21 @@ export async function collectFacts(
   };
   const topCallerRefs = extractRefs(callersResult.nodes, 3);
   const topDependentRefs = extractRefs(uniqueDependents, 3);
+  // Where the target leads. Self-edges are dropped: a file that imports its own
+  // directory index resolves back to itself and says nothing.
+  const outward = (nodes: any[], limit: number): EntityLocation[] =>
+    extractRefs(nodes.filter((n: any) => n?.id !== targetId), limit);
+  // Repository files first. `ingest.ts` imports 26 modules, a third of them
+  // packages (`node:os`, `chalk`) that no question is ever answered in, and in
+  // graph order they pushed `supported-extensions.ts` -- the answer to "which
+  // extensions does the walker use" -- past the cut. An external package is a
+  // `module` node; its provenance names the file that imports it, not the
+  // package, so the path cannot be used to tell the two apart.
+  const importRefs = outward(
+    [...importsResult.nodes].sort((a: any, b: any) =>
+      Number(a?.kind !== "file") - Number(b?.kind !== "file")),
+    MAX_IMPORT_REFS);
+  const calleeRefs = outward(calleesResult.nodes, MAX_CALLEE_REFS);
   const topCallers = topCallerRefs.map((r) => r.name);
   const topDependents = topDependentRefs.map((r) => r.name);
 
@@ -383,6 +412,8 @@ export async function collectFacts(
     topDependents,
     topCallerRefs,
     topDependentRefs,
+    importRefs,
+    calleeRefs,
     introducedRev: node.createdRev ?? node.created_rev,
     historyLength: history?.chain?.length ?? 0,
     callList,
