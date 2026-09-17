@@ -19,7 +19,7 @@ import type {
   StructuredContext,
 } from "../../client/types.js";
 import { getEndpoint } from "../config.js";
-import { collectFacts, type ContextFacts } from "../explain/facts.js";
+import { collectFacts, type ContextFacts, type EntityLocation } from "../explain/facts.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { parseBudgetOption, parsePickOption, parseRevisionOption } from "../options.js";
 import { resolveFileOrReport } from "../resolve.js";
@@ -163,6 +163,13 @@ type EvidenceKind =
   | "relationship"
   | "provenance";
 
+/** Where an evidence item is defined, when the graph knows. */
+interface EvidenceLocation {
+  path: string;
+  lineStart?: number;
+  lineEnd?: number;
+}
+
 interface EvidenceItem {
   id: string;
   kind: EvidenceKind;
@@ -172,14 +179,28 @@ interface EvidenceItem {
   score: number;
   reason: string;
   refs: string[];
+  /**
+   * Without it an agent handed `member resolveWorkspaceRoot` has to search the
+   * repository for the thing Ix just found -- and for a file target named
+   * `config.ts`, first work out which of several `config.ts` files it was.
+   */
+  location?: EvidenceLocation;
 }
 
 interface ContextBundle {
   schema: typeof BUNDLE_SCHEMA;
   /** The one explicitly declared time-dependent field. */
   generatedAt: string;
-  target: { id: string; name: string; kind: string; resolutionMode: string };
-  entities: Array<{ id: string; name: string; kind: string; path?: string; stale: boolean }>;
+  target: { id: string; name: string; kind: string; resolutionMode: string; path?: string };
+  entities: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    path?: string;
+    lineStart?: number;
+    lineEnd?: number;
+    stale: boolean;
+  }>;
   relationships: Array<{ src: string; dst: string; predicate: string }>;
   claims: Array<{ id: string; entityId: string; statement: string; status: string }>;
   decisions: DecisionReport[];
@@ -1179,7 +1200,14 @@ function entityRecord(change: RecordChange) {
 
 function evidenceRecord(change: RecordChange) {
   return (e: EvidenceItem): string =>
-    llmLine("evidence", { change, score: e.score, kind: e.kind, title: e.title });
+    llmLine("evidence", {
+      change,
+      score: e.score,
+      kind: e.kind,
+      title: e.title,
+      path: e.location?.path,
+      lines: e.location ? lineRange(e.location) : undefined,
+    });
 }
 
 function claimRecord(change: RecordChange) {
@@ -1357,7 +1385,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
   // written; this is the first thing to produce it.
   const graphCompleted = input.graphCompleted ?? true;
   const classification = !graphCompleted ? "unverified" : stale ? "stale" : "current";
-  const prov = asRecord(provenance);
+  const prov = provenanceSource(provenance);
 
   // Entities: the target itself plus every referenced node, deduped by id and
   // ordered deterministically (kind, name, id) before budgeting.
@@ -1378,6 +1406,27 @@ export function buildBundle(input: BuildInput): ContextBundle {
       stale,
     },
   ];
+  // The entities the facts collector located, most relevant first: members in
+  // usage order, then the named callers and dependents. They go ahead of the
+  // backend's context nodes, which are ordered by kind and name, so the entity
+  // budget cuts what matters least. They also carry the paths and lines that
+  // the backend's node summaries do not.
+  const located = [
+    ...(facts.memberRefs ?? []),
+    ...(facts.topCallerRefs ?? []),
+    ...(facts.topDependentRefs ?? []),
+  ];
+  for (const ref of located) {
+    if (seen.has(ref.id)) continue;
+    seen.add(ref.id);
+    entities.push({
+      id: ref.id,
+      name: ref.name,
+      kind: ref.kind,
+      ...locationFields(ref),
+      stale: false, // replaced below, for the entities that survive the budget
+    });
+  }
   // Compact and standard backend responses omit the full graph arrays and
   // carry the same graph as summaries. Falling back here keeps the default
   // context mode from collapsing to a target-only bundle.
@@ -1412,7 +1461,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
     .sort((a, b) => cmp(a.src, b.src) || cmp(a.dst, b.dst) || cmp(a.predicate, b.predicate))
     .map((edge) => ({ src: edge.src, dst: edge.dst, predicate: edge.predicate }));
 
-  const evidence = rankEvidence({ resolved, facts, context, relationships, prov });
+  const evidence = rankEvidence({ resolved, facts, context, relationships, prov, entities });
 
   const bundle: ContextBundle = {
     schema: BUNDLE_SCHEMA,
@@ -1422,6 +1471,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
       name: resolved.name,
       kind: resolved.kind,
       resolutionMode: resolved.resolutionMode,
+      ...(facts.path ? { path: facts.path } : {}),
     },
     entities: [],
     relationships: [],
@@ -1534,6 +1584,7 @@ function rankEvidence(input: {
   context: StructuredContext;
   relationships: Array<{ src: string; dst: string; predicate: string }>;
   prov: Record<string, unknown>;
+  entities: ContextBundle["entities"];
 }): EvidenceItem[] {
   const items: EvidenceItem[] = [];
 
@@ -1546,33 +1597,49 @@ function rankEvidence(input: {
     score: 0,
     reason: "resolved target — the bundle is centered on this entity",
     refs: [target.id],
+    ...locationField(input.facts.path ? { path: input.facts.path } : undefined),
   });
 
-  const structural: Array<{ id: string; source: string; title: string; refs: string[] }> = [];
+  type Structural = Omit<EvidenceItem, "kind" | "score">;
+  const structural: Structural[] = [];
   if (input.facts.container) {
     structural.push({
       id: `container:${input.facts.container.name}`,
       source: "facts.container",
       title: `container ${input.facts.container.name} (${input.facts.container.kind})`,
+      reason: "contains the target",
       refs: [],
     });
   }
-  for (const name of input.facts.topCallers) {
-    structural.push({ id: `caller:${name}`, source: "facts.callers", title: `caller ${name}`, refs: [] });
-  }
-  for (const name of input.facts.topDependents) {
+  // Names alone when the facts carry no locations, so a caller that builds its
+  // own facts (or an older collector) still gets the structural evidence.
+  const related = (
+    names: string[],
+    refs: EntityLocation[] | undefined,
+    limit: number,
+  ): Array<{ name: string; ref?: EntityLocation }> =>
+    (refs ? refs.map((ref) => ({ name: ref.name, ref })) : names.map((name) => ({ name }))).slice(0, limit);
+
+  for (const { name, ref } of related(input.facts.topCallers, input.facts.topCallerRefs, 3)) {
     structural.push({
-      id: `dependent:${name}`,
-      source: "facts.dependents",
-      title: `dependent ${name}`,
-      refs: [],
+      id: `caller:${name}`, source: "facts.callers", title: `caller ${name}`,
+      reason: "calls the target", refs: ref ? [ref.id] : [], ...locationField(ref),
     });
   }
-  for (const name of input.facts.members.slice(0, 10)) {
-    structural.push({ id: `member:${name}`, source: "facts.members", title: `member ${name}`, refs: [] });
+  for (const { name, ref } of related(input.facts.topDependents, input.facts.topDependentRefs, 3)) {
+    structural.push({
+      id: `dependent:${name}`, source: "facts.dependents", title: `dependent ${name}`,
+      reason: "calls, imports or references the target", refs: ref ? [ref.id] : [], ...locationField(ref),
+    });
+  }
+  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, 10)) {
+    structural.push({
+      id: `member:${name}`, source: "facts.members", title: `member ${name}`,
+      reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
+    });
   }
   structural.forEach((item, index) => {
-    items.push({ ...item, kind: "structural", score: 10 + index, reason: "direct structural relationship" });
+    items.push({ ...item, kind: "structural", score: 10 + index });
   });
 
   for (const scored of input.context.claims) {
@@ -1620,12 +1687,13 @@ function rankEvidence(input: {
     });
   }
 
+  const label = entityLabeller(input.entities);
   input.relationships.slice(0, 50).forEach((edge, index) => {
     items.push({
       id: `relationship:${edge.src}:${edge.dst}:${edge.predicate}`,
       kind: "relationship",
       source: "context.edges",
-      title: `${edge.src} --${edge.predicate}--> ${edge.dst}`,
+      title: `${label(edge.src)} --${edge.predicate}--> ${label(edge.dst)}`,
       score: 30 + Math.min(index, 10),
       reason: "graph relationship from the context service",
       refs: [edge.src, edge.dst],
@@ -1663,6 +1731,7 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
       llmLine("context", {
         target: bundle.target.name,
         target_kind: bundle.target.kind,
+        target_path: bundle.target.path,
         stale: bundle.freshness.stale,
         classification: bundle.freshness.classification,
         entities: bundle.entities.length,
@@ -1688,6 +1757,7 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
 
   renderSection(`Context: ${bundle.target.name}`);
   console.log(`  kind:          ${bundle.target.kind}`);
+  if (bundle.target.path) console.log(`  path:          ${bundle.target.path}`);
   console.log(`  classification:${bundle.freshness.classification}`);
   console.log(`  entities:      ${bundle.entities.length}`);
   console.log(`  relationships: ${bundle.relationships.length}`);
@@ -1703,7 +1773,8 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
     renderSection("Evidence (highest relevance first)");
     for (const item of bundle.evidence) {
       console.log(`  [${item.score}] ${item.kind} — ${item.title}`);
-      console.log(`         ${item.reason}`);
+      const where = item.location ? `${formatLocation(item.location)} — ` : "";
+      console.log(`         ${where}${item.reason}`);
     }
   }
 
@@ -1714,6 +1785,86 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
     );
   }
   console.log();
+}
+
+type Located = { path?: string; lineStart?: number; lineEnd?: number };
+
+/** `path`, `lineStart` and `lineEnd`, omitting the unknown ones rather than writing `undefined`. */
+function locationFields(ref: Located): Located {
+  return {
+    ...(ref.path ? { path: ref.path } : {}),
+    ...(ref.lineStart !== undefined ? { lineStart: ref.lineStart } : {}),
+    ...(ref.lineEnd !== undefined ? { lineEnd: ref.lineEnd } : {}),
+  };
+}
+
+/** An evidence `location`, or nothing when the path is unknown. */
+function locationField(ref: Located | undefined): { location?: EvidenceLocation } {
+  if (!ref?.path) return {};
+  return { location: { ...locationFields(ref), path: ref.path } };
+}
+
+function lineRange(location: EvidenceLocation): string | undefined {
+  const { lineStart, lineEnd } = location;
+  if (lineStart === undefined) return undefined;
+  return lineEnd !== undefined && lineEnd !== lineStart ? `${lineStart}-${lineEnd}` : `${lineStart}`;
+}
+
+function formatLocation(location: EvidenceLocation): string {
+  const lines = lineRange(location);
+  return lines ? `${location.path}:${lines}` : location.path;
+}
+
+function memberReason(ref: EntityLocation): string {
+  if (ref.usedBy === undefined) return "defined in the target";
+  if (ref.usedBy === 0) return "defined in the target; no recorded uses";
+  const files = ref.usedFromFiles ?? 0;
+  const where = files > 0 ? ` across ${files} other file${files === 1 ? "" : "s"}` : " within this file";
+  return `defined in the target; used by ${ref.usedBy}${where}`;
+}
+
+/**
+ * Names for relationship endpoints. Relationship evidence used to print raw
+ * ids -- `264cc04d-... --CONTAINS--> d1898d46-...` -- which an agent cannot use.
+ * A name shared by two entities is qualified with its path, since several
+ * files are routinely named `config.ts` or `README.md`; an id the bundle knows
+ * nothing about stays an id.
+ */
+function entityLabeller(entities: ContextBundle["entities"]): (id: string) => string {
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  const nameCounts = new Map<string, number>();
+  for (const e of entities) nameCounts.set(e.name, (nameCounts.get(e.name) ?? 0) + 1);
+  return (id) => {
+    const e = byId.get(id);
+    if (!e) return id;
+    return (nameCounts.get(e.name) ?? 0) > 1 && e.path ? `${e.name} (${e.path})` : e.name;
+  };
+}
+
+/**
+ * The source record of a `/v1/provenance` response.
+ *
+ * The endpoint answers `{ entityId, chain: [{ rev, source: { uri, extractor,
+ * ... } }] }`, and this used to read `sourceUri` and `extractor` off the top
+ * level, where they never are -- so every bundle reported "provenance unknown,
+ * extractor unknown". The newest chain entry is the one that describes the
+ * current node. A flat record is still accepted as-is.
+ */
+function provenanceSource(provenance: unknown): Record<string, unknown> {
+  const record = asRecord(provenance);
+  const chain = Array.isArray(record.chain) ? record.chain.map(asRecord) : undefined;
+  if (!chain) return record;
+  if (chain.length === 0) return {};
+  const latest = chain.reduce((a, b) =>
+    (typeof b.rev === "number" ? b.rev : -Infinity) > (typeof a.rev === "number" ? a.rev : -Infinity) ? b : a);
+  const source = asRecord(latest.source);
+  return {
+    sourceUri: source.uri ?? source.sourceUri,
+    sourceHash: source.sourceHash,
+    extractor: source.extractor,
+    sourceType: source.sourceType,
+    observedAt: latest.observedAt ?? source.observedAt,
+  };
 }
 
 function orderedNodes<T extends { id: string; kind: string; name: string }>(nodes: T[]): T[] {
