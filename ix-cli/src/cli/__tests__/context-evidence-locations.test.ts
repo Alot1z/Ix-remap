@@ -140,6 +140,22 @@ describe("ix context evidence says where things are", () => {
     expect(paths.fromOld).toBe("src/old.ts");
   });
 
+  it("does not let a large file's members crowd out the files around it", () => {
+    // `ingest.ts` has over a hundred members. Putting all of them ahead of the
+    // context nodes filled a 50-entity budget and cut `supported-extensions.ts`,
+    // the file a cross-file question about it needed.
+    const many = Array.from({ length: 60 }, (_, i) =>
+      member(`m-${i}`, `fn${i}`, [i + 1, i + 2], [60 - i, 1]));
+    const imported = node("n-ext", "supported-extensions.ts", "file", "src/cli/supported-extensions.ts");
+    const b = bundle({ facts: facts({ memberRefs: many, members: many.map((m) => m.name) }), nodes: [imported] });
+
+    const names = b.entities.map((e) => e.name);
+    expect(names.slice(1, 11)).toEqual(many.slice(0, 10).map((m) => m.name));
+    expect(names).toContain("supported-extensions.ts");
+    expect(names.indexOf("supported-extensions.ts")).toBeLessThan(names.indexOf("fn10"));
+    expect(b.entities).toHaveLength(50);
+  });
+
   it("reads provenance from the chain /v1/provenance actually returns", () => {
     const b = bundle({
       provenance: {

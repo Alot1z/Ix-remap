@@ -1406,27 +1406,36 @@ export function buildBundle(input: BuildInput): ContextBundle {
       stale,
     },
   ];
-  // The entities the facts collector located, most relevant first: members in
-  // usage order, then the named callers and dependents. They go ahead of the
-  // backend's context nodes, which are ordered by kind and name, so the entity
-  // budget cuts what matters least. They also carry the paths and lines that
-  // the backend's node summaries do not.
-  const located = [
-    ...(facts.memberRefs ?? []),
+  // The entities the facts collector located, most relevant first: the
+  // top-ranked members, then the named callers and dependents. They go ahead of
+  // the backend's context nodes, which are ordered by kind and name, so the
+  // entity budget cuts what matters least. They also carry the paths and lines
+  // that the backend's node summaries do not.
+  //
+  // Only the leading members jump the queue. A large file has more members than
+  // the whole entity budget -- `ingest.ts` in the Ix repo has over a hundred --
+  // and putting all of them first crowded out the files it imports and is
+  // imported by, which are what cross-file questions need. The rest follow the
+  // context nodes.
+  const memberRefs = facts.memberRefs ?? [];
+  const pushLocated = (refs: EntityLocation[]) => {
+    for (const ref of refs) {
+      if (seen.has(ref.id)) continue;
+      seen.add(ref.id);
+      entities.push({
+        id: ref.id,
+        name: ref.name,
+        kind: ref.kind,
+        ...locationFields(ref),
+        stale: false, // replaced below, for the entities that survive the budget
+      });
+    }
+  };
+  pushLocated([
+    ...memberRefs.slice(0, LEADING_MEMBERS),
     ...(facts.topCallerRefs ?? []),
     ...(facts.topDependentRefs ?? []),
-  ];
-  for (const ref of located) {
-    if (seen.has(ref.id)) continue;
-    seen.add(ref.id);
-    entities.push({
-      id: ref.id,
-      name: ref.name,
-      kind: ref.kind,
-      ...locationFields(ref),
-      stale: false, // replaced below, for the entities that survive the budget
-    });
-  }
+  ]);
   // Compact and standard backend responses omit the full graph arrays and
   // carry the same graph as summaries. Falling back here keeps the default
   // context mode from collapsing to a target-only bundle.
@@ -1454,6 +1463,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
       stale: false, // replaced below, for the entities that survive the budget
     });
   }
+  pushLocated(memberRefs.slice(LEADING_MEMBERS));
 
   // Relationships: graph edges, ordered deterministically.
   const contextEdges = context.edges.length > 0 ? context.edges : (context.edgeSummaries ?? []);
@@ -1632,7 +1642,7 @@ function rankEvidence(input: {
       reason: "calls, imports or references the target", refs: ref ? [ref.id] : [], ...locationField(ref),
     });
   }
-  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, 10)) {
+  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, LEADING_MEMBERS)) {
     structural.push({
       id: `member:${name}`, source: "facts.members", title: `member ${name}`,
       reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
@@ -1786,6 +1796,9 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
   }
   console.log();
 }
+
+/** Members placed ahead of the backend's context nodes; the evidence shows as many. */
+const LEADING_MEMBERS = 10;
 
 type Located = { path?: string; lineStart?: number; lineEnd?: number };
 
