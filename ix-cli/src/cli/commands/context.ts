@@ -1637,10 +1637,18 @@ function rankEvidence(input: {
   ): Array<{ name: string; ref?: EntityLocation }> =>
     (refs ? refs.map((ref) => ({ name: ref.name, ref })) : names.map((name) => ({ name }))).slice(0, limit);
 
-  // Outward first. Everything below points inward -- what contains the target,
-  // what calls it -- and the file an answer lives in is most often one the
-  // target imports: measured on the benchmark task set, 6 of 19 tasks' answers
-  // are a direct import of their entry point, and none were in the bundle.
+  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, LEADING_MEMBERS)) {
+    structural.push({
+      id: `member:${name}`, source: "facts.members", title: `member ${name}`,
+      reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
+    });
+  }
+  // Then outward. The file an answer lives in is most often one the target
+  // imports: measured on the benchmark task set, 6 of 19 tasks' answers are a
+  // direct import of their entry point, and none were in the bundle. These go
+  // after the target's own members, not before: the evidence budget is 25
+  // items, and a file with many imports (resolve.ts) pushed all 27 of its own
+  // members out of the bundle entirely.
   for (const ref of (input.facts.importRefs ?? []).slice(0, SHOWN_IMPORTS)) {
     structural.push({
       id: `imports:${ref.name}`, source: "facts.imports", title: `imports ${ref.name}`,
@@ -1671,12 +1679,6 @@ function rankEvidence(input: {
     structural.push({
       id: `dependent:${name}`, source: "facts.dependents", title: `dependent ${name}`,
       reason: "calls, imports or references the target", refs: ref ? [ref.id] : [], ...locationField(ref),
-    });
-  }
-  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, LEADING_MEMBERS)) {
-    structural.push({
-      id: `member:${name}`, source: "facts.members", title: `member ${name}`,
-      reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
     });
   }
   structural.forEach((item, index) => {
@@ -1836,7 +1838,7 @@ const LEADING_MEMBERS = 10;
 const SHOWN_IMPORTS = 8;
 
 /** Members of neighbouring files named in the evidence; the rest are entities. */
-const SHOWN_NEIGHBOUR_MEMBERS = 10;
+const SHOWN_NEIGHBOUR_MEMBERS = 6;
 
 type Located = { path?: string; lineStart?: number; lineEnd?: number };
 

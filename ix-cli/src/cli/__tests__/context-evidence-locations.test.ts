@@ -259,8 +259,11 @@ describe("ix context evidence says where things are", () => {
 
     const llm = captureLog(() => renderBundle(b, "llm"));
     expect(llm[0]).toContain("target_path=src/cli/config.ts");
+    // Score is tier + position, and the target's own members lead the
+    // structural facts: a file with many imports pushed all of its own members
+    // out of the evidence budget when they came last.
     expect(llm).toContain(
-      'evidence score=11 kind=structural title="member resolveWorkspaceRoot" path=src/cli/config.ts lines=322-342',
+      'evidence score=10 kind=structural title="member resolveWorkspaceRoot" path=src/cli/config.ts lines=322-342',
     );
   });
 

@@ -117,7 +117,7 @@ const NO_DOWNSTREAM = { tree: [], truncated: false, nodesVisited: 0, maxDepthRea
 const MAX_NEIGHBOUR_FILES = 5;
 const MAX_NEIGHBOUR_MEMBERS = 4;
 /** Members of a neighbour whose use is measured before the best are kept. */
-const NEIGHBOUR_USE_POOL = 6;
+const NEIGHBOUR_USE_POOL = 8;
 
 /** Outbound facts kept: enough to navigate by, few enough to leave room for the rest. */
 const MAX_IMPORT_REFS = 12;
@@ -129,6 +129,10 @@ const MEMBER_USE_POOL = 40;
 const MEMBER_USE_CAP = 50;
 const MEMBER_USE_CONCURRENCY = 6;
 const USE_PREDICATES = ["CALLS", "REFERENCES", "IMPORTS"];
+
+/** Kinds whose own members are worth one more hop: a class's methods are not
+ * listed under its file. */
+const CONTAINER_KINDS = new Set(["class", "interface", "trait", "object", "struct", "enum"]);
 
 /** Kinds a reader navigates by. Everything else ranks after them. */
 const PRIMARY_MEMBER_KINDS = new Set([
@@ -199,9 +203,26 @@ async function collectNeighbourMembers(
   for (const file of files) {  // one file at a time: each ranks its own members
     try {
       const result = await client.expand(file.id, { direction: "out", predicates: ["CONTAINS"] });
-      const candidates = structuralMemberOrder((result.nodes ?? [])
+      const direct = structuralMemberOrder((result.nodes ?? [])
         .filter((n: any) => n?.id && n.id !== file.id)
-        .map(toLocation)).slice(0, NEIGHBOUR_USE_POOL);
+        .map(toLocation));
+      // A class's methods hang off the class, not the file: `api.ts` contains
+      // `IxClient`, and `reset`, `resetCode` and `deleteWorkspace` -- three of
+      // one task's four answers -- hang off that. One level down, for the
+      // leading container only.
+      const container = direct.find(m => CONTAINER_KINDS.has(m.kind));
+      let nested: EntityLocation[] = [];
+      if (container) {
+        try {
+          const inner = await client.expand(container.id, { direction: "out", predicates: ["CONTAINS"] });
+          nested = structuralMemberOrder((inner.nodes ?? [])
+            .filter((n: any) => n?.id && n.id !== container.id)
+            .map(toLocation));
+        } catch {
+          nested = [];
+        }
+      }
+      const candidates = [...direct, ...nested].slice(0, NEIGHBOUR_USE_POOL);
       // Ranked by measured use, like the target's own members: by size alone
       // `config.ts` offered `saveConfig` (48 lines, 5 users) ahead of
       // `resolveWorkspaceRoot` (20 lines, 12 users, and the answer).
