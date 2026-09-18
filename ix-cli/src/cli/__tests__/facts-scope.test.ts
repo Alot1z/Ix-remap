@@ -61,14 +61,19 @@ describe("collectFacts scope", () => {
 
     const facts = await collectFacts(fakeClient(calls), TARGET, "config", "function", "context");
 
-    // One entity, six fixed expands (the sixth is the outbound IMPORTS the
-    // bundle navigates by), one provenance -- and nothing that grows with the
-    // graph.
-    expect(calls.filter((c) => c.method === "expand")).toHaveLength(6);
+    // One entity, six fixed expands on the target (the sixth is the outbound
+    // IMPORTS the bundle navigates by), one provenance, and one CONTAINS per
+    // neighbouring file -- capped, so nothing here grows with the graph.
+    const expands = calls.filter((c) => c.method === "expand");
+    expect(expands.filter((c) => c.id === TARGET)).toHaveLength(6);
     expect(calls.some((c) => c.method === "expand" && c.predicates?.[0] === "IMPORTS"
                             && c.id === TARGET)).toBe(true);
+    // The one neighbour in this graph is the file that imports the target.
+    expect(expands.filter((c) => c.id !== TARGET))
+      .toEqual([{ method: "expand", id: DEPENDENT, predicates: ["CONTAINS"], hops: undefined }]);
+    // No entity lookups beyond the target, and no hierarchy walk: the
+    // neighbour hop is expands only, and bounded.
     expect(calls.filter((c) => c.method === "entity").map((c) => c.id)).toEqual([TARGET]);
-    expect(calls.some((c) => c.id === DEPENDENT)).toBe(false);
     expect(calls.some((c) => c.predicates?.includes("IN_REGION"))).toBe(false);
 
     expect(facts.topDependents).toEqual(["user"]);
@@ -137,6 +142,37 @@ function fileWithMembers(
     },
   } as unknown as IxClient;
 }
+
+describe("neighbour members", () => {
+  it("takes one member from each neighbouring file before a second from any", async () => {
+    // The evidence budget cuts the tail, and four members of the first import
+    // crowded out every other file's -- including the file with the answer.
+    const files = ["f-a", "f-b"];
+    const client = {
+      async entity(id: string) {
+        return { node: { id, name: "entry.ts", kind: "file", attrs: {}, provenance: { sourceUri: "src/entry.ts" } }, edges: [] };
+      },
+      async expand(id: string, opts?: { direction?: string; predicates?: string[] }) {
+        if (id === TARGET && opts?.direction === "out" && opts.predicates?.includes("IMPORTS")) {
+          return { nodes: files.map((f, i) => ({ id: f, name: `dep${i}.ts`, kind: "file", attrs: {},
+                                                 provenance: { sourceUri: `src/dep${i}.ts` } })), edges: [] };
+        }
+        if (files.includes(id)) {
+          const which = id.slice(-1);
+          return { nodes: [1, 2, 3].map(n => ({ id: `${id}-m${n}`, name: `${which}${n}`, kind: "function",
+                                                attrs: { line_start: n * 10, line_end: n * 10 + 9 - n },
+                                                provenance: { sourceUri: `src/dep.ts` } })), edges: [] };
+        }
+        return { nodes: [], edges: [] };
+      },
+      async provenance(id: string) { return { entityId: id, chain: [] }; },
+    } as unknown as IxClient;
+
+    const facts = await collectFacts(client, TARGET, "entry.ts", "file", "context");
+
+    expect(facts.neighbourRefs?.slice(0, 4).map(r => r.name)).toEqual(["a1", "b1", "a2", "b2"]);
+  });
+});
 
 describe("collectFacts member ranking", () => {
   const members = [

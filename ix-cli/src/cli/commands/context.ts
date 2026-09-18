@@ -1437,6 +1437,9 @@ export function buildBundle(input: BuildInput): ContextBundle {
     // an entry point is looking for where to go next.
     ...(facts.importRefs ?? []),
     ...(facts.calleeRefs ?? []),
+    // What those files define. Naming the file is half an answer to "which
+    // function does X"; these are the other half.
+    ...(facts.neighbourRefs ?? []),
     ...(facts.topCallerRefs ?? []),
     ...(facts.topDependentRefs ?? []),
   ]);
@@ -1650,6 +1653,14 @@ function rankEvidence(input: {
       reason: "the target calls this", refs: [ref.id], ...locationField(ref),
     });
   }
+  for (const ref of (input.facts.neighbourRefs ?? []).slice(0, SHOWN_NEIGHBOUR_MEMBERS)) {
+    const where = ref.path ? ref.path.split("/").pop() : undefined;
+    structural.push({
+      id: `defines:${ref.path ?? ""}:${ref.name}`, source: "facts.neighbours",
+      title: `${where ?? "a neighbouring file"} defines ${ref.name}`,
+      reason: "defined in a file next to the target", refs: [ref.id], ...locationField(ref),
+    });
+  }
   for (const { name, ref } of related(input.facts.topCallers, input.facts.topCallerRefs, 3)) {
     structural.push({
       id: `caller:${name}`, source: "facts.callers", title: `caller ${name}`,
@@ -1823,6 +1834,9 @@ const LEADING_MEMBERS = 10;
 /** Imports named in the evidence. The rest still enter the bundle as entities,
  * where they cost a line each and can carry the answer's file. */
 const SHOWN_IMPORTS = 8;
+
+/** Members of neighbouring files named in the evidence; the rest are entities. */
+const SHOWN_NEIGHBOUR_MEMBERS = 10;
 
 type Located = { path?: string; lineStart?: number; lineEnd?: number };
 

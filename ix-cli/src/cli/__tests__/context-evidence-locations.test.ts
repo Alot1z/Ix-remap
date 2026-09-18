@@ -185,6 +185,33 @@ describe("ix context evidence says where things are", () => {
     expect(b.entities.map((e) => e.name)).toContain("resolve.ts");
   });
 
+  it("names what the neighbouring files define, with where", () => {
+    // Members were collected for the target alone, so "which function resolves
+    // a workspace" got `config.ts` and nothing inside it: symbol recall was
+    // 0.00 on 10 of 11 benchmark tasks even where the right file came back.
+    const b = bundle({
+      facts: facts({
+        importRefs: [{ id: "i-config", name: "config.ts", kind: "file", path: "src/cli/config.ts" }],
+        neighbourRefs: [
+          { id: "n-resolve", name: "resolveWorkspaceRoot", kind: "function",
+            path: "src/cli/config.ts", lineStart: 322, lineEnd: 342 },
+          { id: "n-default", name: "getDefaultWorkspace", kind: "function",
+            path: "src/cli/config.ts", lineStart: 289, lineEnd: 291 },
+        ],
+      }),
+    });
+
+    const defines = b.evidence.find((e) => e.title === "config.ts defines resolveWorkspaceRoot");
+    expect(defines?.location).toEqual({ path: "src/cli/config.ts", lineStart: 322, lineEnd: 342 });
+    expect(defines?.refs).toEqual(["n-resolve"]);
+    // They are entities, which is what a retrieval score counts as a symbol.
+    const names = b.entities.map((e) => e.name);
+    expect(names).toContain("resolveWorkspaceRoot");
+    expect(names).toContain("getDefaultWorkspace");
+    // After the file they came from, so the budget keeps the file first.
+    expect(names.indexOf("config.ts")).toBeLessThan(names.indexOf("resolveWorkspaceRoot"));
+  });
+
   it("reads provenance from the chain /v1/provenance actually returns", () => {
     const b = bundle({
       provenance: {

@@ -67,6 +67,14 @@ export interface EntityFacts {
   importRefs?: EntityLocation[];
   calleeRefs?: EntityLocation[];
 
+  /**
+   * What the neighbouring files define. Members are otherwise collected for the
+   * target alone, so a bundle answered "which function does X" with a file name
+   * and nothing in it: measured over 11 benchmark tasks, symbol recall was 0.00
+   * on 10 of them even where the right file was returned.
+   */
+  neighbourRefs?: EntityLocation[];
+
   // History
   introducedRev?: number;
   historyLength: number;
@@ -104,6 +112,12 @@ type ExplainOnlyFact =
 export type ContextFacts = Omit<EntityFacts, ExplainOnlyFact> & { provenance?: unknown };
 
 const NO_DOWNSTREAM = { tree: [], truncated: false, nodesVisited: 0, maxDepthReached: 0 };
+
+/** Neighbouring files opened one level deep, and how many of each one's members are kept. */
+const MAX_NEIGHBOUR_FILES = 5;
+const MAX_NEIGHBOUR_MEMBERS = 4;
+/** Members of a neighbour whose use is measured before the best are kept. */
+const NEIGHBOUR_USE_POOL = 6;
 
 /** Outbound facts kept: enough to navigate by, few enough to leave room for the rest. */
 const MAX_IMPORT_REFS = 12;
@@ -151,10 +165,13 @@ function toLocation(n: any): EntityLocation {
  * from other files rank first, then by total uses; ties keep the structural
  * order, which is itself deterministic.
  */
-async function rankMembersByUse(client: IxClient, members: EntityLocation[]): Promise<EntityLocation[]> {
+/** Members a reader navigates by first: declaration kinds, then the big ones.
+ * Deterministic, and costs nothing -- unlike the usage ranking, which pays an
+ * expand per member and is reserved for the target's own. */
+function structuralMemberOrder(members: EntityLocation[]): EntityLocation[] {
   const span = (m: EntityLocation) =>
     m.lineStart !== undefined && m.lineEnd !== undefined ? m.lineEnd - m.lineStart : 0;
-  const structural = members
+  return members
     .map((m, index) => ({ m, index }))
     .sort((a, b) =>
       Number(!PRIMARY_MEMBER_KINDS.has(a.m.kind)) - Number(!PRIMARY_MEMBER_KINDS.has(b.m.kind)) ||
@@ -162,6 +179,51 @@ async function rankMembersByUse(client: IxClient, members: EntityLocation[]): Pr
       (a.m.name < b.m.name ? -1 : a.m.name > b.m.name ? 1 : 0) ||
       a.index - b.index)
     .map(({ m }) => m);
+}
+
+/**
+ * What the files around the target define.
+ *
+ * One `CONTAINS` expand per neighbouring file, for at most
+ * `MAX_NEIGHBOUR_FILES` of them, keeping `MAX_NEIGHBOUR_MEMBERS` each in
+ * structural order. Bounded on purpose: this is the hop that turns "the answer
+ * is in config.ts" into "resolveWorkspaceRoot, config.ts:322".
+ */
+async function collectNeighbourMembers(
+  client: IxClient, neighbours: EntityLocation[], targetId: string,
+): Promise<EntityLocation[]> {
+  const files = neighbours
+    .filter(ref => ref.kind === "file" && ref.id !== targetId)
+    .slice(0, MAX_NEIGHBOUR_FILES);
+  const found: EntityLocation[][] = [];
+  for (const file of files) {  // one file at a time: each ranks its own members
+    try {
+      const result = await client.expand(file.id, { direction: "out", predicates: ["CONTAINS"] });
+      const candidates = structuralMemberOrder((result.nodes ?? [])
+        .filter((n: any) => n?.id && n.id !== file.id)
+        .map(toLocation)).slice(0, NEIGHBOUR_USE_POOL);
+      // Ranked by measured use, like the target's own members: by size alone
+      // `config.ts` offered `saveConfig` (48 lines, 5 users) ahead of
+      // `resolveWorkspaceRoot` (20 lines, 12 users, and the answer).
+      found.push((await rankMembersByUse(client, candidates)).slice(0, MAX_NEIGHBOUR_MEMBERS));
+    } catch {
+      found.push([]);  // one unreadable neighbour must not lose the others
+    }
+  }
+  // One member from each file before a second from any: the evidence budget cut
+  // the tail, and four members of the first import crowded out every other
+  // file's -- including the one holding the answer.
+  const interleaved: EntityLocation[] = [];
+  for (let rank = 0; rank < MAX_NEIGHBOUR_MEMBERS; rank++) {
+    for (const members of found) {
+      if (members[rank]) interleaved.push(members[rank]);
+    }
+  }
+  return interleaved;
+}
+
+async function rankMembersByUse(client: IxClient, members: EntityLocation[]): Promise<EntityLocation[]> {
+  const structural = structuralMemberOrder(members);
 
   const pool = structural.slice(0, MEMBER_USE_POOL);
   const measured: EntityLocation[] = new Array(pool.length);
@@ -313,6 +375,12 @@ export async function collectFacts(
       Number(a?.kind !== "file") - Number(b?.kind !== "file")),
     MAX_IMPORT_REFS);
   const calleeRefs = outward(calleesResult.nodes, MAX_CALLEE_REFS);
+  // One level into the files around the target -- imports first, then the
+  // files that import it. `ix explain` describes one entity and does not need
+  // it, so it is not paid for there.
+  const neighbourRefs = forExplain
+    ? undefined
+    : await collectNeighbourMembers(client, [...importRefs, ...topDependentRefs], targetId);
   const topCallers = topCallerRefs.map((r) => r.name);
   const topDependents = topDependentRefs.map((r) => r.name);
 
@@ -414,6 +482,7 @@ export async function collectFacts(
     topDependentRefs,
     importRefs,
     calleeRefs,
+    neighbourRefs,
     introducedRev: node.createdRev ?? node.created_rev,
     historyLength: history?.chain?.length ?? 0,
     callList,
