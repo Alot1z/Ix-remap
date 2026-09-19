@@ -1,0 +1,20 @@
+## Summary
+
+Closes #599. The backend sends `release_version` on every `/v1/health` response, but `docs/api/openapi.yaml` documented `HealthResponse` with only `status` + `schema_version`, and the README endpoint row/prose never named the field — a client reading the reference would never learn it exists.
+
+## Changes
+
+- `docs/api/openapi.yaml` — `HealthResponse` gains `release_version: { type: string }`, described as the backend release semver with the same env-var-not-proof caveat the client type already carries (it is a build-environment claim; `docker run -e` can override it; absent from backends that do not know their release).
+- `docs/api/README.md` — the `/v1/health` endpoint row now lists `release_version`, and the prose response example shows the real shape: `{"status": "ok", "schema_version": 3, "release_version": "1.0.28"}` (value format as observed in #599's evidence), plus the fallback semantics for clients whose backend omits the field.
+
+## Would the commit-time parity gate have caught this?
+
+No — and that is the interesting part. The parity gate (#587) enforces that every schema in `components/schemas` has a counterpart by NAME in `ix-cli/src/client/types.ts` (or the explicit backend-only allowlist). `HealthResponse` exists on both sides, and the client type already carried `release_version?: string` — so the name-level contract passed while the property-level drift (spec missing a field the type and the wire both have) sailed through. #599 is the concrete instance of the gate's known blind spot: schema NAME parity, not property parity. A property-level comparison (spec properties ⊇ client type fields for shared schemas) is the natural follow-up class if maintainers want the gate to catch this class.
+
+(Cross-ref: the four-surface parity gate itself lands via #587.)
+
+## Validation
+
+- Diff is exactly two documentation files; no code, no CI surface touched.
+- OpenAPI block verified structurally after edit (HealthResponse properties + neighbors intact).
+- Both files' remote contents verified byte-identical to the local committed files via the API after push.

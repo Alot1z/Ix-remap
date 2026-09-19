@@ -1,0 +1,27 @@
+{
+  "3940745255": {
+    "thread": "#604 (CodeQL bot)",
+    "user": "github-advanced-security[bot]",
+    "created_at": "2026-09-05T13:22:47Z",
+    "path": "scripts/render-logo.mjs",
+    "body": "## CodeQL / Potential file system race condition\n\nThe file may have changed since it [was checked](1).\n\n[Show more details](https://github.com/ix-infrastructure/Ix/security/code-scanning/71)"
+  },
+  "5533228304": {
+    "thread": "#547",
+    "user": "Alot1z",
+    "created_at": "2026-09-03T23:01:18Z",
+    "body": "Coordination note — this overlaps #559 on the same surface, and the two should be sequenced deliberately.\n\nBoth touch `ix-cli/src/cli/__tests__/unresolved-machine-output.test.ts` (the only shared file; whichever merges second needs a rebase there), and both flip the same behavior class: a non-zero exit on an unresolved target where the command previously exited 0 with a null result (#546 here, #539 there).\n\n#559 is a draft on purpose and names the reason: its exit-code flip is a breaking change for machine consumers, and it is sequenced as step 2 after three plugin PRs land (ix-opencode-plugin#20, ix-openclaw-plugin#33, ix-claude-plugin#37) precisely so those consumers are ready for the non-zero before it ships. This PR's 8-command flip is the same breaking-change class — if it merges ahead of those consumers, the degradation #559 is carefully sequencing around can arrive through a different door.\n\nSuggestions: reference #559 in the body so reviewers see the overlap; rebase the shared test file against whichever lands first; and if any of the three plugin consumers call these graph commands, land this PR in the same order #559 uses (plugins first)."
+  },
+  "5549703398": {
+    "thread": "#547",
+    "user": "KageBinary",
+    "created_at": "2026-09-05T05:34:22Z",
+    "body": "The ambiguity fix is right — `5280ec6` puts `process.exitCode = 1` in `reportResolutionFailure` so both arms agree, and the two tests now pin `toBe(1)` where they pinned `toBeUndefined()`. That closes my finding, including the out-of-range `--pick` case, which was the one I thought hardest to defend at exit 0.\n\n**I have merged every other open PR on this repo today and deliberately left this one open.** Not because of anything in the code — because your own merge gate is still open upstream, and I checked rather than assumed:\n\n| consumer | state |\n|---|---|\n| `ix-opencode-plugin` #20, #21 | **MERGED** |\n| `ix-openclaw-plugin` #33 | **OPEN** |\n| `ix-claude-plugin` #37, #38 | **OPEN** |\n\nTwo of the three still treat a non-zero exit as a failure and discard the body. Landing this now would ship the exit-code flip for eight graph commands ahead of them — which is the same shape as the bug I reported inside this PR (the in-repo MCP server discarding a well-formed record because `!result.ok`), just in consumers we do not control from here. You fixed the in-repo one; the external ones are what is left.\n\nSo this is ready on the merits and waiting on those three PRs, exactly as you and @Alot1z sequenced it. Once `ix-openclaw-plugin#33` and `ix-claude-plugin#37`/`#38` land, this should go straight in — I do not have any open findings against it.\n\nOne residual, small and out of scope for this PR, recorded so it is not lost: `resolveFileOrEntity` (`resolve.ts:692`) still calls `reportAmbiguousTarget` directly with a hardcoded `\"text\"` and sets no exit code, so `ix locate` keeps exiting 0 on an ambiguous target. That is #559's surface rather than this one's, and #559 is a draft behind the same three plugin PRs — worth folding into it there.\n\n## For context on what changed underneath you\n\n`main` moved a long way today: #570, #577, #578, #582, #583, #584, #587, #589, #590, #591, #592, #593–#596, #597, #598, #601 and #602 all landed. This branch is still `MERGEABLE`, but expect to want a rebase before it goes in — `ci-success` now requires six jobs (`api-parity`, `doc-parity`, `links` and two harness smoke jobs joined the original three), and `docs/` gained a committed flag reference plus a dead-link gate that will check any URL you add.\n"
+  },
+  "5549590907": {
+    "thread": "#603",
+    "user": "KageBinary",
+    "created_at": "2026-09-05T05:16:57Z",
+    "body": "Not needed — the push to @Alot1z's fork succeeded once I used the branch's real name (`feat/skill-install-toolscan`; my first attempt used the wrong ref and GitHub reported that as `permission denied`, which I misread as the fork being locked).\n\n#591 now carries the same merge commit `b652008` directly, so it keeps its own history and authorship. Continuing there."
+  }
+}

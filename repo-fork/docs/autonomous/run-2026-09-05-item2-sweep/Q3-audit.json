@@ -1,0 +1,276 @@
+{
+  "generated": "2026-09-05T02:11:09.001Z",
+  "method": "§10 contract",
+  "prs": [
+    {
+      "number": 584,
+      "title": "ci(parity): gate registered flags against the flag reference (#576)",
+      "state": "open",
+      "base": "main",
+      "headSha": "6e2d3ba1da6926972a13eb48d4c05ec5823e74b2",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "ci/576-docs-parity",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 20,
+        "by": {
+          "completed/success": 20
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 8,
+      "lastWord": {
+        "by": "Alot1z",
+        "at": "2026-09-05T02:03:03Z"
+      },
+      "commitCount": 3,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "skew": [
+          {
+            "sha": "c961528",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T00:11:57Z",
+            "committed": "2026-09-03T23:25:35Z"
+          },
+          {
+            "sha": "b8f93f5",
+            "author": "KageBinary",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T18:48:36Z",
+            "committed": "2026-09-04T00:07:41Z"
+          },
+          {
+            "sha": "6e2d3ba",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T21:18:08Z",
+            "committed": "2026-09-04T00:07:41Z"
+          }
+        ]
+      }
+    },
+    {
+      "number": 587,
+      "title": "docs: API-reference parity gate (four surfaces)",
+      "state": "open",
+      "base": "main",
+      "headSha": "f37fd497404168dbe2832f4e9c9871d689b2da9c",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "docs/skill-harness-agnostic",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 20,
+        "by": {
+          "completed/success": 20
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 7,
+      "lastWord": {
+        "by": "Alot1z",
+        "at": "2026-09-05T02:03:03Z"
+      },
+      "commitCount": 5,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "skew": [
+          {
+            "sha": "8f27e4a",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T00:38:09Z",
+            "committed": "2026-09-04T08:40:01Z"
+          },
+          {
+            "sha": "4813132",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T00:52:55Z",
+            "committed": "2026-09-04T08:40:01Z"
+          },
+          {
+            "sha": "bacdbc5",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T21:20:29Z",
+            "committed": "2026-09-04T08:40:02Z"
+          },
+          {
+            "sha": "adadd96",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-04T08:41:55Z",
+            "committed": "2026-09-04T08:42:03Z"
+          }
+        ]
+      },
+      "baseDelta": {
+        "aheadBy": 0,
+        "behindBy": 5,
+        "note": "behind_by>0 = base has commits the branch lacks (rebase candidate signal)"
+      }
+    },
+    {
+      "number": 589,
+      "title": "docs(readme): point the Docs link at the in-repo docs",
+      "state": "open",
+      "base": "main",
+      "headSha": "510639e06c45e7b52c19e7c0d1ff1d0e6133ff53",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "docs/fix-readme-docs-link",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 18,
+        "by": {
+          "completed/success": 18
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 3,
+      "lastWord": {
+        "by": "Alot1z",
+        "at": "2026-09-04T00:12:24Z"
+      },
+      "commitCount": 3,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "skew": [
+          {
+            "sha": "ac8311c",
+            "author": "Alot1z",
+            "committer": "Alot1z",
+            "authored": "2026-09-03T22:47:58Z",
+            "committed": "2026-09-04T00:11:17Z"
+          }
+        ]
+      }
+    },
+    {
+      "number": 590,
+      "title": "ci: fail on dead markdown links",
+      "state": "open",
+      "base": "main",
+      "headSha": "4812866be40d4deca2abbf1668dfcb7fe1fefec8",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "ci/links-check",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 39,
+        "by": {
+          "completed/success": 30
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 6,
+      "lastWord": {
+        "by": "Alot1z",
+        "at": "2026-09-05T02:03:04Z"
+      },
+      "commitCount": 3,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "result": "no skew detected on last 5 commits"
+      }
+    },
+    {
+      "number": 591,
+      "title": "feat(install): drive harness presence from toolscan discovery",
+      "state": "open",
+      "base": "main",
+      "headSha": "608c98638636b62ae96d699e7b9680a2c80d0940",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "feat/skill-install-toolscan",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 22,
+        "by": {
+          "completed/success": 22
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 10,
+      "lastWord": {
+        "by": "Alot1z",
+        "at": "2026-09-05T01:42:43Z"
+      },
+      "commitCount": 20,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "result": "no skew detected on last 5 commits"
+      }
+    },
+    {
+      "number": 601,
+      "title": "fix(ix-cli): stop ambient home-dir markers from vetoing multi-repo detection",
+      "state": "open",
+      "base": "main",
+      "headSha": "ad888aef5c616f3bf41e0f745472442461882f51",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "fix/system-detect-home-boundary",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 18,
+        "by": {
+          "completed/success": 18
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 1,
+      "lastWord": {
+        "by": "KageBinary",
+        "at": "2026-09-04T17:49:11Z"
+      },
+      "commitCount": 1,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "result": "no skew detected on last 5 commits"
+      }
+    },
+    {
+      "number": 602,
+      "title": "docs(api): document release_version on /v1/health",
+      "state": "open",
+      "base": "main",
+      "headSha": "248a185a87feb6db7c1a698ea00723fd9128e750",
+      "headRepo": "Alot1z/Ix-remap",
+      "headRef": "docs/health-release-version",
+      "mergeable": true,
+      "mergeableState": "blocked",
+      "ci": {
+        "total": 19,
+        "by": {
+          "completed/success": 19
+        }
+      },
+      "formalReviews": 0,
+      "formalReviewsNote": "no formal reviews (approve/request-changes); discussion lives in issue-comments",
+      "issueComments": 0,
+      "lastWord": null,
+      "commitCount": 2,
+      "forcePushInference": {
+        "class": "INFERENCE",
+        "result": "no skew detected on last 5 commits"
+      }
+    }
+  ],
+  "pr600closure": {
+    "state": "closed",
+    "merged": false,
+    "closedAt": "2026-09-05T02:03:05Z",
+    "headSha": "bf40fa556b80b02953a7db91857f96924049cf11"
+  }
+}

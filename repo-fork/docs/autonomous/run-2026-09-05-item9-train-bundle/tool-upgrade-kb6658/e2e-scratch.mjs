@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+// e2e-scratch.mjs — the re-runnable proof for the agent-principles surface.
+// One command: private scratch repo (Alot1z) → API commit (verbatim) → refusal
+// asserts (commit msg, PR title, PR body) → PR create (verbatim) → draft-from-open
+// create (--draft, RULE 0 / KB #6646) → edit → close
+// → blob + standalone commit + --paths multi-file snapshot + ref-update +
+// API lease (force-expect refuse+accept) + REAL post-push re-scan (gh api |
+// scan-stdin.mjs) → reopen/close → cleanup.
+// Every verb of gh-commit.mjs and gh-pr.mjs executes through the real API.
+// Exit 0 = every assertion held; any failure = nonzero + failing assert named.
+//   node e2e-scratch.mjs [--keep]      // --keep skips repo cleanup (debugging)
+// Token: gh-token.mjs (single owner). Pattern: watermark.mjs (single owner).
+// REST transport: gh-api.mjs (single owner) — this script adds only its
+// (method, urlPath, body) adapter and call counter on top of apiThrow.
+
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
+import { resolveToken } from "./gh-token.mjs";
+import { apiThrow } from "./gh-api.mjs";
+import { WATERMARK } from "./watermark.mjs";
+
+const KEEP = process.argv.includes("--keep");
+
+const OWNER = "Alot1z";
+const STAMP = new Date().toISOString().replace(/[:.]/g, "-");
+const NAME = `scratch-e2e-${STAMP}`;
+const BR = "main";
+const PR_BRANCH = "e2e-pr";
+const PR_DRAFT_BRANCH = "e2e-pr-draft";
+
+let token;
+try {
+  token = resolveToken();
+} catch (e) {
+  console.error("FATAL: token resolution failed:", e.message);
+  process.exit(2);
+}
+
+// ---------- REST adapter over the shared client (gh-api.mjs) ----------
+let calls = 0;
+async function api(method, urlPath, body) {
+  calls++;
+  try {
+    return await apiThrow(urlPath, {
+      method,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    if (e.status !== undefined) {
+      // preserve the exact original error text (method included)
+      e.message = e.message.replace(/^GitHub API (\d+) on /, `GitHub API $1 on ${method} `);
+    }
+    throw e;
+  }
+}
+
+// ---------- assertions ----------
+let failures = 0;
+function assert(name, cond, detail) {
+  if (cond) console.log(`PASS ${name}`);
+  else { failures++; console.error(`FAIL ${name}${detail ? " — " + detail : ""}`); }
+}
+function step(msg) { console.log(`---- ${msg}`); }
+
+const TOOLS = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+
+function runTool(file, args) {
+  return execFileSync("node", [path.join(TOOLS, file), ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+// ---------- fixtures ----------
+const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "apr-e2e-"));
+fs.writeFileSync(path.join(DIR, "smoke.txt"), `e2e smoke ${STAMP}\n`);
+
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "apr-fix-"));
+const COMMIT_MSG = path.join(TMP, "commit.msg");
+const COMMIT_BAD = path.join(TMP, "commit-bad.msg");
+const T1 = path.join(TMP, "title.txt");
+const T_BAD = path.join(TMP, "title-bad.txt");
+const B1 = path.join(TMP, "body1.md");
+const B2 = path.join(TMP, "body2.md");
+const B_BAD = path.join(TMP, "body-bad.md");
+
+fs.writeFileSync(COMMIT_MSG, "test: e2e scratch verification of the API-only commit path");
+fs.writeFileSync(COMMIT_BAD, "test: poisoned commit\n\n🤖 Generated with Codebuff");
+fs.writeFileSync(T1, "test: agent-principles e2e scratch PR");
+fs.writeFileSync(T_BAD, "test: poisoned title\n\nCo-Authored-By: Codebuff <noreply@codebuff.com>");
+fs.writeFileSync(
+  B1,
+  [
+    "# Scratch e2e PR",
+    "",
+    "Verbatim-text and watermark-refusal proof for the API-only commit/PR surface.",
+    "",
+    "- commit message, PR title, PR body are byte-exact file contents",
+    "- poisoned fixtures must be refused with the remote unchanged",
+    "",
+    `Generated locally for run ${STAMP}.`,
+  ].join("\n")
+);
+fs.writeFileSync(B2, fs.readFileSync(B1, "utf8") + "\nEdited in place by the same API path.\n");
+fs.writeFileSync(B_BAD, "clean body\n\nGenerated with Codebuff");
+const FILE2 = path.join(DIR, "file2.txt");
+fs.writeFileSync(FILE2, `second file for --paths snapshot ${STAMP}\n`);
+const PATHS_LIST = path.join(TMP, "paths.txt");
+fs.writeFileSync(PATHS_LIST, "smoke.txt\nfile2.txt\n");
+const FILE3 = path.join(TMP, "file3.txt");
+fs.writeFileSync(FILE3, `standalone-commit payload ${STAMP}\n`);
+const MSG3 = path.join(TMP, "commit3.msg");
+fs.writeFileSync(MSG3, "test: standalone commit object via gh-commit.mjs commit");
+const POISON_CTRL = "fix: poisoned control\n\nCo-Authored-By: Codebuff <noreply@codebuff.com>";
+
+const msgFile = fs.readFileSync(COMMIT_MSG, "utf8").replace(/\n$/, "");
+const titleFile = fs.readFileSync(T1, "utf8").replace(/\n$/, "");
+
+// ---------- cleanup ----------
+async function cleanup() {
+  step("cleanup");
+  try { runTool("gh-commit.mjs", ["delete-branch", `${OWNER}/${NAME}`, PR_BRANCH]); } catch { /* may be gone with repo */ }
+  try { runTool("gh-commit.mjs", ["delete-branch", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH]); } catch { /* may be gone with repo */ }
+  try {
+    await api("DELETE", `/repos/${OWNER}/${NAME}`);
+    console.log("cleanup: repo deleted");
+  } catch (e) {
+    if (e.status === 403) {
+      try {
+        await api("PATCH", `/repos/${OWNER}/${NAME}`, { archived: true });
+        console.log("cleanup: delete_repo scope absent — repo archived read-only instead");
+      } catch (e2) {
+        console.error("cleanup: archive also failed:", e2.message);
+      }
+    } else {
+      console.error("cleanup: delete failed:", e.message);
+    }
+  }
+  fs.rmSync(DIR, { recursive: true, force: true });
+  fs.rmSync(TMP, { recursive: true, force: true });
+}
+
+// ---------- the run ----------
+let prNum = null;
+try {
+  step(`1. create private scratch repo ${OWNER}/${NAME}`);
+  await api("POST", "/user/repos", { name: NAME, private: true, auto_init: true });
+  assert("scratch repo created (private)", true);
+
+  step("2. API commit via gh-commit.mjs snapshot+push (feature branch off main)");
+  // PR needs head != base: branch off main FIRST, commit on the feature branch
+  const head = await api("GET", `/repos/${OWNER}/${NAME}/git/ref/heads/${BR}`);
+  await api("POST", `/repos/${OWNER}/${NAME}/git/refs`, { ref: `refs/heads/${PR_BRANCH}`, sha: head.object.sha });
+  const snap = JSON.parse(runTool("gh-commit.mjs", ["snapshot", `${OWNER}/${NAME}`, PR_BRANCH, DIR, COMMIT_MSG]));
+  const sha = snap.newCommit;
+  assert("snapshot returned a 40-char newCommit", typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha), JSON.stringify(snap).slice(0, 120));
+  runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_BRANCH, sha]);
+  const remoteMsg = (await api("GET", `/repos/${OWNER}/${NAME}/commits/${sha}`)).commit.message;
+  assert("commit message verbatim on remote", remoteMsg === msgFile, JSON.stringify(remoteMsg).slice(0, 100));
+  assert("commit message watermark-free", !WATERMARK.test(remoteMsg));
+
+  step("3. refusal — poisoned commit message");
+  let refusedCommit = false;
+  try { runTool("gh-commit.mjs", ["snapshot", `${OWNER}/${NAME}`, BR, DIR, COMMIT_BAD]); }
+  catch { refusedCommit = true; }
+  assert("poisoned commit message refused by gh-commit", refusedCommit);
+
+  step("4. PR create via gh-pr.mjs");
+  const prOut = JSON.parse(runTool("gh-pr.mjs", ["create", `${OWNER}/${NAME}`, PR_BRANCH, BR, T1, B1]));
+  prNum = prOut.number;
+  assert("PR number parsed", Number.isInteger(prNum) && prNum > 0, String(prOut).slice(0, 120));
+  const pr = await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`);
+  assert("PR title verbatim", pr.title === titleFile, JSON.stringify(pr.title));
+  assert("PR body verbatim", pr.body === fs.readFileSync(B1, "utf8"), `len ${pr.body?.length}`);
+  assert("PR body watermark-free", !WATERMARK.test(pr.body || ""));
+  // ready-open stays the DEFAULT when --draft is absent (additive contract, KB #6658)
+  assert("ready-open default (no --draft) is NOT a draft", pr.draft === false);
+
+  step("4b. draft-from-open via gh-pr.mjs create --draft");
+  // RULE 0 / KB #6646: draft:true AT CREATE is the only reviewer-free open path.
+  // A PR head must differ from base, so give the draft branch one real commit first.
+  await api("POST", `/repos/${OWNER}/${NAME}/git/refs`, { ref: `refs/heads/${PR_DRAFT_BRANCH}`, sha: head.object.sha });
+  const snapD = JSON.parse(runTool("gh-commit.mjs", ["snapshot", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, DIR, COMMIT_MSG]));
+  runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, snapD.newCommit]);
+  const prDraftOut = JSON.parse(runTool("gh-pr.mjs", ["create", `${OWNER}/${NAME}`, PR_DRAFT_BRANCH, BR, T1, B1, "--draft"]));
+  const prDraft = await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prDraftOut.number}`);
+  assert("create --draft opened a draft (draft:true)", prDraft.draft === true);
+  assert("draft PR title/body verbatim",
+    prDraft.title === titleFile && prDraft.body === fs.readFileSync(B1, "utf8"), `draft=${prDraft.draft}`);
+  assert("draft PR has no requested reviewers", (prDraft.requested_reviewers || []).length === 0);
+  assert("draft PR state=open", prDraft.state === "open");
+  runTool("gh-pr.mjs", ["close", `${OWNER}/${NAME}`, String(prDraftOut.number)]);
+  assert("draft PR closed", (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prDraftOut.number}`)).state === "closed");
+
+  step("5. refusal — poisoned PR title");
+  let refusedTitle = false;
+  try { runTool("gh-pr.mjs", ["edit", `${OWNER}/${NAME}`, String(prNum), T_BAD, "-"]); }
+  catch { refusedTitle = true; }
+  assert("poisoned PR title refused", refusedTitle);
+  assert("remote title unchanged after refusal",
+    (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).title === titleFile);
+
+  step("6. refusal — poisoned PR body");
+  let refusedBody = false;
+  try { runTool("gh-pr.mjs", ["edit", `${OWNER}/${NAME}`, String(prNum), "-", B_BAD]); }
+  catch { refusedBody = true; }
+  assert("poisoned PR body refused", refusedBody);
+  assert("remote body unchanged after refusal",
+    (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).body === fs.readFileSync(B1, "utf8"));
+
+  step("7. clean edit via gh-pr.mjs");
+  runTool("gh-pr.mjs", ["edit", `${OWNER}/${NAME}`, String(prNum), "-", B2]);
+  assert("PR body edited verbatim",
+    (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).body === fs.readFileSync(B2, "utf8").replace(/\n$/, ""));
+
+  step("8. close");
+  runTool("gh-pr.mjs", ["close", `${OWNER}/${NAME}`, String(prNum)]);
+  assert("PR closed", (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).state === "closed");
+
+  step("9. blob + --paths multi-file snapshot + standalone commit + ref-update + REAL post-push re-scan");
+  // 9a. blob verb: create from a local file, verify via GET
+  const blobSha = runTool("gh-commit.mjs", ["blob", `${OWNER}/${NAME}`, FILE3]).trim();
+  assert("blob returned a 40-char sha", /^[0-9a-f]{40}$/.test(blobSha), blobSha);
+  const blobGet = await api("GET", `/repos/${OWNER}/${NAME}/git/blobs/${blobSha}`);
+  const blobDecoded = Buffer.from(blobGet.content, "base64").toString("utf8");
+  assert("blob content round-trips via GET", blobDecoded === fs.readFileSync(FILE3, "utf8"));
+
+  // 9b. snapshot --paths (multi-file): only the listed files may land in the tree
+  const tip = (await api("GET", `/repos/${OWNER}/${NAME}/git/ref/heads/${PR_BRANCH}`)).object.sha;
+  const snap2 = JSON.parse(runTool("gh-commit.mjs", ["snapshot", `${OWNER}/${NAME}`, PR_BRANCH, DIR, COMMIT_MSG, "--paths", PATHS_LIST]));
+  const shaC = snap2.newCommit;
+  assert("snapshot --paths returned a 40-char newCommit", /^[0-9a-f]{40}$/.test(shaC) && shaC !== tip, shaC);
+  runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_BRANCH, shaC]);
+  const treeC = (await api("GET", `/repos/${OWNER}/${NAME}/git/commits/${shaC}`)).tree.sha;
+  const treeCEntries = (await api("GET", `/repos/${OWNER}/${NAME}/git/trees/${treeC}?recursive=1`)).tree.map((e) => e.path);
+  // snapshot semantics: tree = remote head's tree MODIFIED by the listed files,
+  // so the result must be (base tree ∪ paths) — e.g. the auto_init README.md
+  // persists via base_tree inheritance; anything else is a real failure.
+  const baseTreeC = (await api("GET", `/repos/${OWNER}/${NAME}/git/commits/${tip}`)).tree.sha;
+  const basePaths = new Set((await api("GET", `/repos/${OWNER}/${NAME}/git/trees/${baseTreeC}?recursive=1`)).tree.map((e) => e.path));
+  const wantPaths = new Set(["smoke.txt", "file2.txt"]);
+  const missing = [...wantPaths].filter((p) => !treeCEntries.includes(p));
+  const unexpected = treeCEntries.filter((p) => !wantPaths.has(p) && !basePaths.has(p));
+  assert("remote tree = base tree + exactly the --paths files",
+    missing.length === 0 && unexpected.length === 0,
+    `missing=${JSON.stringify(missing)} unexpected=${JSON.stringify(unexpected)}`);
+
+  // 9c. standalone commit verb: build the commit object directly (not via snapshot)
+  const blob3 = runTool("gh-commit.mjs", ["blob", `${OWNER}/${NAME}`, FILE3]).trim();
+  const tree3 = (await api("POST", `/repos/${OWNER}/${NAME}/git/trees`, {
+    base_tree: treeC,
+    tree: [{ path: "file3.txt", mode: "100644", type: "blob", sha: blob3 }],
+  })).sha;
+  const shaD = runTool("gh-commit.mjs", ["commit", `${OWNER}/${NAME}`, tree3, shaC, MSG3]).trim();
+  assert("standalone commit message verbatim",
+    (await api("GET", `/repos/${OWNER}/${NAME}/git/commits/${shaD}`)).message === fs.readFileSync(MSG3, "utf8").replace(/\n$/, ""));
+
+  // 9d. ref-update the standalone commit onto the branch, then the gate's REAL
+  // post-push re-scan: the documented command, through gh, against this range.
+  const refOut = await api("PATCH", `/repos/${OWNER}/${NAME}/git/refs/heads/${PR_BRANCH}`, { sha: shaD, force: false });
+  assert("ref-update moved branch to standalone commit", refOut.object.sha === shaD, refOut.object.sha);
+
+  // 9e. API-side lease (the twin of the git-side --force-with-lease proof):
+  // push --force-expect with a STALE sha must refuse BEFORE any write;
+  // with the correct current sha it must succeed. Both through the real API.
+  const before = (await api("GET", `/repos/${OWNER}/${NAME}/git/ref/heads/${PR_BRANCH}`)).object.sha;
+  let leaseRefused = false;
+  try { runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_BRANCH, shaD, "--force-expect", "0000000000000000000000000000000000000000"]); }
+  catch { leaseRefused = true; }
+  assert("API lease refuses a stale expected sha", leaseRefused);
+  const after = (await api("GET", `/repos/${OWNER}/${NAME}/git/ref/heads/${PR_BRANCH}`)).object.sha;
+  assert("remote ref unchanged after refused lease push", after === before, `${before.slice(0, 10)} -> ${after.slice(0, 10)}`);
+  runTool("gh-commit.mjs", ["push", `${OWNER}/${NAME}`, PR_BRANCH, shaD, "--force-expect", shaD]);
+  assert("API lease accepts the correct expected sha",
+    (await api("GET", `/repos/${OWNER}/${NAME}/git/ref/heads/${PR_BRANCH}`)).object.sha === shaD);
+  const verified = JSON.parse(runTool("gh-commit.mjs", ["verify", `${OWNER}/${NAME}`, PR_BRANCH]));
+  assert("verify verb reports the branch head", verified.sha === shaD, verified.sha);
+  const prGot = JSON.parse(runTool("gh-pr.mjs", ["get", `${OWNER}/${NAME}`, String(prNum)]));
+  assert("gh-pr get returns title/state (post-close)", prGot.title === titleFile && prGot.state === "closed", prGot.state);
+  const rescanCmd = `gh api "repos/${OWNER}/${NAME}/compare/${shaC}...${shaD}" --jq '.commits[].commit.message' | node "${TOOLS}/scan-stdin.mjs"`;
+  const rescanOut = execFileSync("bash", ["-c", rescanCmd], { encoding: "utf8", env: { ...process.env, GH_TOKEN: token } });
+  assert("post-push re-scan of REAL remote range is footer-free", rescanOut.includes("footer-free"), rescanOut.slice(0, 100));
+  let poisonRefused = false;
+  try { execFileSync("bash", ["-c", `printf '%s' '${POISON_CTRL}' | node "${TOOLS}/scan-stdin.mjs"`], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); }
+  catch { poisonRefused = true; }
+  assert("poisoned control message refused by scan-stdin", poisonRefused);
+
+  step("10. reopen + get --jq + close again");
+  runTool("gh-pr.mjs", ["reopen", `${OWNER}/${NAME}`, String(prNum)]);
+  assert("PR reopened (state=open)", (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).state === "open");
+  const jqState = runTool("gh-pr.mjs", ["get", `${OWNER}/${NAME}`, String(prNum), "--jq", ".state"]).trim();
+  assert("gh-pr get --jq .state works", jqState === "open", jqState);
+  runTool("gh-pr.mjs", ["close", `${OWNER}/${NAME}`, String(prNum)]);
+  assert("PR closed again", (await api("GET", `/repos/${OWNER}/${NAME}/pulls/${prNum}`)).state === "closed");
+
+  if (!KEEP) await cleanup();
+  else console.log(`--keep: left ${OWNER}/${NAME} open for inspection`);
+
+  console.log(`\ne2e-scratch: ${failures === 0 ? "ALL PASS" : failures + " FAILURES"} (${calls} API calls)`);
+  process.exit(failures === 0 ? 0 : 1);
+} catch (e) {
+  failures++;
+  console.error("FATAL:", e.message);
+  if (!KEEP) await cleanup();
+  process.exit(1);
+}

@@ -1,0 +1,46 @@
+{
+  "schema": "autonomous-state/1",
+  "run-id": "2026-09-05-campaign-dispatch",
+  "objective": "Execute BUILDER-PROMPT-COMPLETE.md dispatch: verify §0 rows, run §1 queue in order",
+  "status": "in-progress",
+  "lastStep": "item 6 verified done (Q2 doc on fork @457d51b byte-identical; run-dir records in local commit f30e279). Items 1-5 resolved: #591+#602 MERGED. Starting item 7 (toolscan B2-B5).",
+  "items": {
+    "1-poll-591": {
+      "status": "done",
+      "evidence": "#591 MERGED 2026-09-05T05:32Z head 538c2498, seam present on main; no reply to governance comment — F2 MERGED branch armed"
+    },
+    "2-mention-sweep": {
+      "status": "done"
+    },
+    "3-q3-audit": {
+      "status": "done",
+      "evidence": "Q3-audit.md/json on disk; no needs-rebase dispositions"
+    },
+    "4-599-fix": {
+      "status": "done",
+      "evidence": "#602 MERGED 05:05Z (main 36c80e5)"
+    },
+    "5-rebase": {
+      "status": "done",
+      "note": "moot — no needs-rebase dispositions; train merged"
+    },
+    "6-q2-design-doc": {
+      "status": "done",
+      "evidence": "fork feat/harness-detector-design @457d51b, 10509 bytes byte-identical"
+    },
+    "7-toolscan-b2b5": {
+      "status": "in-progress"
+    },
+    "8-logo-followups": {
+      "status": "queued"
+    },
+    "9-c1c3-proposals": {
+      "status": "queued"
+    },
+    "10-closeout": {
+      "status": "queued"
+    }
+  },
+  "blockers": [],
+  "nextAction": "item 2: Alot1z mention sweep"
+}

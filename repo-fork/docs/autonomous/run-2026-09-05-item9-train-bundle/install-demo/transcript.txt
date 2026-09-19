@@ -1,0 +1,71 @@
+Ix installer — live demo (hermetic: HARNESS_HOME=/e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home)
+==============================================================
+
+$ bash scripts/install-skill.sh --dry-run --json
+{
+  "dryRun": true,
+  "hosts": [
+    {
+      "id": "claude",
+      "action": "would-install",
+      "dest": "/e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.claude/skills/ix",
+      "detectedVia": "path"
+    },
+    {
+      "id": "agents",
+      "action": "would-install",
+      "dest": "/e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.agents/skills/ix",
+      "detectedVia": "config-dir"
+    },
+    {
+      "id": "codex",
+      "action": "would-install",
+      "dest": "/e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.codex/skills/ix",
+      "detectedVia": "path"
+    },
+    {
+      "id": "cursor",
+      "action": "would-install",
+      "dest": "/e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.cursor/skills-cursor/ix",
+      "detectedVia": "config-dir"
+    }
+  ]
+}
+
+$ bash scripts/install-skill.sh    # real install, hermetically into HARNESS_HOME
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.claude/skills/ix
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.agents/skills/ix
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.codex/skills/ix
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.cursor/skills-cursor/ix
+
+Ix skill installed for 4 harness(es).
+Start a new session so the agent picks it up, then ask it to use Ix:
+  "Set up Ix and map this repo"
+
+$ find tmp-home -maxdepth 3 | sort    # what got deployed where
+tmp-home
+tmp-home/.agents
+tmp-home/.agents/skills
+tmp-home/.agents/skills/ix
+tmp-home/.claude
+tmp-home/.claude/skills
+tmp-home/.claude/skills/ix
+tmp-home/.codex
+tmp-home/.codex/skills
+tmp-home/.codex/skills/ix
+tmp-home/.cursor
+tmp-home/.cursor/skills-cursor
+tmp-home/.cursor/skills-cursor/ix
+
+$ bash scripts/install-skill.sh claude agents   # the corrected README example (valid ids)
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.claude/skills/ix
+Installed: /e/E-github-repos/Ix-remap/repo-fork/docs/autonomous/run-2026-09-05-item9-train-bundle/install-demo/tmp-home/.agents/skills/ix
+
+Ix skill installed for 2 harness(es).
+Start a new session so the agent picks it up, then ask it to use Ix:
+  "Set up Ix and map this repo"
+
+$ bash scripts/install-skill.sh claude gemini   # the README bug #609 fixes — gemini is not an id
+error: unknown harness id 'gemini'
+       valid ids:claude agents codex cursor
+    (exit 1 — error: unknown harness id 'gemini'; docs fix #609)

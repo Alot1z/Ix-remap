@@ -1,0 +1,277 @@
+{
+  "pr": {
+    "number": 604,
+    "title": "feat(cli): render the repo logo as the setup-notice banner",
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "mergeable": true,
+    "mergeable_state": "blocked",
+    "html_url": "https://github.com/ix-infrastructure/Ix/pull/604",
+    "head": {
+      "label": "Alot1z:feat/tui-logo-banner",
+      "sha": "0869a137618152f907aea3d92cc0f2f0020cd8a9",
+      "ref": "feat/tui-logo-banner"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "39d07342a7aefa86bab36c3c03ff1ec63253e1b1"
+    },
+    "created_at": "2026-09-05T13:21:17Z",
+    "updated_at": "2026-09-05T13:57:27Z",
+    "additions": 702,
+    "deletions": 5,
+    "changed_files": 11,
+    "body": "## Status: DRAFT — part of a larger train, not ready for review\n\nThis pull request is intentionally a **draft**. It is one component of a coordinated set the author is landing together (terminal logo banner · installer polish from the merged-surface audit · toolscan output-contract hardening). It will be marked ready only when every part of the train is green and the whole set is released at once. Please do not review it in its current state; the code below the line is accurate, but the head will move.\n\n---\n\n## What this ships\n\nThe one-time setup notice (`ix` first run in a workspace) prints the Ix logo as a terminal banner instead of the plain text heading.\n\n- `scripts/render-logo.mjs` renders `assets/logo.png` at print time. Zero dependencies: PNG chunk decode → inflate → unfilter → coverage-thresholded supersampling → flat 5-tone snap → half-block output. The PNG is the only maintained art; the terminal render is derived from it on every run.\n- Truecolor with ANSI-256 and ASCII fallbacks. `--color auto` honors `NO_COLOR`, `TERM=dumb`, `FORCE_COLOR`; the no-color path emits zero escape bytes.\n- `--bg none` paints only the logo's own pixels (unbacked `▀`/`▄` half-blocks), so the mark reads cleanly on light terminal themes. `--bg brand` (default) keeps the current backdrop. `--json` reports `bg` honestly.\n- Absent-safe: a layout without the renderer or the asset falls back to the plain text heading — the banner is decoration, never load-bearing. stderr-only, so `--format json|llm` output stays clean.\n- Golden fixtures in `output-samples/` (truecolor/256/ascii × brand/none) with output-stability pins.\n- `assets/logo.png` already exists on main — no binary asset is added, only the renderer, wiring, tests, and goldens.\n- Rebased onto current main (`39d0734`); main's workspace-canonicalization change in `bootstrap.ts` is preserved (verified on a fresh clone of main).\n\n## Tests\n\n- Focused suite: 21 pins in `bootstrap-notice.test.ts` — stderr-not-stdout, absent-safe renderer/asset, NO_COLOR zero-escapes, exit-code contracts, `--bg none` invariants (backdrop constant never appears as a background; library ≡ CLI byte-for-byte; JSON honesty), and byte-identity against the goldens.\n- Mutation-checked locally: breaking the no-color contract turns the NO_COLOR pin red; disabling the `--bg none` emission path turns its pin red. Both restored green.\n- Full `ix-cli` suite on the merged head (Windows): 95 files, 1704 passed / 21 skipped; `tsc --noEmit` clean.\n\n## CI state (updated after the hermeticity fix)\n\nHead `0869a13` on merged main: **22/23 checks green, including all six originally failing jobs** (`Test` × ubuntu/macos × node 22/24, `CI Passed`). The fix made the banner pins hermetic across runners — the half-block pin now pins its env (runners can resolve the ascii fallback otherwise), and the two lib≡CLI byte-identity pins got a realistic budget for the in-process full-PNG decode under v8 coverage (measured ~0.7 s → ~6.8 s with coverage instrumentation; assertions unchanged).\n\nOne residual, not a finding: **CodeQL** failed twice with the known `\"The file may have changed since it was checked\"` race — it ran for 2 s and refused to upload because the branch head moved during analysis. It needs a maintainer-side re-run (rerun requires admin rights; the author's token is contributor-only) or clears on any future branch update.\n\n## Notes\n\n- The aesthetic approach (rendering a repo asset as a first-run terminal banner) takes some inspiration from skills.sh (vercel-labs/skills); the implementation here is original zero-dependency code. Per the author's convention, no attribution appears in any committed file.\n- Part of a train with the installer README-claims fixes and toolscan contract hardening; this PR will be marked ready together with the rest."
+  },
+  "commits": [
+    {
+      "sha": "204028f69d2aab4c7e30034a3e15dc7f1fbf702a",
+      "short": "204028f69d",
+      "message": "feat(cli): render the repo logo as the setup-notice banner",
+      "date": "2026-09-05T08:13:48Z"
+    },
+    {
+      "sha": "ae4b9876023088ef35e93cdb77b1584360df3a7a",
+      "short": "ae4b987602",
+      "message": "feat(cli): add --bg none transparent mode and golden output fixtures",
+      "date": "2026-09-05T08:14:12Z"
+    },
+    {
+      "sha": "0869a137618152f907aea3d92cc0f2f0020cd8a9",
+      "short": "0869a13761",
+      "message": "test(cli): make banner pins hermetic across CI runners",
+      "date": "2026-09-05T13:51:43Z"
+    }
+  ],
+  "files": [
+    {
+      "filename": "ix-cli/src/cli/__tests__/bootstrap-notice.test.ts",
+      "status": "modified",
+      "additions": 195,
+      "deletions": 4,
+      "changes": 199
+    },
+    {
+      "filename": "ix-cli/src/cli/banner.ts",
+      "status": "added",
+      "additions": 60,
+      "deletions": 0,
+      "changes": 60
+    },
+    {
+      "filename": "ix-cli/src/cli/bootstrap.ts",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 1,
+      "changes": 8
+    },
+    {
+      "filename": "output-samples/width-48-256-bg-none.ans",
+      "status": "added",
+      "additions": 25,
+      "deletions": 0,
+      "changes": 25
+    },
+    {
+      "filename": "output-samples/width-48-256.ans",
+      "status": "added",
+      "additions": 25,
+      "deletions": 0,
+      "changes": 25
+    },
+    {
+      "filename": "output-samples/width-48-ascii.ans",
+      "status": "added",
+      "additions": 25,
+      "deletions": 0,
+      "changes": 25
+    },
+    {
+      "filename": "output-samples/width-48-truecolor-bg-none.ans",
+      "status": "added",
+      "additions": 25,
+      "deletions": 0,
+      "changes": 25
+    },
+    {
+      "filename": "output-samples/width-48-truecolor.ans",
+      "status": "added",
+      "additions": 25,
+      "deletions": 0,
+      "changes": 25
+    },
+    {
+      "filename": "output-samples/width-56-truecolor.ans",
+      "status": "added",
+      "additions": 29,
+      "deletions": 0,
+      "changes": 29
+    },
+    {
+      "filename": "scripts/render-logo.d.mts",
+      "status": "added",
+      "additions": 27,
+      "deletions": 0,
+      "changes": 27
+    },
+    {
+      "filename": "scripts/render-logo.mjs",
+      "status": "added",
+      "additions": 259,
+      "deletions": 0,
+      "changes": 259
+    }
+  ],
+  "checks": [
+    {
+      "name": "Conventional title",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970384490/job/101317721051"
+    },
+    {
+      "name": "CI Passed",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317532891"
+    },
+    {
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/ix-infrastructure/Ix/runs/101317167251"
+    },
+    {
+      "name": "Test (ubuntu-latest · node 22)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081752"
+    },
+    {
+      "name": "API-reference parity",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081703"
+    },
+    {
+      "name": "E2E (real backend)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081694"
+    },
+    {
+      "name": "Test (macos-14 · node 24)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081683"
+    },
+    {
+      "name": "Harness install smoke",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081665"
+    },
+    {
+      "name": "Test (ubuntu-latest · node 24)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081661"
+    },
+    {
+      "name": "gitleaks",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145014/job/101317081655"
+    },
+    {
+      "name": "Harness install smoke (Windows)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081635"
+    },
+    {
+      "name": "Flag-reference parity",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081629"
+    },
+    {
+      "name": "Test (windows-2022 · node 22)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081624"
+    },
+    {
+      "name": "Dead-link check",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081610"
+    },
+    {
+      "name": "Test (macos-14 · node 22)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081595"
+    },
+    {
+      "name": "CodeQL (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970144992/job/101317081551"
+    },
+    {
+      "name": "CodeQL (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970144992/job/101317081515"
+    },
+    {
+      "name": "Conventional title",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145007/job/101317081482"
+    },
+    {
+      "name": "Lint & Typecheck",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145015/job/101317081448"
+    },
+    {
+      "name": "Trivy config scan",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145026/job/101317081427"
+    },
+    {
+      "name": "CodeQL (ruby)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970144992/job/101317081390"
+    },
+    {
+      "name": "Dependency Review",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145053/job/101317081308"
+    },
+    {
+      "name": "Deployment policy checks",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970145026/job/101317081162"
+    },
+    {
+      "name": "Trivy (repo)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ix-infrastructure/Ix/actions/runs/33970144983/job/101317081107"
+    }
+  ],
+  "branch": {
+    "ref": "refs/heads/feat/tui-logo-banner",
+    "sha": "0869a137618152f907aea3d92cc0f2f0020cd8a9"
+  },
+  "fetched_at": "2026-09-05T15:15:14.792Z"
+}

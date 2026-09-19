@@ -1,0 +1,1 @@
+install-skill.sh: label install output with the harness id and print a per-host summary

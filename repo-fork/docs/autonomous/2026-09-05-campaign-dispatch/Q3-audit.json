@@ -1,0 +1,13 @@
+{
+  "probeDate": "2026-09-05",
+  "upstreamMain": "fb46941e6a0b",
+  "prs": {
+    "584": {"head": "6e2d3ba1da6926972a13eb48d4c05ec5823e74b2", "ci": {"success": 20}, "state": "open", "mergeable": true, "ahead_by": 3, "behind_by": 2, "formalReviews": 0, "inlineComments": 0, "forcePushInference": ["c961528b7f", "b8f93f5084", "6e2d3ba1da"], "disposition": "CLEAN", "rebase": false},
+    "587": {"head": "adadd961318540794c6385d9d51675f4fc09c21c", "ci": {"success": 20}, "state": "open", "mergeable": true, "ahead_by": 4, "behind_by": 0, "formalReviews": 0, "inlineComments": 0, "forcePushInference": ["8f27e4af72", "4813132895", "bacdbc5f23", "adadd96131"], "disposition": "CLEAN", "rebase": false},
+    "589": {"head": "510639e06c45e7b52c19e7c0d1ff1d0e6133ff53", "ci": {"success": 18}, "state": "open", "mergeable": true, "ahead_by": 3, "behind_by": 2, "formalReviews": 0, "inlineComments": 0, "forcePushInference": ["ac8311cfae"], "disposition": "CLEAN", "rebase": false},
+    "590": {"head": "4812866be40d4deca2abbf1668dfcb7fe1fefec8", "ci": {"success": 39}, "state": "open", "mergeable": true, "ahead_by": 3, "behind_by": 2, "formalReviews": 0, "inlineComments": 0, "forcePushInference": [], "disposition": "CLEAN", "rebase": false},
+    "591": {"head": "608c98638636b62ae96d699e7b9680a2c80d0940", "ci": {"success": 22}, "state": "open", "mergeable": true, "ahead_by": 20, "behind_by": 0, "formalReviews": 0, "inlineComments": 0, "forcePushInference": ["2026-09-04T08:42 rebuild batch, 14 commits"], "disposition": "CLEAN — awaiting maintainer governance choice", "rebase": false}
+  },
+  "openThreads": {"591": "governance PORT/KEEP/SPLIT — maintainer's decision"},
+  "rebaseExecutions": 0
+}
