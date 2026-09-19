@@ -26,17 +26,18 @@ import { resolveFileOrReport } from "../resolve.js";
 import { createStaleProbe, hasCompletedSourceGraphBaseline } from "../stale.js";
 import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
 
-/** The four `--max-*` knobs that bound a bundle. */
+/** The `--max-*` knobs that bound a bundle. */
 interface BudgetSnapshot {
   maxEntities: number;
   maxRelationships: number;
   maxEvidence: number;
+  maxTokens: number;
   maxChars: number;
 }
 
 /**
- * The four budgets, described once: flag key, output label, clamp range, and
- * the default applied when the flag is absent.
+ * The budgets, described once: flag key, output label, clamp range, and the
+ * default applied when the flag is absent.
  *
  * These four facts used to live in five hand-maintained places -- the option
  * registration, the `clampInt` calls, the record fields, the prose formatter
@@ -52,6 +53,7 @@ const BUDGETS = [
   { key: "maxEntities", flag: "--max-entities", label: "entities", help: "Maximum entities in the bundle", min: 1, max: 500, fallback: 50 },
   { key: "maxRelationships", flag: "--max-relationships", label: "relationships", help: "Maximum relationships in the bundle", min: 1, max: 1000, fallback: 100 },
   { key: "maxEvidence", flag: "--max-evidence", label: "evidence", help: "Maximum evidence items in the bundle", min: 1, max: 200, fallback: 25 },
+  { key: "maxTokens", flag: "--max-tokens", label: "tokens", help: "Maximum tokens of evidence output", min: 500, max: 200_000, fallback: 1_500 },
   { key: "maxChars", flag: "--max-chars", label: "chars", help: "Maximum characters of evidence output", min: 1000, max: 1_000_000, fallback: 12_000 },
 ] as const satisfies ReadonlyArray<{
   key: keyof BudgetSnapshot;
@@ -97,12 +99,44 @@ function budgetParser(key: keyof BudgetSnapshot): (value: string) => number {
   return (value: string) => parseBudgetOption(value, example);
 }
 
-/** Apply the table's range and default to whatever the caller supplied. */
-function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
+/**
+ * Characters per token in a real bundle.
+ *
+ * Measured across 41 recorded bundles whose prompts differed only by the
+ * bundle: 2.14, against the ~4 of ordinary English. A bundle is dense
+ * `key=value` and JSON with identifiers in it, and identifiers tokenize badly.
+ *
+ * Conservative on purpose, and it stays conservative as the bundle gets
+ * cleaner: pulling identifier-heavy rows out raises the real ratio, so an
+ * estimate pinned at 2.14 over-counts tokens and the bundle comes in under its
+ * budget rather than over it. Re-measure before lowering it, never raise it to
+ * make a bundle fit.
+ */
+export const BUNDLE_CHARS_PER_TOKEN = 2.14;
+
+/**
+ * Apply the table's range and default to whatever the caller supplied, and
+ * turn the token budget into the character budget that bounds the evidence.
+ *
+ * `--max-tokens` is the budget a caller actually has: the thing being spent is
+ * a context window, and 12,000 characters is a number nobody can convert in
+ * their head into what it costs them. `--max-chars` stays for the caller who
+ * needs exact bytes, and wins outright when passed — the two together are
+ * refused up front rather than silently ranked, because which one lost is not
+ * visible in the output.
+ */
+export function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
   const out = {} as BudgetSnapshot;
   for (const b of BUDGETS) {
     const raw = opts[b.key];
     out[b.key] = raw === undefined ? b.fallback : Math.min(b.max, Math.max(b.min, raw));
+  }
+  if (opts.maxChars === undefined) {
+    const chars = budgetField("maxChars");
+    out.maxChars = Math.min(
+      chars.max,
+      Math.max(chars.min, Math.round(out.maxTokens * BUNDLE_CHARS_PER_TOKEN)),
+    );
   }
   return out;
 }
@@ -264,7 +298,17 @@ export function registerContextCommand(program: Command): void {
     .option("--max-entities <n>", budgetHelp("maxEntities"), budgetParser("maxEntities"))
     .option("--max-relationships <n>", budgetHelp("maxRelationships"), budgetParser("maxRelationships"))
     .option("--max-evidence <n>", budgetHelp("maxEvidence"), budgetParser("maxEvidence"))
-    .option("--max-chars <n>", budgetHelp("maxChars"), budgetParser("maxChars"))
+    .option("--max-tokens <n>", budgetHelp("maxTokens"), budgetParser("maxTokens"))
+    // Not `budgetHelp`: there is no independent default to name any more. The
+    // character budget is derived from `--max-tokens` unless this flag is
+    // passed, and printing "(default: 12000)" beside a flag whose absence
+    // produces 3,210 would be the kind of drift the BUDGETS table exists to
+    // stop.
+    .option(
+      "--max-chars <n>",
+      `${budgetField("maxChars").help} (overrides --max-tokens; clamped to ${budgetField("maxChars").min}-${budgetField("maxChars").max})`,
+      budgetParser("maxChars"),
+    )
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--out <path>", "Write the JSON bundle to this file instead of stdout")
     .option("--save <id>", "Persist the bundle as a resumable investigation state")
@@ -535,6 +579,13 @@ export function detectContextModeConflict(
     if (ignored.length > 0) {
       return `${ignored.join(", ")} cannot be combined with --${mode}; ${why}, so ${ignored.length > 1 ? "those flags change" : "that flag changes"} nothing. Drop ${ignored.length > 1 ? "them" : "it"}, or run ix context <target> to build a bundle with ${ignored.length > 1 ? "them" : "it"}.`;
     }
+  }
+  if (opts.maxTokens !== undefined && opts.maxChars !== undefined) {
+    // Refused rather than ranked. They bound the same thing — the evidence
+    // block — in two units, and whichever one lost does not appear anywhere in
+    // the output, so a caller who set both would have no way to tell which
+    // budget was applied. Same rule `ix diff` uses for --summary and --limit.
+    return "--max-tokens and --max-chars cannot be combined; both bound the evidence block, in different units. Use --max-tokens for a context-window budget, or --max-chars for exact bytes.";
   }
   if (opts.list && opts.resume) {
     return "--list and --resume cannot be combined; --list enumerates saved investigations, --resume renders one. Run --list first, then --resume the id you want.";

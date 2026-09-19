@@ -57,7 +57,7 @@ function bundle(opts: {
       metadata: { query: "", seedEntities: [], hopsExpanded: 1, asOfRev: 1 },
     } as never,
     provenance: opts.provenance ?? {},
-    budgets: { maxEntities: opts.maxEntities ?? 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+    budgets: { maxEntities: opts.maxEntities ?? 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
     isStale: () => false,
   });
 }
@@ -131,7 +131,7 @@ describe("ix context evidence says where things are", () => {
         metadata: { query: "", seedEntities: [], hopsExpanded: 1, asOfRev: 1 },
       } as never,
       provenance: {},
-      budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+      budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
       isStale: () => false,
     });
 

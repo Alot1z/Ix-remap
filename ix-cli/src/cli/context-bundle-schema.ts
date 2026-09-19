@@ -24,7 +24,7 @@ export const INVESTIGATION_SCHEMA = "ix-investigation/1";
  *
  * The shapes below mirror the `ContextBundle` and `EvidenceItem` interfaces in
  * `commands/context.ts`. Fields the renderers and `--diff` dereference by name
- * — `evidence[].title`, the four `budgets`, the four `truncation` counters and
+ * — `evidence[].title`, the `budgets`, the four `truncation` counters and
  * the `metadata` values `--diff` re-sends to the backend — are pinned to their
  * real types rather than left as open records: validation that accepts `{}`
  * where the code goes on to read `.title` or `.maxEntities` only moves the
@@ -106,6 +106,13 @@ export const contextBundleSchema = z.object({
     maxEntities: z.number().int().positive(),
     maxRelationships: z.number().int().positive(),
     maxEvidence: z.number().int().positive(),
+    // Optional, and only this one. A bundle built before `--max-tokens`
+    // existed carries the other four and nothing else, and zod strips keys it
+    // does not declare — so leaving it out here would not have been "tolerant
+    // of old files", it would have silently dropped the field from every new
+    // one on its way to disk. Required would refuse to load those old files
+    // instead, which is a worse answer than reporting `tokens=not-given`.
+    maxTokens: z.number().int().positive().optional(),
     maxChars: z.number().int().positive(),
   }),
   truncation: z.object({
