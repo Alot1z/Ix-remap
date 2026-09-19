@@ -48,6 +48,30 @@ region id=cli kind=subsystem label="Client" parent=root
 region id=srv kind=subsystem label="Server" parent=root
 ```
 
+## Bounded lists
+
+Any command that cuts its answer to `--limit` says both numbers on its header
+record: `shown` is what follows, `total` is what there was before the cut.
+
+```
+callers target=verify_token shown=50 total=212 resolved=48 unresolved=2
+diagnostic code=results_truncated message="212 callers; showing 50. Raise --limit to see the rest."
+```
+
+`shown < total` is the only signal that a list is partial, and it exists
+because the header used to carry a single `total` field holding the length of
+the *cut* list — so `ix callers` on a symbol with 212 callers reported
+`total=50`, which reads as "this symbol has 50 callers".
+
+Two commands cannot know a true total and say so rather than inventing one:
+
+- `ix inventory` reports `shown=N truncated=true`. The backend applies the
+  limit and has no count endpoint, so the CLI only knows the window it asked
+  for came back full.
+- `ix text` reports `shown=N scanned=M`: ripgrep's traversal is bounded by a
+  scan window, and `scanned` is how many matches were ranked, not how many
+  exist.
+
 ## Examples
 
 `ix stats`:
