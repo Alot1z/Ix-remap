@@ -31,11 +31,23 @@ export interface EntityFacts {
   name: string;
   kind: string;
   path?: string;
+  /**
+   * The target's own line range — the one location in a bundle that was a bare
+   * path. Read off the same `attrs` the members' ranges come from, so it costs
+   * no request; absent for a file, whose span says nothing its path does not.
+   */
+  lineStart?: number;
+  lineEnd?: number;
   signature?: string;
   docstring?: string;
 
   // Structural context
-  container?: { kind: string; name: string };
+  /**
+   * The container, located. It was a bare `{ kind, name }`, which is the one
+   * evidence row in a bundle that named something with no way to open it — and
+   * the node it is read from was already in hand, so the path cost nothing.
+   */
+  container?: EntityLocation;
   members: string[];
   /** The same members with their locations, in the same order as `members`. */
   memberRefs?: EntityLocation[];
@@ -341,15 +353,11 @@ export async function collectFacts(
   const containsEdge = edges.find(
     (e: any) => e.predicate === "CONTAINS" && e.dst === targetId,
   );
-  let container: { kind: string; name: string } | undefined;
+  let container: EntityLocation | undefined;
   if (containsEdge) {
     try {
       const containerDetails = await client.entity(containsEdge.src);
-      const cNode = containerDetails.node as any;
-      container = {
-        kind: cNode.kind || "unknown",
-        name: cNode.name || cNode.attrs?.name || "(unknown)",
-      };
+      container = toLocation(containerDetails.node);
     } catch {
       /* no container */
     }
@@ -480,11 +488,17 @@ export async function collectFacts(
   const subsystemName = hierarchyPath.find((n: any) => n.kind === "subsystem")?.name;
   const moduleName = hierarchyPath.find((n: any) => n.kind === "module")?.name;
 
+  const targetKindName = node.kind || targetKind;
+  const targetLines = targetKindName === "file"
+    ? {}
+    : { lineStart: lineOf(node.attrs?.line_start), lineEnd: lineOf(node.attrs?.line_end) };
+
   const facts: EntityFacts = {
     id: targetId,
     name: node.name || node.attrs?.name || targetName,
-    kind: node.kind || targetKind,
+    kind: targetKindName,
     path,
+    ...targetLines,
     signature,
     docstring,
     container,
