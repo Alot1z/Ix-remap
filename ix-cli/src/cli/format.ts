@@ -124,6 +124,48 @@ export function truncationHint(slice: Slice<unknown>, relation: string): string 
   return `${slice.total} ${relation}; showing ${slice.shown}. Raise --limit to see the rest.`;
 }
 
+// ── Row locations ──────────────────────────────────────────────────────────
+
+function lineNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Where a row's entity is, read off the graph node the row was built from.
+ *
+ * Every one of these rows already had the node in hand and printed a name from
+ * it. A bare name costs the reader a `locate` before it can do anything, which
+ * is a whole turn — around 30k tokens — against the ~30 bytes a path and a span
+ * cost here.
+ *
+ * A file gets no span: its range is the whole file, which says nothing its path
+ * does not. Same rule the context bundle's `toLocation` uses.
+ */
+export function rowLocation(node: any): { path?: string; lineStart?: number; lineEnd?: number } {
+  const path = relativePath(
+    node?.provenance?.source_uri ?? node?.provenance?.sourceUri ?? node?.attrs?.path ?? undefined,
+  );
+  if (String(node?.kind ?? "").toLowerCase() === "file") return { path };
+  const lineStart = lineNumber(node?.attrs?.line_start);
+  const lineEnd = lineNumber(node?.attrs?.line_end);
+  return { path, lineStart, lineEnd };
+}
+
+/** `17-145`, or `17` when the entity is one line, or nothing when unknown. */
+export function lineSpan(loc: { lineStart?: number; lineEnd?: number }): string | undefined {
+  if (loc.lineStart === undefined) return undefined;
+  return loc.lineEnd !== undefined && loc.lineEnd !== loc.lineStart
+    ? `${loc.lineStart}-${loc.lineEnd}`
+    : `${loc.lineStart}`;
+}
+
+/** `src/a.ts:17-145`, for a row a person reads. */
+export function locationLabel(loc: { path?: string; lineStart?: number; lineEnd?: number }): string {
+  if (!loc.path) return "";
+  const span = lineSpan(loc);
+  return span ? `${loc.path}:${span}` : loc.path;
+}
+
 export function confidenceColor(score: number): (text: string) => string {
   if (score >= 0.8) return chalk.green;
   if (score >= 0.5) return chalk.yellow;
@@ -201,11 +243,16 @@ export function formatContext(result: any, format: string): void {
 
 /** Render a flat node list as llm `node` records. */
 export function renderNodesLlm(nodes: any[]): string[] {
-  return nodes.map((n) => llmLine("node", [
-    ["kind", n.kind],
-    ["id", typeof n.id === "string" ? n.id.slice(0, 8) : undefined],
-    ["name", n.name || n.attrs?.name || n.attrs?.title || "(unnamed)"],
-  ]));
+  return nodes.map((n) => {
+    const loc = rowLocation(n);
+    return llmLine("node", [
+      ["kind", n.kind],
+      ["id", typeof n.id === "string" ? n.id.slice(0, 8) : undefined],
+      ["name", n.name || n.attrs?.name || n.attrs?.title || "(unnamed)"],
+      ["path", loc.path],
+      ["lines", lineSpan(loc)],
+    ]);
+  });
 }
 
 export function formatNodes(nodes: any[], format: string): void {
@@ -229,8 +276,13 @@ export function formatNodes(nodes: any[], format: string): void {
         `  ${chalk.blue("decision")}  ${chalk.dim(shortId)}  ${name}`
       );
     } else {
+      // The path is what makes a search row a place rather than a word: a
+      // graph with four `config.ts` modules in it answered `ix search config`
+      // with four identical-looking rows.
+      const where = locationLabel(rowLocation(n));
       console.log(
         `  ${chalk.cyan(n.kind.padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.bold(name)}`
+        + (where ? `  ${chalk.dim(where)}` : ""),
       );
     }
   }
@@ -566,7 +618,7 @@ export function renderEdgeResultsLlm(
       name,
       kind: n.kind ?? undefined,
       id: n.id ?? undefined,
-      path: relativePath(n.provenance?.source_uri ?? n.provenance?.sourceUri ?? n.attrs?.path ?? undefined),
+      ...rowLocation(n),
     };
   });
   const unresolved = refs.filter((r) => !r.resolved).length;
@@ -592,7 +644,10 @@ export function renderEdgeResultsLlm(
   }
   for (const ref of refs) {
     lines.push(ref.resolved
-      ? llmLine("ref", [["name", ref.name], ["kind", ref.kind], ["id", ref.id?.slice(0, 8)], ["path", ref.path]])
+      ? llmLine("ref", [
+          ["name", ref.name], ["kind", ref.kind], ["id", ref.id?.slice(0, 8)],
+          ["path", ref.path], ["lines", lineSpan(ref)],
+        ])
       : llmLine("ref", [["kind", ref.kind], ["id", ref.id?.slice(0, 8)], ["resolved", false]]));
   }
   return lines;
@@ -621,7 +676,7 @@ export function formatEdgeResults(
         name: resolved ? name : undefined,
         kind: n.kind ?? undefined,
         id: resolved ? n.id : undefined,
-        path: relativePath(n.provenance?.source_uri ?? n.provenance?.sourceUri ?? n.attrs?.path ?? undefined),
+        ...rowLocation(n),
       };
       if (!resolved) {
         ref.resolved = false;
@@ -689,7 +744,11 @@ export function formatEdgeResults(
     if (!name || isRawIdName(name)) {
       console.log(`  ${chalk.cyan((n.kind ?? "").padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.dim("(unresolved)")}`);
     } else {
-      console.log(`  ${chalk.cyan((n.kind ?? "").padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.bold(name)}`);
+      const where = locationLabel(rowLocation(n));
+      console.log(
+        `  ${chalk.cyan((n.kind ?? "").padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.bold(name)}`
+        + (where ? `  ${chalk.dim(where)}` : ""),
+      );
     }
   }
   if (slice.truncated) console.log(chalk.dim(`  ${truncationHint(slice, relation)}`));
