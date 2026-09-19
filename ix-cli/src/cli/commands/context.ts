@@ -258,6 +258,15 @@ interface ContextBundle {
     relationshipsTruncated: number;
     evidenceTruncated: number;
     charactersTruncated: number;
+    /**
+     * What the budget dropped, by category, largest first.
+     *
+     * The counts above say how much went; this says what it was. "Rerun with
+     * larger --max-* budgets" was the same sentence for a file that lost 36 of
+     * its own members and for a symbol that lost two claims, and it named the
+     * one lever that costs the caller the most to pull.
+     */
+    cut?: Array<{ what: string; count: number }>;
   };
   metadata: {
     asOfRev?: number;
@@ -1639,6 +1648,8 @@ export function buildBundle(input: BuildInput): ContextBundle {
   }
   bundle.evidence = evidence.slice(0, kept);
   bundle.truncation.evidenceTruncated = evidence.length - kept;
+  const dropped = summariseCut(evidence.slice(kept));
+  if (dropped.length > 0) bundle.truncation.cut = dropped;
   const fullChars = sizedEvidence.reduce((sum, entry) => sum + entry.size, 0);
   bundle.truncation.charactersTruncated = Math.max(0, fullChars - chars);
 
@@ -1840,6 +1851,13 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
         truncated_evidence: bundle.truncation.evidenceTruncated,
         truncated_chars: bundle.truncation.charactersTruncated,
       }),
+      // What the budget dropped, and the cheapest command that gets it back.
+      // The header's `truncated_*` counters say how much went; without this the
+      // caller's only move is a bigger budget for the same query, which is the
+      // most expensive one available.
+      truncationAdvice(bundle)
+        ? llmLine("diagnostic", { code: "bundle_truncated", message: truncationAdvice(bundle) })
+        : null,
       // Evidence only, as before. The entity, relationship and claim lists are
       // deliberately still counts here: `--format llm` is the token-minimal
       // surface, the ranked evidence is what it exists to deliver, and
@@ -1874,11 +1892,94 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
 
   const trunc = bundle.truncation;
   if (trunc.entitiesTruncated + trunc.relationshipsTruncated + trunc.evidenceTruncated > 0) {
+    const advice = truncationAdvice(bundle);
     renderNote(
-      `Truncated: ${trunc.entitiesTruncated} entities, ${trunc.relationshipsTruncated} relationships, ${trunc.evidenceTruncated} evidence items. Rerun with larger --max-* budgets for more.`,
+      `Truncated: ${trunc.entitiesTruncated} entities, ${trunc.relationshipsTruncated} relationships, ${trunc.evidenceTruncated} evidence items.`
+      + (advice ? ` ${advice}` : " Raise --max-tokens for more."),
     );
   }
   console.log();
+}
+
+/**
+ * Evidence sources, as the word a hint can put a number in front of.
+ *
+ * Keyed on `source` rather than `kind`: `kind` is `structural` for members,
+ * imports, calls, callers and dependents alike, and "cut: 48 structural" is the
+ * uninformative sentence this exists to replace.
+ */
+const CUT_LABELS: Record<string, string> = {
+  "facts.container": "container",
+  "facts.members": "member",
+  "facts.imports": "import",
+  "facts.callees": "call",
+  "facts.neighbours": "neighbouring definition",
+  "facts.callers": "caller",
+  "facts.dependents": "dependent",
+  "context.claims": "claim",
+  "context.decisions": "decision",
+  "context.conflicts": "conflict",
+  "context.intents": "intent",
+  "context.edges": "relationship",
+};
+
+/** Group the evidence a budget dropped by category, largest first. */
+function summariseCut(dropped: EvidenceItem[]): Array<{ what: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const item of dropped) {
+    const what = CUT_LABELS[item.source] ?? item.kind;
+    counts.set(what, (counts.get(what) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([what, count]) => ({ what, count }))
+    .sort((a, b) => b.count - a.count || a.what.localeCompare(b.what));
+}
+
+/**
+ * The cheapest command that gets back what the budget dropped.
+ *
+ * Target-specific because the answer is: a file that lost its own members wants
+ * one of those members as a target, not a bigger budget for the file; a symbol
+ * that lost callers wants `ix callers`, which is bounded and ranked and costs a
+ * fraction of a bundle. `--max-tokens` is named last, as the lever that works
+ * for anything and pays for everything.
+ */
+function cutLever(bundle: ContextBundle, top: { what: string }): string {
+  const name = bundle.target.name;
+  const container = ["file", "module", "class", "object", "trait", "interface"]
+    .includes(bundle.target.kind.toLowerCase());
+  switch (top.what) {
+    case "member":
+      return container
+        ? `run ix context on one of them, or raise --max-tokens`
+        : `ix contains ${name}, or raise --max-tokens`;
+    case "caller":
+      return `ix callers ${name}, or raise --max-tokens`;
+    case "dependent":
+      return `ix impact ${name}, or raise --max-tokens`;
+    case "import":
+      return `ix imports ${name}, or raise --max-tokens`;
+    case "call":
+      return `ix callees ${name}, or raise --max-tokens`;
+    case "relationship":
+      return `ix depends ${name}, or raise --max-tokens`;
+    case "claim":
+    case "conflict":
+      return `ix conflicts ${name}, or raise --max-tokens`;
+    default:
+      return `raise --max-tokens`;
+  }
+}
+
+/** One sentence naming what was cut and the cheapest way to get it back. */
+export function truncationAdvice(bundle: ContextBundle): string | undefined {
+  const cut = bundle.truncation.cut ?? [];
+  if (cut.length === 0) return undefined;
+  const named = cut
+    .slice(0, 3)
+    .map((c) => `${c.count} ${c.what}${c.count === 1 ? "" : "s"}`)
+    .join(", ");
+  return `cut: ${named} — ${cutLever(bundle, cut[0])}`;
 }
 
 /** Members placed ahead of the backend's context nodes; the evidence shows as many. */

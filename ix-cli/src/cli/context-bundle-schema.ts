@@ -116,6 +116,10 @@ export const contextBundleSchema = z.object({
     maxChars: z.number().int().positive(),
   }),
   truncation: z.object({
+    // Optional for the same reason `budgets.maxTokens` is: a bundle saved
+    // before this field existed carries the counters and nothing else, and an
+    // undeclared key would be stripped from every new one on its way to disk.
+    cut: z.array(z.object({ what: z.string(), count: z.number().int().positive() })).optional(),
     entitiesTruncated: z.number().int().nonnegative(),
     relationshipsTruncated: z.number().int().nonnegative(),
     evidenceTruncated: z.number().int().nonnegative(),
