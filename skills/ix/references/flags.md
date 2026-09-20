@@ -47,6 +47,12 @@ surfaces (#575).
   --limit 50` exits with an error rather than a shorter list. `--detailed`
   auto-paginates on its own; `--offset` or `--regions` turns that off, and
   `--limit` only sets the page size.
+- **`ix mcp` advertises ten tools by default**, not twenty-six: `ix_health`,
+  `ix_locate`, `ix_search`, `ix_text`, `ix_impact`, `ix_overview`, `ix_read`,
+  `ix_neighbors`, `ix_explain` and `ix_context`. `ix_neighbors{relation}`
+  replaces `ix_callers` / `ix_callees` / `ix_imports` / `ix_imported_by`, whose
+  schemas differed by one word. `--tools=all` advertises every tool, and the Pro
+  tools are offered under both whenever Pro is installed.
 - **`--pick <n>` is 1-based** everywhere it appears, and is how you resolve an
   ambiguous target without re-running with a longer name.
 - **`--no-recursive` and `--no-open` negate a default-on behaviour**, so their
@@ -389,7 +395,9 @@ Serve Ix tools over the Model Context Protocol (stdio).
 
 Subcommands: `install`, `doctor`.
 
-No flags.
+| Flag | Value | Default | Effect |
+|---|---|---|---|
+| `--tools` | `core\|all` | `core` | Which catalog to advertise — ten tools, or every one |
 
 #### `ix mcp install`
 
