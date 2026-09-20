@@ -37,7 +37,10 @@ describe("emitSetupNotice", () => {
     const stderrText = err.mock.calls.map((c) => String(c[0])).join("\n");
     expect(stderrText).toContain("Registered workspace");
     expect(stderrText).toContain("my-workspace");
-  }, 15000);
+    // budget, not a weaker assertion: emitSetupNotice renders the banner
+    // in-process; under coverage instrumentation the fixed PNG-decode cost
+    // inflates ~10x (measured 17.5s on the ubuntu·node22 coverage leg).
+  }, 30000);
 
   it("shows the logo banner when the renderer + asset are present", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -52,7 +55,9 @@ describe("emitSetupNotice", () => {
     // (whatever color mode this environment resolves), not the text fallback.
     expect(stderrText).toContain(banner!);
     expect(stderrText).not.toContain("Ix");
-  }, 15000);
+    // budget, not a weaker assertion (see the sibling in-process pin above):
+    // coverage instrumentation on the render dominates this test's runtime.
+  }, 30000);
 
   it("falls back to the plain text heading when the asset is absent (absent-safe)", () => {
     // A layout without the packaged asset must degrade to the old heading —
@@ -94,7 +99,9 @@ describe("renderBanner", () => {
     for (const line of banner!.split("\n")) {
       if (line.trim()) expect(line.startsWith("  ")).toBe(true);
     }
-  }, 15000);
+    // budget, not a weaker assertion (see the sibling in-process pins above):
+    // coverage instrumentation on the render dominates this test's runtime.
+  }, 30000);
 
   it("renders ASCII under NO_COLOR and never writes stdout", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
