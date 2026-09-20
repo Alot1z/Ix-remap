@@ -193,12 +193,14 @@ describe("render-logo CLI contract", () => {
   });
 
   it("--bg none paints only shape pixels: the backdrop never appears as a background", () => {
-    // brand mode paints the navy canvas behind every partial cell; none mode
-    // must never emit the backdrop constant as a background color.
+    // brand mode paints the logo's own (modal) backdrop color behind every
+    // partial cell; none mode must never emit that constant as a background.
+    // The sharp renderer detects the backdrop from the asset itself instead of
+    // hardcoding one, so the constant here is the Ix PNG's modal color.
     const brand = run(["--width", "20", "--color", "truecolor"]);
     const none = run(["--width", "20", "--color", "truecolor", "--bg", "none"]);
-    expect(brand).toContain("48;2;5;10;30"); // brand paints the backdrop
-    expect(none).not.toContain("48;2;5;10;30"); // none never does
+    expect(brand).toContain("48;2;0;0;27"); // brand paints the asset's backdrop
+    expect(none).not.toContain("48;2;0;0;27"); // none never does
     expect(none).toContain("▄"); // bottom-only cells emit the lower half-block
     expect(none).not.toBe(brand);
   });
