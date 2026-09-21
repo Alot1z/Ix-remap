@@ -11,6 +11,7 @@ import chalk from "chalk";
 
 import { llmError, llmLine } from "./llm.js";
 import { printJson, relativePath } from "./format.js";
+import { isQuiet } from "./output-shape.js";
 import type { AmbiguousResult, ResolveResult, Suggestion } from "./resolve.js";
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ import type { AmbiguousResult, ResolveResult, Suggestion } from "./resolve.js";
 
 /** Print a bold section title preceded by a blank line. */
 export function renderSection(title: string): void {
+  if (isQuiet()) return;
   console.log(chalk.bold(`\n${title}`));
 }
 
@@ -66,8 +68,15 @@ export function renderBreadcrumb(
 
 // ── Alerts ────────────────────────────────────────────────────────────────────
 
-/** Advisory hint, stale data, or informational note. */
+/**
+ * Advisory hint, stale data, or informational note.
+ *
+ * Silenced by `--quiet`. A warning is not: `renderWarning` says something is
+ * wrong with the answer, and a caller asking for less output is not asking to
+ * be told less about that.
+ */
 export function renderNote(text: string): void {
+  if (isQuiet()) return;
   console.log(`  ${chalk.dim("Note")}  ${chalk.dim(text)}`);
 }
 
@@ -106,6 +115,7 @@ export function renderError(text: string): void {
 
 /** Print the "Resolved: kind name" header shown at the top of most command text output. */
 export function renderResolvedHeader(kind: string, name: string): void {
+  if (isQuiet()) return;
   console.log(`${chalk.bold("Resolved:")} ${chalk.cyan(kind)} ${chalk.bold(name)}`);
 }
 

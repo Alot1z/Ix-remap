@@ -8,6 +8,7 @@ import { resolveWorkspaceId } from "../bootstrap.js";
 import { resolveReadSystemId } from "../resolve.js";
 import { relativePath, printJson } from "../format.js";
 import { llmLine } from "../llm.js";
+import { projectRow } from "../output-shape.js";
 import { normalizePathSeparators } from "../path-match.js";
 
 /**
@@ -52,10 +53,10 @@ export function renderInventoryLlm(
     ]));
   }
   for (const [path, names] of byFile) {
-    lines.push(llmLine("file", [["path", path], ["items", names.join(",")]]));
+    lines.push(llmLine("file", projectRow([["path", path], ["items", names.join(",")]])));
   }
   for (const u of ungrouped) {
-    lines.push(llmLine("item", [["name", u.name], ["kind", u.kind]]));
+    lines.push(llmLine("item", projectRow([["name", u.name], ["kind", u.kind]])));
   }
   return lines;
 }

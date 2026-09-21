@@ -41,6 +41,7 @@ import { registerMcpCommand } from "../commands/mcp.js";
 import { registerContextCommand } from "../commands/context.js";
 import { validateCliOptions } from "../options.js";
 import { setPrettyJson } from "../format.js";
+import { setOutputShape } from "../output-shape.js";
 import {
   BUILT_IN_DEFAULT_FORMAT,
   DEFAULT_FORMAT_CHOICES,
@@ -114,18 +115,31 @@ function configureOssOptions(root: Command): void {
   const visit = (command: Command): void => {
     ossCommands.add(command);
     const commandChoices = OPTION_CHOICES[command.name()] ?? {};
+    let rendersRows = false;
     let rendersJson = false;
     for (const option of command.options) {
       const choices = commandChoices[option.attributeName()]
         ?? (option.long === "--format" ? [...DEFAULT_FORMAT_CHOICES] : undefined);
       if (choices) option.choices(choices);
       applyDefaultFormat(command, option, choices, defaultFormat);
+      if (option.long === "--format") rendersRows = true;
       if (option.long === "--format" && (choices ?? []).includes("json")) rendersJson = true;
     }
     // Declared here rather than 32 times by hand, and only where it means
     // something: a command with no `--format json` has no JSON to shape.
     if (rendersJson && !command.options.some((option) => option.long === "--pretty")) {
       command.option("--pretty", "Indent JSON output (the default only when stdout is a terminal)");
+    }
+    // Declared here rather than on 33 commands by hand, and only where there
+    // is an answer to shape. A command with no `--format` prints a status
+    // line or nothing.
+    if (rendersRows) {
+      if (!command.options.some((option) => option.long === "--quiet")) {
+        command.option("--quiet", "Drop headers, section titles and advisory hints");
+      }
+      if (!command.options.some((option) => option.long === "--fields")) {
+        command.option("--fields <list>", "Keep only these fields on each row, in this order (e.g. name,path,lines)");
+      }
     }
     for (const child of command.commands) visit(child);
   };
@@ -206,10 +220,12 @@ export function registerOssCommands(program: Command): void {
   configureOssOptions(program);
 
   program.hook("preAction", (_thisCommand, actionCommand) => {
-    // Before anything prints. `--pretty` is a property of the run, not of a
-    // payload, so the renderers read it from one place instead of threading a
-    // flag through every signature that ends in a `console.log`.
-    setPrettyJson(actionCommand.opts().pretty === true);
+    // Before anything prints. All three are properties of the run, not of a
+    // payload, so the renderers read them from one place rather than every
+    // signature growing parameters it only forwards.
+    const opts = actionCommand.opts();
+    setPrettyJson(opts.pretty === true);
+    setOutputShape({ quiet: opts.quiet === true, fields: typeof opts.fields === "string" ? opts.fields : undefined });
 
     // OSS commands only. The rules below read an option's *shape* -- `<n>`
     // means a non-negative integer, `--min-confidence` means 0..1 -- which is

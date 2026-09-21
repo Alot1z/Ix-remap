@@ -2,6 +2,7 @@
 
 import chalk from "chalk";
 import { llmLine, llmShortId } from "./llm.js";
+import { projectRow } from "./output-shape.js";
 
 export type ResultSource = "graph" | "text" | "graph+text" | "heuristic";
 
@@ -281,13 +282,13 @@ export function formatContext(result: any, format: string): void {
 export function renderNodesLlm(nodes: any[]): string[] {
   return nodes.map((n) => {
     const loc = rowLocation(n);
-    return llmLine("node", [
+    return llmLine("node", projectRow([
       ["kind", n.kind],
       ["id", llmShortId(n.id)],
       ["name", n.name || n.attrs?.name || n.attrs?.title || "(unnamed)"],
       ["path", loc.path],
       ["lines", lineSpan(loc)],
-    ]);
+    ]));
   });
 }
 
@@ -680,11 +681,11 @@ export function renderEdgeResultsLlm(
   }
   for (const ref of refs) {
     lines.push(ref.resolved
-      ? llmLine("ref", [
+      ? llmLine("ref", projectRow([
           ["name", ref.name], ["kind", ref.kind], ["id", llmShortId(ref.id)],
           ["path", ref.path], ["lines", lineSpan(ref)],
-        ])
-      : llmLine("ref", [["kind", ref.kind], ["id", llmShortId(ref.id)], ["resolved", false]]));
+        ]))
+      : llmLine("ref", projectRow([["kind", ref.kind], ["id", llmShortId(ref.id)], ["resolved", false]])));
   }
   return lines;
 }
