@@ -4,7 +4,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { contextBundleSchema } from "../cli/context-bundle-schema.js";
 
 import {
   createProtocolStdout,
@@ -29,6 +28,10 @@ export type { IxRunner } from "./runner.js";
 export const IX_MCP_OSS_TOOL_NAMES = [
   "ix_health",
   "ix_locate",
+  // `ix search` is the command every other one starts from, and it was the one
+  // command with no tool at all — an agent over MCP could follow an edge from
+  // a symbol it already knew, and had no way to find the first symbol.
+  "ix_search",
   "ix_text",
   "ix_impact",
   "ix_map",
@@ -114,6 +117,7 @@ const UNVERIFIED = (title: string): ToolAnnotations => ({ title });
 const TOOL_ANNOTATIONS: Record<(typeof IX_MCP_TOOL_NAMES)[number], ToolAnnotations> = {
   ix_health: { ...READ_ONLY, title: "Check Ix backend and graph readiness" },
   ix_locate: { ...READ_ONLY, title: "Resolve a symbol to its canonical target" },
+  ix_search: { ...READ_ONLY, title: "Search the graph by name" },
   ix_text: { ...READ_ONLY, title: "Search text across the indexed repository" },
   ix_impact: { ...READ_ONLY, title: "Analyze the blast radius of changing a symbol" },
   ix_map: { ...WRITE, title: "Ingest or refresh the workspace architecture map" },
@@ -168,7 +172,12 @@ const JSON_OBJECT_SCHEMA = z.object({}).passthrough();
 const TOOL_OUTPUT_SCHEMA: Partial<Record<(typeof IX_MCP_TOOL_NAMES)[number], z.ZodTypeAny>> = {
   ix_map: JSON_OBJECT_SCHEMA,
   ix_ingest: JSON_OBJECT_SCHEMA,
-  ix_smells: JSON_OBJECT_SCHEMA,
+  // `ix_smells` is not here any more, and neither is `ix_context`'s bundle
+  // schema. An outputSchema is a promise that EVERY result carries structured
+  // content, so a tool whose structured copy is opt-in cannot declare one.
+  // `ix_context`'s was 4,671 of the 15,365 bytes of tools/list — 30% of the
+  // always-on cost of connecting to this server, for a shape only a caller
+  // passing `structured: true` receives.
 };
 
 interface CreateServerOptions {
@@ -234,6 +243,25 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   );
   registerTool(
     server,
+    "ix_search",
+    "Search the graph by name, ranked, with each hit's path",
+    {
+      term: z.string().min(1),
+      kind: z.string().min(1).optional().describe("narrow to one entity kind"),
+      path: z.string().min(1).optional().describe("narrow to files whose path contains this"),
+      language: z.string().min(1).optional(),
+      limit: z.number().int().min(1).max(200).default(10),
+    },
+    async (input) => {
+      const options = [`--limit=${numberArg(input, "limit")}`];
+      pushOption(options, "--kind", input.kind);
+      pushOption(options, "--path", input.path);
+      pushOption(options, "--language", input.language);
+      return runFormatted(runIx, "ix_search", ix("search", [stringArg(input, "term")], options));
+    },
+  );
+  registerTool(
+    server,
     "ix_text",
     "Search text across the indexed repository and return ranked hits",
     {
@@ -276,9 +304,18 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   registerTool(
     server,
     "ix_read",
-    "Read graph-bounded source for a symbol or indexed file",
-    { symbol: z.string().min(1) },
-    async (input) => runFormatted(runIx, "ix_read", ix("read", [stringArg(input, "symbol")])),
+    "Read a symbol's source, or a line range of a file",
+    {
+      symbol: z.string().min(1).describe("a symbol, a path, or `path:start-end`"),
+      kind: z.string().min(1).optional(),
+      path: z.string().min(1).optional(),
+      pick: z.number().int().min(1).max(50).optional().describe("choose the Nth candidate, 1-based"),
+    },
+    // Nothing is forwarded as a size bound: `ix read` owns its own cap, and a
+    // second one here would be a number to keep in sync with it. A range goes
+    // in the target, where the CLI already takes one: `read src/a.ts:40-80`.
+    async (input) =>
+      runFormatted(runIx, "ix_read", ix("read", [stringArg(input, "symbol")], symbolOptions(input, { limit: false }))),
   );
   registerTool(
     server,
@@ -323,9 +360,13 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     {
       symbol: z.string().min(1),
       to: z.string().min(1).optional(),
+      // The one tool whose traversal had no bound it could be told about:
+      // `ix_depends` has had a `depth` since it was written and this did not,
+      // so a trace through a hub ran as deep as the graph goes.
+      depth: z.number().int().min(1).max(10).default(3),
     },
     async (input) => {
-      const options: string[] = [];
+      const options = [`--depth=${numberArg(input, "depth")}`];
       pushOption(options, "--to", input.to);
       return runFormatted(runIx, "ix_trace", ix("trace", [stringArg(input, "symbol")], options));
     },
@@ -336,6 +377,9 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     "ix_explain",
     "Explain a symbol using graph evidence",
     "explain",
+    // No `--limit`: `ix explain` has none, and forwarding a flag the command
+    // rejects turns a resolvable call into a usage error.
+    { symbol: SYMBOL_TOOL_INPUT.symbol, kind: SYMBOL_TOOL_INPUT.kind, path: SYMBOL_TOOL_INPUT.path, pick: SYMBOL_TOOL_INPUT.pick },
   );
   registerTool(
     server,
@@ -384,6 +428,10 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     {
       path: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(500).default(50),
+      structured: z
+        .boolean()
+        .optional()
+        .describe("also return the payload as structuredContent"),
     },
     async (input) => runSmells(runIx, input),
   );
@@ -417,6 +465,10 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
         .max(1_000_000)
         .optional()
         .describe("exact serialized-character budget for the evidence list"),
+      structured: z
+        .boolean()
+        .optional()
+        .describe("return the JSON bundle as structuredContent instead of llm records"),
     },
     async (input) => {
       const options: string[] = [];
@@ -426,9 +478,15 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
         options.push(`--max-relationships=${numberArg(input, "max_relationships")}`);
       if (typeof input.max_evidence === "number") options.push(`--max-evidence=${numberArg(input, "max_evidence")}`);
       if (typeof input.max_chars === "number") options.push(`--max-chars=${numberArg(input, "max_chars")}`);
-      return runJsonStructured(runIx, "ix_context", ix("context", [stringArg(input, "target")], options));
+      const argv = ix("context", [stringArg(input, "target")], options);
+      // Once, in the format the reader is: an agent. The bundle used to go out
+      // twice on every call — the JSON text AND the same object again as
+      // structuredContent — so a 20 KB bundle cost 40 KB, and the copy a model
+      // actually reads is the smaller `llm` one that was not being sent at all.
+      return input.structured === true
+        ? runJsonStructured(runIx, "ix_context", argv)
+        : runFormatted(runIx, "ix_context", argv);
     },
-    contextBundleSchema,
   );
   registerTool(
     server,
@@ -503,15 +561,45 @@ export async function startIxMcpServer(version = "0.0.0"): Promise<void> {
   await server.connect(new StdioServerTransport(process.stdin, createProtocolStdout()));
 }
 
+/**
+ * The flags that let a caller resolve an ambiguous symbol.
+ *
+ * Every one of these tools took a bare `symbol` and nothing else, so a name
+ * with three definitions answered "Ambiguous symbol" and there was no second
+ * call that could get past it — the CLI's own `--pick`, `--kind` and `--path`
+ * were unreachable over MCP. An agent's only move was to shell out, which is
+ * the thing this server exists to avoid.
+ */
+const SYMBOL_TOOL_INPUT = {
+  symbol: z.string().min(1),
+  kind: z.string().min(1).optional().describe("narrow to one entity kind"),
+  path: z.string().min(1).optional().describe("narrow to files whose path contains this"),
+  pick: z.number().int().min(1).max(50).optional().describe("choose the Nth candidate, 1-based"),
+  limit: z.number().int().min(1).max(500).optional().describe("max rows"),
+} as const;
+
+/** Turn the shared disambiguation input into CLI flags. */
+function symbolOptions(input: ToolInput, opts: { limit?: boolean } = {}): string[] {
+  const options: string[] = [];
+  pushOption(options, "--kind", input.kind);
+  pushOption(options, "--path", input.path);
+  if (typeof input.pick === "number") options.push(`--pick=${numberArg(input, "pick")}`);
+  if (opts.limit !== false && typeof input.limit === "number") {
+    options.push(`--limit=${numberArg(input, "limit")}`);
+  }
+  return options;
+}
+
 function registerSymbolTool(
   server: McpServer,
   runIx: IxRunner,
   name: string,
   description: string,
   command: string,
+  input: z.ZodRawShape = SYMBOL_TOOL_INPUT,
 ): void {
-  registerTool(server, name, description, { symbol: z.string().min(1) }, async (input) =>
-    runFormatted(runIx, name, ix(command, [stringArg(input, "symbol")])),
+  registerTool(server, name, description, input, async (args) =>
+    runFormatted(runIx, name, ix(command, [stringArg(args, "symbol")], symbolOptions(args))),
   );
 }
 
@@ -549,6 +637,32 @@ function toArgv(argv: IxArgv, format: string): string[] {
   return args;
 }
 
+/**
+ * How much of one tool result a client should have to hold.
+ *
+ * The only bound before this was the runner's 16 MiB heap guard, which exists
+ * to stop a long-lived server growing — not to stop a single `ix text` filling
+ * a model's context. Most hosts truncate a tool result themselves, from the
+ * end, with no marker: the caller then cannot tell a short answer from a
+ * chopped one.
+ */
+const MAX_TOOL_RESULT_BYTES = 24 * 1024;
+
+/**
+ * Cap a record stream, on a line boundary, and say so in a record.
+ *
+ * Record streams only. Cutting JSON produces something that does not parse,
+ * which is worse than something large — so `runJson`, `runJsonStructured` and
+ * `runSmells` are deliberately uncapped, and their size is bounded by the
+ * command's own budgets instead.
+ */
+export function capRecordStream(text: string, tool: string): string {
+  if (text.length <= MAX_TOOL_RESULT_BYTES) return text;
+  const boundary = text.lastIndexOf("\n", MAX_TOOL_RESULT_BYTES);
+  const head = text.slice(0, boundary > 0 ? boundary : MAX_TOOL_RESULT_BYTES);
+  return `${head}\ntruncated tool=${tool} shown_bytes=${head.length} total_bytes=${text.length} hint="Narrow the call — every one of these tools takes a limit, a path or a depth."`;
+}
+
 async function runFormatted(
   runIx: IxRunner,
   tool: string,
@@ -562,7 +676,12 @@ async function runFormatted(
   // Only the leading record governs status. `ix_read` may contain error-like
   // source lines after its successful `content` record.
   const semanticError = first?.type === "text" && first.text.startsWith("error code=");
-  return semanticError ? { ...result, isError: true } : result;
+  if (semanticError) return { ...result, isError: true };
+  if (first?.type !== "text") return result;
+  const capped = capRecordStream(first.text, tool);
+  return capped === first.text
+    ? result
+    : { ...result, content: [{ type: "text", text: capped }, ...result.content.slice(1)] };
 }
 
 async function runJson(
@@ -656,6 +775,7 @@ function withStructuredContent(result: CallToolResult): CallToolResult {
 }
 
 async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolResult> {
+  const structured = input.structured === true;
   const result = await runIx(toArgv(ix("smells"), "json"), DEFAULT_TIMEOUT_MS);
   if (!result.ok) {
     const detail = result.stderr.trim() || result.stdout.trim() || "smells failed without output";
@@ -664,7 +784,8 @@ async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolRes
 
   const parsed = parseJsonOutput(result.stdout);
   if (!isRecord(parsed) || !Array.isArray(parsed.candidates)) {
-    return withStructuredContent(textResult(result.stdout.trim() || "{}"));
+    const text = textResult(result.stdout.trim() || "{}");
+    return structured ? withStructuredContent(text) : text;
   }
 
   const path = typeof input.path === "string" ? normalizePath(input.path) : null;
@@ -684,10 +805,11 @@ async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolRes
     .slice(0, limit);
 
   const payload = { ...parsed, count: candidates.length, candidates };
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload,
-  };
+  // Compact, and the object once rather than twice. The indent was two spaces
+  // per level of a list of smell candidates, and the structured copy was the
+  // same bytes again.
+  const text = textResult(JSON.stringify(payload));
+  return structured ? { ...text, structuredContent: payload } : text;
 }
 
 function textResult(text: string, isError = false): CallToolResult {

@@ -26,17 +26,18 @@ import { resolveFileOrReport } from "../resolve.js";
 import { createStaleProbe, hasCompletedSourceGraphBaseline } from "../stale.js";
 import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
 
-/** The four `--max-*` knobs that bound a bundle. */
+/** The `--max-*` knobs that bound a bundle. */
 interface BudgetSnapshot {
   maxEntities: number;
   maxRelationships: number;
   maxEvidence: number;
+  maxTokens: number;
   maxChars: number;
 }
 
 /**
- * The four budgets, described once: flag key, output label, clamp range, and
- * the default applied when the flag is absent.
+ * The budgets, described once: flag key, output label, clamp range, and the
+ * default applied when the flag is absent.
  *
  * These four facts used to live in five hand-maintained places -- the option
  * registration, the `clampInt` calls, the record fields, the prose formatter
@@ -48,10 +49,18 @@ interface BudgetSnapshot {
  * this table, and `--help` interpolates it, so the number a user is told is
  * the number that is applied.
  */
+/**
+ * Hard cap on the conflict reports carried in a bundle. Not a `--max-*` flag:
+ * the bundle reports the count it saw either way, and a caller who needs every
+ * report wants `ix conflicts`, not a bigger context bundle.
+ */
+const MAX_CONFLICTS = 10;
+
 const BUDGETS = [
   { key: "maxEntities", flag: "--max-entities", label: "entities", help: "Maximum entities in the bundle", min: 1, max: 500, fallback: 50 },
   { key: "maxRelationships", flag: "--max-relationships", label: "relationships", help: "Maximum relationships in the bundle", min: 1, max: 1000, fallback: 100 },
   { key: "maxEvidence", flag: "--max-evidence", label: "evidence", help: "Maximum evidence items in the bundle", min: 1, max: 200, fallback: 25 },
+  { key: "maxTokens", flag: "--max-tokens", label: "tokens", help: "Maximum tokens of evidence output", min: 500, max: 200_000, fallback: 1_500 },
   { key: "maxChars", flag: "--max-chars", label: "chars", help: "Maximum characters of evidence output", min: 1000, max: 1_000_000, fallback: 12_000 },
 ] as const satisfies ReadonlyArray<{
   key: keyof BudgetSnapshot;
@@ -97,12 +106,44 @@ function budgetParser(key: keyof BudgetSnapshot): (value: string) => number {
   return (value: string) => parseBudgetOption(value, example);
 }
 
-/** Apply the table's range and default to whatever the caller supplied. */
-function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
+/**
+ * Characters per token in a real bundle.
+ *
+ * Measured across 41 recorded bundles whose prompts differed only by the
+ * bundle: 2.14, against the ~4 of ordinary English. A bundle is dense
+ * `key=value` and JSON with identifiers in it, and identifiers tokenize badly.
+ *
+ * Conservative on purpose, and it stays conservative as the bundle gets
+ * cleaner: pulling identifier-heavy rows out raises the real ratio, so an
+ * estimate pinned at 2.14 over-counts tokens and the bundle comes in under its
+ * budget rather than over it. Re-measure before lowering it, never raise it to
+ * make a bundle fit.
+ */
+export const BUNDLE_CHARS_PER_TOKEN = 2.14;
+
+/**
+ * Apply the table's range and default to whatever the caller supplied, and
+ * turn the token budget into the character budget that bounds the evidence.
+ *
+ * `--max-tokens` is the budget a caller actually has: the thing being spent is
+ * a context window, and 12,000 characters is a number nobody can convert in
+ * their head into what it costs them. `--max-chars` stays for the caller who
+ * needs exact bytes, and wins outright when passed — the two together are
+ * refused up front rather than silently ranked, because which one lost is not
+ * visible in the output.
+ */
+export function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
   const out = {} as BudgetSnapshot;
   for (const b of BUDGETS) {
     const raw = opts[b.key];
     out[b.key] = raw === undefined ? b.fallback : Math.min(b.max, Math.max(b.min, raw));
+  }
+  if (opts.maxChars === undefined) {
+    const chars = budgetField("maxChars");
+    out.maxChars = Math.min(
+      chars.max,
+      Math.max(chars.min, Math.round(out.maxTokens * BUNDLE_CHARS_PER_TOKEN)),
+    );
   }
   return out;
 }
@@ -224,6 +265,16 @@ interface ContextBundle {
     relationshipsTruncated: number;
     evidenceTruncated: number;
     charactersTruncated: number;
+    conflictsTruncated: number;
+    /**
+     * What the budget dropped, by category, largest first.
+     *
+     * The counts above say how much went; this says what it was. "Rerun with
+     * larger --max-* budgets" was the same sentence for a file that lost 36 of
+     * its own members and for a symbol that lost two claims, and it named the
+     * one lever that costs the caller the most to pull.
+     */
+    cut?: Array<{ what: string; count: number }>;
   };
   metadata: {
     asOfRev?: number;
@@ -264,7 +315,17 @@ export function registerContextCommand(program: Command): void {
     .option("--max-entities <n>", budgetHelp("maxEntities"), budgetParser("maxEntities"))
     .option("--max-relationships <n>", budgetHelp("maxRelationships"), budgetParser("maxRelationships"))
     .option("--max-evidence <n>", budgetHelp("maxEvidence"), budgetParser("maxEvidence"))
-    .option("--max-chars <n>", budgetHelp("maxChars"), budgetParser("maxChars"))
+    .option("--max-tokens <n>", budgetHelp("maxTokens"), budgetParser("maxTokens"))
+    // Not `budgetHelp`: there is no independent default to name any more. The
+    // character budget is derived from `--max-tokens` unless this flag is
+    // passed, and printing "(default: 12000)" beside a flag whose absence
+    // produces 3,210 would be the kind of drift the BUDGETS table exists to
+    // stop.
+    .option(
+      "--max-chars <n>",
+      `${budgetField("maxChars").help} (overrides --max-tokens; clamped to ${budgetField("maxChars").min}-${budgetField("maxChars").max})`,
+      budgetParser("maxChars"),
+    )
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .option("--out <path>", "Write the JSON bundle to this file instead of stdout")
     .option("--save <id>", "Persist the bundle as a resumable investigation state")
@@ -535,6 +596,13 @@ export function detectContextModeConflict(
     if (ignored.length > 0) {
       return `${ignored.join(", ")} cannot be combined with --${mode}; ${why}, so ${ignored.length > 1 ? "those flags change" : "that flag changes"} nothing. Drop ${ignored.length > 1 ? "them" : "it"}, or run ix context <target> to build a bundle with ${ignored.length > 1 ? "them" : "it"}.`;
     }
+  }
+  if (opts.maxTokens !== undefined && opts.maxChars !== undefined) {
+    // Refused rather than ranked. They bound the same thing — the evidence
+    // block — in two units, and whichever one lost does not appear anywhere in
+    // the output, so a caller who set both would have no way to tell which
+    // budget was applied. Same rule `ix diff` uses for --summary and --limit.
+    return "--max-tokens and --max-chars cannot be combined; both bound the evidence block, in different units. Use --max-tokens for a context-window budget, or --max-chars for exact bytes.";
   }
   if (opts.list && opts.resume) {
     return "--list and --resume cannot be combined; --list enumerates saved investigations, --resume renders one. Run --list first, then --resume the id you want.";
@@ -1402,7 +1470,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
       id: resolved.id,
       name: resolved.name,
       kind: resolved.kind,
-      path: facts.path,
+      ...locationFields(targetLocation(facts) ?? {}),
       stale,
     },
   ];
@@ -1433,6 +1501,13 @@ export function buildBundle(input: BuildInput): ContextBundle {
   };
   pushLocated([
     ...memberRefs.slice(0, LEADING_MEMBERS),
+    // What the target reaches, before what reaches it: an agent starting from
+    // an entry point is looking for where to go next.
+    ...(facts.importRefs ?? []),
+    ...(facts.calleeRefs ?? []),
+    // What those files define. Naming the file is half an answer to "which
+    // function does X"; these are the other half.
+    ...(facts.neighbourRefs ?? []),
     ...(facts.topCallerRefs ?? []),
     ...(facts.topDependentRefs ?? []),
   ]);
@@ -1519,6 +1594,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
       relationshipsTruncated: 0,
       evidenceTruncated: 0,
       charactersTruncated: 0,
+      conflictsTruncated: 0,
     },
     metadata: {
       asOfRev,
@@ -1581,8 +1657,19 @@ export function buildBundle(input: BuildInput): ContextBundle {
   }
   bundle.evidence = evidence.slice(0, kept);
   bundle.truncation.evidenceTruncated = evidence.length - kept;
+  const dropped = summariseCut(evidence.slice(kept));
+  if (dropped.length > 0) bundle.truncation.cut = dropped;
   const fullChars = sizedEvidence.reduce((sum, entry) => sum + entry.size, 0);
   bundle.truncation.charactersTruncated = Math.max(0, fullChars - chars);
+
+  // `conflicts[]` was the one list with no budget at all, and it is the one the
+  // backend can hand back by the dozen: it reached 12,922 of 23,030 JSON bytes
+  // on a recorded bundle. The evidence budgets never bounded it because they
+  // bound `evidence`. Cap it at a fixed depth -- a caller who wants the full
+  // set has `ix conflicts`, which is the command that renders them properly.
+  const conflictLimit = Math.min(bundle.conflicts.length, MAX_CONFLICTS);
+  bundle.truncation.conflictsTruncated = bundle.conflicts.length - conflictLimit;
+  bundle.conflicts = bundle.conflicts.slice(0, conflictLimit);
 
   return bundle;
 }
@@ -1607,7 +1694,7 @@ function rankEvidence(input: {
     score: 0,
     reason: "resolved target — the bundle is centered on this entity",
     refs: [target.id],
-    ...locationField(input.facts.path ? { path: input.facts.path } : undefined),
+    ...locationField(targetLocation(input.facts)),
   });
 
   type Structural = Omit<EvidenceItem, "kind" | "score">;
@@ -1618,7 +1705,8 @@ function rankEvidence(input: {
       source: "facts.container",
       title: `container ${input.facts.container.name} (${input.facts.container.kind})`,
       reason: "contains the target",
-      refs: [],
+      refs: [input.facts.container.id],
+      ...locationField(input.facts.container),
     });
   }
   // Names alone when the facts carry no locations, so a caller that builds its
@@ -1630,6 +1718,38 @@ function rankEvidence(input: {
   ): Array<{ name: string; ref?: EntityLocation }> =>
     (refs ? refs.map((ref) => ({ name: ref.name, ref })) : names.map((name) => ({ name }))).slice(0, limit);
 
+  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, LEADING_MEMBERS)) {
+    structural.push({
+      id: `member:${name}`, source: "facts.members", title: `member ${name}`,
+      reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
+    });
+  }
+  // Then outward. The file an answer lives in is most often one the target
+  // imports: measured on the benchmark task set, 6 of 19 tasks' answers are a
+  // direct import of their entry point, and none were in the bundle. These go
+  // after the target's own members, not before: the evidence budget is 25
+  // items, and a file with many imports (resolve.ts) pushed all 27 of its own
+  // members out of the bundle entirely.
+  for (const ref of (input.facts.importRefs ?? []).slice(0, SHOWN_IMPORTS)) {
+    structural.push({
+      id: `imports:${ref.name}`, source: "facts.imports", title: `imports ${ref.name}`,
+      reason: "the target imports this", refs: [ref.id], ...locationField(ref),
+    });
+  }
+  for (const ref of input.facts.calleeRefs ?? []) {
+    structural.push({
+      id: `calls:${ref.name}`, source: "facts.callees", title: `calls ${ref.name}`,
+      reason: "the target calls this", refs: [ref.id], ...locationField(ref),
+    });
+  }
+  for (const ref of (input.facts.neighbourRefs ?? []).slice(0, SHOWN_NEIGHBOUR_MEMBERS)) {
+    const where = ref.path ? ref.path.split("/").pop() : undefined;
+    structural.push({
+      id: `defines:${ref.path ?? ""}:${ref.name}`, source: "facts.neighbours",
+      title: `${where ?? "a neighbouring file"} defines ${ref.name}`,
+      reason: "defined in a file next to the target", refs: [ref.id], ...locationField(ref),
+    });
+  }
   for (const { name, ref } of related(input.facts.topCallers, input.facts.topCallerRefs, 3)) {
     structural.push({
       id: `caller:${name}`, source: "facts.callers", title: `caller ${name}`,
@@ -1640,12 +1760,6 @@ function rankEvidence(input: {
     structural.push({
       id: `dependent:${name}`, source: "facts.dependents", title: `dependent ${name}`,
       reason: "calls, imports or references the target", refs: ref ? [ref.id] : [], ...locationField(ref),
-    });
-  }
-  for (const { name, ref } of related(input.facts.members, input.facts.memberRefs, LEADING_MEMBERS)) {
-    structural.push({
-      id: `member:${name}`, source: "facts.members", title: `member ${name}`,
-      reason: ref ? memberReason(ref) : "defined in the target", refs: ref ? [ref.id] : [], ...locationField(ref),
     });
   }
   structural.forEach((item, index) => {
@@ -1674,17 +1788,12 @@ function rankEvidence(input: {
       refs: decision.entityId ? [decision.entityId] : [],
     });
   }
-  for (const conflict of input.context.conflicts) {
-    items.push({
-      id: `conflict:${conflict.id}`,
-      kind: "conflict",
-      source: "context.conflicts",
-      title: `${conflict.claimA} vs ${conflict.claimB}`,
-      score: 22,
-      reason: conflict.reason,
-      refs: [],
-    });
-  }
+  // Conflicts are deliberately NOT evidence. A report names its two claims by
+  // uuid, which is nothing an agent can act on, and at score 22 they outranked
+  // every relationship: on recorded bundles they were taking 12 to 17 of the 25
+  // slots and truncating away the members and imports that answer the question.
+  // The count is carried in the bundle header and the reports themselves stay
+  // in `conflicts[]` for a caller that wants them; `ix conflicts` renders them.
   for (const intent of input.context.intents) {
     items.push({
       id: `intent:${intent.id}`,
@@ -1748,7 +1857,7 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
         relationships: bundle.relationships.length,
         claims: bundle.claims.length,
         decisions: bundle.decisions.length,
-        conflicts: bundle.conflicts.length,
+        conflicts: bundle.conflicts.length + bundle.truncation.conflictsTruncated,
         intents: bundle.intents.length,
         evidence: bundle.evidence.length,
         truncated_entities: bundle.truncation.entitiesTruncated,
@@ -1756,11 +1865,20 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
         truncated_evidence: bundle.truncation.evidenceTruncated,
         truncated_chars: bundle.truncation.charactersTruncated,
       }),
+      // What the budget dropped, and the cheapest command that gets it back.
+      // The header's `truncated_*` counters say how much went; without this the
+      // caller's only move is a bigger budget for the same query, which is the
+      // most expensive one available.
+      truncationAdvice(bundle)
+        ? llmLine("diagnostic", { code: "bundle_truncated", message: truncationAdvice(bundle) })
+        : null,
       // Evidence only, as before. The entity, relationship and claim lists are
       // deliberately still counts here: `--format llm` is the token-minimal
       // surface, the ranked evidence is what it exists to deliver, and
       // `--format json` carries the rest for a caller that wants it.
       ...bundle.evidence.map(evidenceRecord(undefined)),
+      // Last, so it reads as the closing instruction it is.
+      ...nextReads(bundle).map((cmd) => llmLine("next", { cmd })),
     ]);
     return;
   }
@@ -1773,7 +1891,12 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
   console.log(`  relationships: ${bundle.relationships.length}`);
   console.log(`  claims:        ${bundle.claims.length}`);
   console.log(`  decisions:     ${bundle.decisions.length}`);
-  console.log(`  conflicts:     ${bundle.conflicts.length}`);
+  // Named, not listed: see rankEvidence. The hint is what makes the count
+  // actionable, since the reports are no longer in the evidence list.
+  const conflictCount = bundle.conflicts.length + bundle.truncation.conflictsTruncated;
+  console.log(
+    `  conflicts:     ${conflictCount}${conflictCount > 0 ? " (run ix conflicts to inspect)" : ""}`,
+  );
   console.log(`  intents:       ${bundle.intents.length}`);
   if (bundle.freshness.stale) {
     renderWarning("Source has changed since last ingest. Run ix map to update.");
@@ -1788,17 +1911,113 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
     }
   }
 
+  const reads = nextReads(bundle);
+  if (reads.length > 0) {
+    renderSection("Next");
+    for (const cmd of reads) console.log(`  ${cmd}`);
+  }
+
   const trunc = bundle.truncation;
   if (trunc.entitiesTruncated + trunc.relationshipsTruncated + trunc.evidenceTruncated > 0) {
+    const advice = truncationAdvice(bundle);
     renderNote(
-      `Truncated: ${trunc.entitiesTruncated} entities, ${trunc.relationshipsTruncated} relationships, ${trunc.evidenceTruncated} evidence items. Rerun with larger --max-* budgets for more.`,
+      `Truncated: ${trunc.entitiesTruncated} entities, ${trunc.relationshipsTruncated} relationships, ${trunc.evidenceTruncated} evidence items.`
+      + (advice ? ` ${advice}` : " Raise --max-tokens for more."),
     );
   }
   console.log();
 }
 
+/**
+ * Evidence sources, as the word a hint can put a number in front of.
+ *
+ * Keyed on `source` rather than `kind`: `kind` is `structural` for members,
+ * imports, calls, callers and dependents alike, and "cut: 48 structural" is the
+ * uninformative sentence this exists to replace.
+ */
+const CUT_LABELS: Record<string, string> = {
+  "facts.container": "container",
+  "facts.members": "member",
+  "facts.imports": "import",
+  "facts.callees": "call",
+  "facts.neighbours": "neighbouring definition",
+  "facts.callers": "caller",
+  "facts.dependents": "dependent",
+  "context.claims": "claim",
+  "context.decisions": "decision",
+  "context.conflicts": "conflict",
+  "context.intents": "intent",
+  "context.edges": "relationship",
+};
+
+/** Group the evidence a budget dropped by category, largest first. */
+function summariseCut(dropped: EvidenceItem[]): Array<{ what: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const item of dropped) {
+    const what = CUT_LABELS[item.source] ?? item.kind;
+    counts.set(what, (counts.get(what) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([what, count]) => ({ what, count }))
+    .sort((a, b) => b.count - a.count || a.what.localeCompare(b.what));
+}
+
+/**
+ * The cheapest command that gets back what the budget dropped.
+ *
+ * Target-specific because the answer is: a file that lost its own members wants
+ * one of those members as a target, not a bigger budget for the file; a symbol
+ * that lost callers wants `ix callers`, which is bounded and ranked and costs a
+ * fraction of a bundle. `--max-tokens` is named last, as the lever that works
+ * for anything and pays for everything.
+ */
+function cutLever(bundle: ContextBundle, top: { what: string }): string {
+  const name = bundle.target.name;
+  const container = ["file", "module", "class", "object", "trait", "interface"]
+    .includes(bundle.target.kind.toLowerCase());
+  switch (top.what) {
+    case "member":
+      return container
+        ? `run ix context on one of them, or raise --max-tokens`
+        : `ix contains ${name}, or raise --max-tokens`;
+    case "caller":
+      return `ix callers ${name}, or raise --max-tokens`;
+    case "dependent":
+      return `ix impact ${name}, or raise --max-tokens`;
+    case "import":
+      return `ix imports ${name}, or raise --max-tokens`;
+    case "call":
+      return `ix callees ${name}, or raise --max-tokens`;
+    case "relationship":
+      return `ix depends ${name}, or raise --max-tokens`;
+    case "claim":
+    case "conflict":
+      return `ix conflicts ${name}, or raise --max-tokens`;
+    default:
+      return `raise --max-tokens`;
+  }
+}
+
+/** One sentence naming what was cut and the cheapest way to get it back. */
+export function truncationAdvice(bundle: ContextBundle): string | undefined {
+  const cut = bundle.truncation.cut ?? [];
+  if (cut.length === 0) return undefined;
+  const named = cut
+    .slice(0, 3)
+    .map((c) => `${c.count} ${c.what}${c.count === 1 ? "" : "s"}`)
+    .join(", ");
+  return `cut: ${named} — ${cutLever(bundle, cut[0])}`;
+}
+
 /** Members placed ahead of the backend's context nodes; the evidence shows as many. */
 const LEADING_MEMBERS = 10;
+
+/** Imports named in the evidence. The rest still enter the bundle as entities,
+ * where they cost a line each and can carry the answer's file. */
+const SHOWN_IMPORTS = 8;
+
+/** Members of neighbouring files named in the evidence; the rest are entities. */
+const SHOWN_NEIGHBOUR_MEMBERS = 6;
 
 type Located = { path?: string; lineStart?: number; lineEnd?: number };
 
@@ -1812,6 +2031,41 @@ function locationFields(ref: Located): Located {
 }
 
 /** An evidence `location`, or nothing when the path is unknown. */
+/** The target's own `path:start-end`, or just its path when it has no range. */
+function targetLocation(facts: ContextFacts): Located | undefined {
+  if (!facts.path) return undefined;
+  return { path: facts.path, lineStart: facts.lineStart, lineEnd: facts.lineEnd };
+}
+
+/**
+ * The reads worth making next, most valuable first.
+ *
+ * The evidence rows carry `path:start-end` and the caller still has to decide
+ * which of them to open — so the bundle ends by saying so, as commands rather
+ * than coordinates. The saving this exists for is the whole-file read: on the
+ * benchmark set one avoided 34-61k-character read is worth more than every
+ * byte the bundle spends, and an agent handed a path with no range opens the
+ * file.
+ *
+ * Deduped, because a caller and a dependent are frequently the same function,
+ * and taken in evidence order, which is already the ranking — the target first,
+ * then its members, what it reaches, and what reaches it.
+ */
+export function nextReads(bundle: ContextBundle, limit = 3): string[] {
+  const seen = new Set<string>();
+  const reads: string[] = [];
+  for (const item of bundle.evidence) {
+    const loc = item.location;
+    if (!loc?.path || loc.lineStart === undefined || loc.lineEnd === undefined) continue;
+    const range = `${loc.path}:${loc.lineStart}-${loc.lineEnd}`;
+    if (seen.has(range)) continue;
+    seen.add(range);
+    reads.push(`ix read ${range}`);
+    if (reads.length === limit) break;
+  }
+  return reads;
+}
+
 function locationField(ref: Located | undefined): { location?: EvidenceLocation } {
   if (!ref?.path) return {};
   return { location: { ...locationFields(ref), path: ref.path } };

@@ -57,7 +57,7 @@ function bundle(opts: {
       metadata: { query: "", seedEntities: [], hopsExpanded: 1, asOfRev: 1 },
     } as never,
     provenance: opts.provenance ?? {},
-    budgets: { maxEntities: opts.maxEntities ?? 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+    budgets: { maxEntities: opts.maxEntities ?? 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
     isStale: () => false,
   });
 }
@@ -131,7 +131,7 @@ describe("ix context evidence says where things are", () => {
         metadata: { query: "", seedEntities: [], hopsExpanded: 1, asOfRev: 1 },
       } as never,
       provenance: {},
-      budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+      budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
       isStale: () => false,
     });
 
@@ -154,6 +154,62 @@ describe("ix context evidence says where things are", () => {
     expect(names).toContain("supported-extensions.ts");
     expect(names.indexOf("supported-extensions.ts")).toBeLessThan(names.indexOf("fn10"));
     expect(b.entities).toHaveLength(50);
+  });
+
+  it("says what the target imports and calls, ahead of what points back at it", () => {
+    // The answer to a question asked from an entry point is most often in a
+    // file that entry point imports. Before this the bundle only pointed
+    // inward -- members, callers, dependents -- and never named it.
+    const imports: EntityLocation[] = [
+      { id: "i-resolve", name: "resolve.ts", kind: "file", path: "src/cli/resolve.ts" },
+    ];
+    const callees: EntityLocation[] = [
+      { id: "c-scope", name: "ensureReadScope", kind: "function", path: "src/cli/resolve.ts",
+        lineStart: 56, lineEnd: 80 },
+    ];
+    const b = bundle({ facts: facts({ importRefs: imports, calleeRefs: callees }) });
+
+    const structural = b.evidence.filter((e) => e.kind === "structural").map((e) => e.title);
+    expect(structural).toContain("imports resolve.ts");
+    expect(structural).toContain("calls ensureReadScope");
+    expect(structural.indexOf("imports resolve.ts"))
+      .toBeLessThan(structural.indexOf("dependent stats.ts"));
+
+    const imported = b.evidence.find((e) => e.title === "imports resolve.ts");
+    expect(imported?.location).toEqual({ path: "src/cli/resolve.ts" });
+    expect(imported?.reason).toBe("the target imports this");
+    expect(b.evidence.find((e) => e.title === "calls ensureReadScope")?.location)
+      .toEqual({ path: "src/cli/resolve.ts", lineStart: 56, lineEnd: 80 });
+
+    // And they are entities, so the file an answer lives in is in the bundle.
+    expect(b.entities.map((e) => e.name)).toContain("resolve.ts");
+  });
+
+  it("names what the neighbouring files define, with where", () => {
+    // Members were collected for the target alone, so "which function resolves
+    // a workspace" got `config.ts` and nothing inside it: symbol recall was
+    // 0.00 on 10 of 11 benchmark tasks even where the right file came back.
+    const b = bundle({
+      facts: facts({
+        importRefs: [{ id: "i-config", name: "config.ts", kind: "file", path: "src/cli/config.ts" }],
+        neighbourRefs: [
+          { id: "n-resolve", name: "resolveWorkspaceRoot", kind: "function",
+            path: "src/cli/config.ts", lineStart: 322, lineEnd: 342 },
+          { id: "n-default", name: "getDefaultWorkspace", kind: "function",
+            path: "src/cli/config.ts", lineStart: 289, lineEnd: 291 },
+        ],
+      }),
+    });
+
+    const defines = b.evidence.find((e) => e.title === "config.ts defines resolveWorkspaceRoot");
+    expect(defines?.location).toEqual({ path: "src/cli/config.ts", lineStart: 322, lineEnd: 342 });
+    expect(defines?.refs).toEqual(["n-resolve"]);
+    // They are entities, which is what a retrieval score counts as a symbol.
+    const names = b.entities.map((e) => e.name);
+    expect(names).toContain("resolveWorkspaceRoot");
+    expect(names).toContain("getDefaultWorkspace");
+    // After the file they came from, so the budget keeps the file first.
+    expect(names.indexOf("config.ts")).toBeLessThan(names.indexOf("resolveWorkspaceRoot"));
   });
 
   it("reads provenance from the chain /v1/provenance actually returns", () => {
@@ -203,8 +259,11 @@ describe("ix context evidence says where things are", () => {
 
     const llm = captureLog(() => renderBundle(b, "llm"));
     expect(llm[0]).toContain("target_path=src/cli/config.ts");
+    // Score is tier + position, and the target's own members lead the
+    // structural facts: a file with many imports pushed all of its own members
+    // out of the evidence budget when they came last.
     expect(llm).toContain(
-      'evidence score=11 kind=structural title="member resolveWorkspaceRoot" path=src/cli/config.ts lines=322-342',
+      'evidence score=10 kind=structural title="member resolveWorkspaceRoot" path=src/cli/config.ts lines=322-342',
     );
   });
 
