@@ -56,7 +56,7 @@ function contextBundle() {
     provenance: { historyLength: 0, stale: false },
     freshness: { stale: false, classification: "current" },
     evidence: [],
-    budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+    budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
     truncation: { entitiesTruncated: 0, relationshipsTruncated: 0, evidenceTruncated: 0, charactersTruncated: 0 },
     metadata: { rankingRule: "deterministic-tier" },
   };

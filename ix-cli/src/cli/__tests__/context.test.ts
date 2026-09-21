@@ -103,7 +103,7 @@ function input() {
     provenance: { sourceType: "source", extractor: "tree-sitter", observedAt: "2026-01-01T00:00:00Z" },
     asOfRev: undefined,
     depth: undefined,
-    budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+    budgets: { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
   };
 }
 
@@ -135,7 +135,7 @@ describe("ix context bundle", () => {
   it("enforces budgets and reports explicit truncation", () => {
     const bundle = buildBundle({
       ...input(),
-      budgets: { maxEntities: 1, maxRelationships: 0, maxEvidence: 2, maxChars: 12000 },
+      budgets: { maxEntities: 1, maxRelationships: 0, maxEvidence: 2, maxTokens: 1500, maxChars: 12000 },
     });
 
     expect(bundle.entities).toHaveLength(1);
@@ -172,7 +172,7 @@ describe("ix context bundle", () => {
       ...input(),
       context: makeContext({ nodes, edges }),
       // Room for the target plus a couple of entities, not all four.
-      budgets: { maxEntities: 3, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+      budgets: { maxEntities: 3, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
     });
 
     const kept = new Set(bundle.entities.map((e) => e.id));
@@ -287,7 +287,7 @@ describe("ix context bundle", () => {
     buildBundle({
       ...input(),
       context: makeContext({ nodes }),
-      budgets: { maxEntities: 5, maxRelationships: 100, maxEvidence: 25, maxChars: 12000 },
+      budgets: { maxEntities: 5, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 12000 },
       isStale: () => { probes += 1; return false; },
     });
 
@@ -341,7 +341,7 @@ describe("ix context bundle", () => {
 
   it("bounds evidence by the exact serialized representation, not an estimate", () => {
     const claims = Array.from({ length: 60 }, (_, i) => makeClaim(`statement number ${i} with some padding text`, 0.5));
-    const budgets = { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxChars: 500 };
+    const budgets = { maxEntities: 50, maxRelationships: 100, maxEvidence: 25, maxTokens: 1500, maxChars: 500 };
 
     const bundle = buildBundle({ ...input(), context: makeContext({ claims }), budgets });
 
