@@ -89,6 +89,7 @@ Show methods/functions called by the given symbol (cross-file).
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix callers <symbol>`
 
@@ -101,6 +102,7 @@ Show methods/functions that call the given symbol (cross-file).
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix config`
 
@@ -135,6 +137,7 @@ List detected conflicts.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix contains <symbol>`
 
@@ -147,6 +150,7 @@ Show members contained by the given entity (class, module, file).
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix context [target]`
 
@@ -165,6 +169,7 @@ Build a bounded, deterministic context bundle for a symbol, file, or entity (or 
 | `--max-tokens` | `<n>` | `1500` | Maximum tokens of evidence output (clamped to 500-200000) |
 | `--max-chars` | `<n>` | — | Maximum characters of evidence output; overrides `--max-tokens` (clamped to 1000-1000000) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--out` | `<path>` | — | Write the JSON bundle to this file instead of stdout |
 | `--save` | `<id>` | — | Persist the bundle as a resumable investigation state |
 | `--resume` | `<id>` | — | Render a saved investigation state without a backend |
@@ -183,6 +188,7 @@ Show upstream dependents of the given entity (full tree by default).
 | `--depth` | `<n>` | — | Cap traversal depth |
 | `--cap` | `<n>` | — | Cap number of nodes visited |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--include-tests` | — | off | Include test and fixture entities in results |
 | `--tests-only` | — | off | Show only test and fixture entities |
 
@@ -198,6 +204,7 @@ Show diff between two revisions, optionally scoped to a file or entity.
 | `--limit` | `<n>` | — | Max changes to return (default 100) |
 | `--full` | — | off | Return all changes (no limit) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
@@ -253,6 +260,7 @@ Check Ix system health — server, database, graph integrity.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix entity <id>`
 
@@ -261,6 +269,7 @@ Get entity details with claims and edges.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix explain <symbol>`
 
@@ -272,6 +281,7 @@ Explain an entity — infers role, importance, and structural context.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--raw` | — | off | Show raw metadata dump (legacy format) |
 
 ### `ix help [topic]`
@@ -297,6 +307,7 @@ Show provenance chain for a file or entity.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix impact <target>`
 
@@ -310,6 +321,7 @@ System risk analysis — what behavior is at risk if this changes.
 | `--depth` | `<n>` | `1` | Expansion depth for callers/importers (default 1, max 3) |
 | `--limit` | `<n>` | `10` | Max top-impacted members to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix imported-by <symbol>`
 
@@ -322,6 +334,7 @@ Show what imports the given entity.
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix imports <symbol>`
 
@@ -334,6 +347,7 @@ Show what the given entity imports.
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix ingest [path]`
 
@@ -349,6 +363,7 @@ Ingest source files or GitHub data into the knowledge graph.
 | `--limit` | `<n>` | `50` | Max items per category (default 50) |
 | `--force` | — | off | Force re-ingest even if files are unchanged (useful after parser upgrades) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--root` | `<dir>` | — | Workspace root directory |
 | `--debug` | — | `false` | Show phase timing breakdown |
 | `--lang` | `<langs>` | — | Comma-separated languages to include (e.g. cpp,c or typescript). Aliases: c++=cpp, c#=csharp, py=python, ts=typescript, js=javascript |
@@ -369,6 +384,7 @@ List entities by kind with optional path scoping.
 | `--path` | `<path>` | — | Filter by source file path substring |
 | `--limit` | `<n>` | `50` | Max results |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix locate <symbol>`
 
@@ -380,6 +396,7 @@ Resolve a symbol to its position in the codebase and system hierarchy.
 | `--path` | `<path>` | — | Restrict to results from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix map [path]`
 
@@ -388,6 +405,7 @@ Map the architectural hierarchy of a codebase.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm\|silent` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--level` | `<n>` | — | Show only regions at this level (1=finest, higher=coarser) |
 | `--min-confidence` | `<n>` | `0` | Only show regions above this confidence threshold (0-1) |
 | `--max-items` | `<n>` | `10` | Max items to show per section in text output (default: 10) |
@@ -419,6 +437,7 @@ Register `ix mcp` with the AI clients installed on this machine.
 | `--dry-run` | — | `false` | Report what would change without writing anything |
 | `--force` | — | `false` | Replace a registration held by a different server |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 #### `ix mcp doctor`
 
@@ -428,6 +447,7 @@ Check that `ix mcp` is registered and launchable from each client.
 |---|---|---|---|
 | `--host` | `<ids...>` | — | Only these hosts |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix overview <target>`
 
@@ -439,6 +459,7 @@ Structural summary — what a target contains or what surrounds it.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix patches`
 
@@ -448,6 +469,7 @@ List recent patches.
 |---|---|---|---|
 | `--limit` | `<n>` | `50` | Maximum patches to return |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix query <question>`
 
@@ -458,6 +480,7 @@ List recent patches.
 | `--as-of` | `<rev>` | — | Time-travel to a specific revision |
 | `--depth` | `shallow\|standard\|deep` | `standard` | Query depth (shallow\|standard\|deep) |
 | `--format` | `text\|json` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--unsafe` | — | off | Enable query (can produce large outputs) |
 
 ### `ix rank`
@@ -473,6 +496,7 @@ Rank entities by graph-derived importance (dependents, callers, importers, membe
 | `--exclude-path` | `<path>` | — | Exclude entities whose source path contains this substring |
 | `--exclude-kind` | `<kinds>` | — | Comma-separated kinds to exclude from results |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix read <target>`
 
@@ -481,6 +505,7 @@ Read raw file content, line ranges, or symbol source code.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--kind` | `<kind>` | — | Filter symbol by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
@@ -508,6 +533,7 @@ Subcommands: `reset`.
 | `--detail` | — | off | Include per-command breakdown |
 | `--model` | `opus\|sonnet\|haiku\|gpt-4o` | `opus` | Pricing model (opus\|sonnet\|haiku\|gpt-4o) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 #### `ix savings reset`
 
@@ -527,6 +553,7 @@ Search the knowledge graph by term — ranked by structural relevance.
 | `--path` | `<path>` | — | Filter results by file path (case-insensitive substring match). Keyword searches widen the candidate window up to 2000 nodes and warn if that bound is reached. |
 | `--as-of` | `<rev>` | — | Search as of a specific revision |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--include-tests` | — | off | Include test and fixture entities in results |
 | `--tests-only` | — | off | Show only test and fixture entities |
 | `--semantic` | — | off | Use vector-similarity (embedding) search instead of keyword matching |
@@ -538,6 +565,7 @@ Detect architecture smells in the codebase.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--orphan-max-connections` | `<n>` | `0` | Max connections for orphan files |
 | `--god-module-chunks` | `<n>` | `20` | Min chunks for god module |
 | `--god-module-fan` | `<n>` | `15` | Min fan-in/out for god module |
@@ -551,6 +579,7 @@ Show graph statistics — node/edge counts by type.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 
 ### `ix status`
 
@@ -559,6 +588,7 @@ Show Ix backend health and status.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--root` | `<dir>` | — | Workspace root directory |
 
 ### `ix subsystems [target]`
@@ -568,6 +598,7 @@ Show the persisted architectural map saved by 'ix map'.
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--list` | — | off | List stored subsystem health scores instead of the persisted architecture map |
 | `--detailed` | — | off | Include member files and enriched call/import edges (requires --list) |
 | `--limit` | `<n>` | — | Max regions per page in detailed mode (default: 200 when auto-paging) |
@@ -596,6 +627,7 @@ Fast lexical/text search across the codebase (uses ripgrep).
 | `--path` | `<dir>` | `.` | Restrict search to a workspace-relative directory |
 | `--language` | `<lang>` | — | Filter by language (python, typescript, scala, etc.) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--root` | `<dir>` | — | Workspace root directory |
 
 ### `ix trace <symbol>`
@@ -613,6 +645,7 @@ Follow how it connects.
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--include-tests` | — | off | Include test and fixture entities |
 | `--tests-only` | — | off | Show only test and fixture entities |
 
