@@ -4,7 +4,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { contextBundleSchema } from "../cli/context-bundle-schema.js";
 
 import {
   createProtocolStdout,
@@ -168,7 +167,12 @@ const JSON_OBJECT_SCHEMA = z.object({}).passthrough();
 const TOOL_OUTPUT_SCHEMA: Partial<Record<(typeof IX_MCP_TOOL_NAMES)[number], z.ZodTypeAny>> = {
   ix_map: JSON_OBJECT_SCHEMA,
   ix_ingest: JSON_OBJECT_SCHEMA,
-  ix_smells: JSON_OBJECT_SCHEMA,
+  // `ix_smells` is not here any more, and neither is `ix_context`'s bundle
+  // schema. An outputSchema is a promise that EVERY result carries structured
+  // content, so a tool whose structured copy is opt-in cannot declare one.
+  // `ix_context`'s was 4,671 of the 15,365 bytes of tools/list — 30% of the
+  // always-on cost of connecting to this server, for a shape only a caller
+  // passing `structured: true` receives.
 };
 
 interface CreateServerOptions {
@@ -384,6 +388,10 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     {
       path: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(500).default(50),
+      structured: z
+        .boolean()
+        .optional()
+        .describe("also return the payload as structuredContent"),
     },
     async (input) => runSmells(runIx, input),
   );
@@ -417,6 +425,10 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
         .max(1_000_000)
         .optional()
         .describe("exact serialized-character budget for the evidence list"),
+      structured: z
+        .boolean()
+        .optional()
+        .describe("return the JSON bundle as structuredContent instead of llm records"),
     },
     async (input) => {
       const options: string[] = [];
@@ -426,9 +438,15 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
         options.push(`--max-relationships=${numberArg(input, "max_relationships")}`);
       if (typeof input.max_evidence === "number") options.push(`--max-evidence=${numberArg(input, "max_evidence")}`);
       if (typeof input.max_chars === "number") options.push(`--max-chars=${numberArg(input, "max_chars")}`);
-      return runJsonStructured(runIx, "ix_context", ix("context", [stringArg(input, "target")], options));
+      const argv = ix("context", [stringArg(input, "target")], options);
+      // Once, in the format the reader is: an agent. The bundle used to go out
+      // twice on every call — the JSON text AND the same object again as
+      // structuredContent — so a 20 KB bundle cost 40 KB, and the copy a model
+      // actually reads is the smaller `llm` one that was not being sent at all.
+      return input.structured === true
+        ? runJsonStructured(runIx, "ix_context", argv)
+        : runFormatted(runIx, "ix_context", argv);
     },
-    contextBundleSchema,
   );
   registerTool(
     server,
@@ -656,6 +674,7 @@ function withStructuredContent(result: CallToolResult): CallToolResult {
 }
 
 async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolResult> {
+  const structured = input.structured === true;
   const result = await runIx(toArgv(ix("smells"), "json"), DEFAULT_TIMEOUT_MS);
   if (!result.ok) {
     const detail = result.stderr.trim() || result.stdout.trim() || "smells failed without output";
@@ -664,7 +683,8 @@ async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolRes
 
   const parsed = parseJsonOutput(result.stdout);
   if (!isRecord(parsed) || !Array.isArray(parsed.candidates)) {
-    return withStructuredContent(textResult(result.stdout.trim() || "{}"));
+    const text = textResult(result.stdout.trim() || "{}");
+    return structured ? withStructuredContent(text) : text;
   }
 
   const path = typeof input.path === "string" ? normalizePath(input.path) : null;
@@ -684,10 +704,11 @@ async function runSmells(runIx: IxRunner, input: ToolInput): Promise<CallToolRes
     .slice(0, limit);
 
   const payload = { ...parsed, count: candidates.length, candidates };
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload,
-  };
+  // Compact, and the object once rather than twice. The indent was two spaces
+  // per level of a list of smell candidates, and the structured copy was the
+  // same bytes again.
+  const text = textResult(JSON.stringify(payload));
+  return structured ? { ...text, structuredContent: payload } : text;
 }
 
 function textResult(text: string, isError = false): CallToolResult {
