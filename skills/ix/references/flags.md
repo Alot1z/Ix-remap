@@ -62,6 +62,12 @@ surfaces (#575).
   `truncated=true total_lines=<n> next=<path>:401-800`, so the next page is one
   command away. A line range you typed (`ix read a.ts:1-900`) is never capped,
   a symbol target is its own span, and `--all` reads the whole file.
+- **`ix depends` and `ix trace` stop at depth 3 and 100 nodes.** Both were
+  unbounded, which on a hub is thousands of nodes the caller pays for before
+  seeing any. The output distinguishes the two ways a walk ends:
+  `truncated=true` means the node cap dropped nodes, `depth_limited=true` means
+  the walk stopped descending and there may or may not be more. `--depth` and
+  `--cap` take anything.
 - **`--pick <n>` is 1-based** everywhere it appears, and is how you resolve an
   ambiguous target without re-running with a longer name.
 - **`--no-recursive` and `--no-open` negate a default-on behaviour**, so their
@@ -185,8 +191,8 @@ Show upstream dependents of the given entity (full tree by default).
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
-| `--depth` | `<n>` | — | Cap traversal depth |
-| `--cap` | `<n>` | — | Cap number of nodes visited |
+| `--depth` | `<n>` | `3` | Cap traversal depth |
+| `--cap` | `<n>` | `100` | Cap number of nodes visited |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--include-tests` | — | off | Include test and fixture entities in results |
@@ -640,8 +646,8 @@ Follow how it connects.
 | `--upstream` | — | off | Show who calls/imports this (same as depends) |
 | `--downstream` | — | off | Show what this calls/imports (outward flow) |
 | `--kind` | `<kind>` | — | Relationship kind: calls\|imports\|depends\|contains |
-| `--depth` | `<n>` | — | Cap traversal depth in edges (also applies to `--to`) |
-| `--cap` | `<n>` | — | Cap nodes visited per direction, or across the `--to` search (including the source) |
+| `--depth` | `<n>` | `3` | Cap traversal depth in edges (also applies to `--to`) |
+| `--cap` | `<n>` | `100` | Cap nodes visited per direction, or across the `--to` search (including the source) |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
