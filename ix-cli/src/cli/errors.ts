@@ -1,6 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import chalk from "chalk";
+import { PRE_CONNECTION_CODES, RESET_RECONCILIATION_ERROR } from "../client/transport.js";
 
 import { llmError } from "./llm.js";
 
@@ -187,15 +188,12 @@ export function formatFetchError(err: unknown): string {
  * 10s connect timeout fires first and reports `UND_ERR_CONNECT_TIMEOUT`, which
  * is already listed here.
  */
-const UNREACHABLE_CODES = new Set([
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
+// The pre-connection codes are shared with the HTTP client, which needs the
+// same "nothing was transmitted" judgement to decide whether a failed reset
+// could have deleted anything. One definition, not two: a second hand-written
+// copy is how the two drift apart. `UND_ERR_SOCKET` is added only here — see
+// above for why it counts as unreachable for rendering but not for reset.
+const UNREACHABLE_CODES = new Set([...PRE_CONNECTION_CODES, "UND_ERR_SOCKET"]);
 
 function isUnreachableCode(e: { code?: unknown } | null | undefined): boolean {
   return typeof e?.code === "string" && UNREACHABLE_CODES.has(e.code);
@@ -250,7 +248,12 @@ function writeDebugDetail(err: unknown): void {
  * instead of an undici stack trace.
  */
 export function isBackendUnreachable(err: unknown): boolean {
-  const e = err as { code?: unknown; cause?: unknown } | null | undefined;
+  const e = err as { name?: unknown; code?: unknown; cause?: unknown } | null | undefined;
+  // An error that carries its own instruction must not be re-explained by its
+  // cause. Reset attaches the transport failure for IX_DEBUG, which would
+  // otherwise render "start the backend, then check status" on top of a
+  // "do not repeat this reset" warning — advising the retry it exists to stop.
+  if (e?.name === RESET_RECONCILIATION_ERROR) return false;
   if (isUnreachableCode(e)) return true;
   return isUnreachableCode(e?.cause as { code?: unknown } | null | undefined);
 }

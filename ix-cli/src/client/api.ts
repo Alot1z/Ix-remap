@@ -1,5 +1,6 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
+import { isPreConnectionFailure, RESET_RECONCILIATION_ERROR } from "./transport.js";
 import type {
   IngestResult,
   StructuredContext,
@@ -457,12 +458,23 @@ export class IxClient {
       return this.runResetSync(syncPath);
     }
 
-    const beginResp = await fetch(`${this.endpoint}${asyncPath}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(30 * 1000),
-    });
+    let beginResp: Response;
+    try {
+      beginResp = await fetch(`${this.endpoint}${asyncPath}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(30 * 1000),
+      });
+    } catch (error) {
+      // A refused connection or unresolved host proves the request never left
+      // this machine, so nothing was deleted and nothing needs reconciling.
+      // Rethrowing lets renderCliError give its actionable "backend not
+      // reachable" message instead of a data-integrity warning — which would
+      // otherwise fire on the most common failure of a fresh install.
+      if (isPreConnectionFailure(error)) throw error;
+      throw this.resetReconciliationError("The start response was unavailable.", undefined, error);
+    }
 
     if (beginResp.status === 404) {
       return this.runResetSync(syncPath);
@@ -472,36 +484,73 @@ export class IxClient {
       throw new Error(`${beginResp.status}: ${text}`);
     }
 
-    const { opId } = (await beginResp.json()) as { opId: string };
+    if (beginResp.status !== 202) {
+      throw this.resetReconciliationError(`Unexpected start response (${beginResp.status}).`);
+    }
+    let begin: unknown;
+    try { begin = await beginResp.json(); }
+    catch { throw this.resetReconciliationError("The start acknowledgment was unreadable."); }
+    if (!begin || typeof begin !== "object" || !("opId" in begin) ||
+        typeof begin.opId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(begin.opId)) {
+      throw this.resetReconciliationError("The start acknowledgment had no valid operation ID.");
+    }
+    const opId = begin.opId;
     const deadlineMs = Date.now() + 15 * 60 * 1000;
 
     while (Date.now() < deadlineMs) {
-      const statusResp = await fetch(`${this.endpoint}/v1/reset/status/${opId}`, {
-        method: "GET",
-        signal: AbortSignal.timeout(30 * 1000),
-      });
-      // Op state is in-process on the server — a restart drops it. Reset is
-      // idempotent, so the safe recovery is to tell the user to re-run.
+      let statusResp: Response;
+      try {
+        statusResp = await fetch(`${this.endpoint}/v1/reset/status/${opId}`, {
+          method: "GET",
+          signal: AbortSignal.timeout(30 * 1000),
+        });
+      } catch (error) {
+        // NOT treated as pre-connection like the start call above: the reset
+        // was already accepted (202) and is running server-side, so losing the
+        // status poll is ambiguous no matter why it failed.
+        throw this.resetReconciliationError("The status response was unavailable.", opId, error);
+      }
+      // Missing process-local status does not prove the reset did not run.
+      // A new reset could delete writes created after the original operation.
       if (statusResp.status === 404) {
-        throw new Error(
-          `Reset status for operation ${opId} was lost (the server may have ` +
-          `restarted). Reset is idempotent — re-run the command to confirm.`,
-        );
+        throw this.resetReconciliationError("The status is unavailable or inaccessible.", opId);
       }
-      if (!statusResp.ok) {
-        const text = await statusResp.text();
-        throw new Error(`${statusResp.status}: ${text}`);
+      if (statusResp.status !== 200) {
+        throw this.resetReconciliationError(`Status request returned ${statusResp.status}.`, opId);
       }
-      const status = (await statusResp.json()) as { state: string; error?: string | null };
+      let status: unknown;
+      try { status = await statusResp.json(); }
+      catch { throw this.resetReconciliationError("The status response was unreadable.", opId); }
+      if (!status || typeof status !== "object" || !("opId" in status) || status.opId !== opId ||
+          !("state" in status) || typeof status.state !== "string" ||
+          !["running", "done", "failed"].includes(status.state)) {
+        throw this.resetReconciliationError("The status did not identify this operation and a valid state.", opId);
+      }
       if (status.state === "done") {
         return { ok: true, message: doneMessage };
       }
       if (status.state === "failed") {
-        throw new Error(`Reset failed: ${status.error ?? "unknown error"}`);
+        const detail = "error" in status && typeof status.error === "string" ? status.error : "unknown error";
+        throw this.resetReconciliationError(`Reset reported failure: ${detail}.`, opId);
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    throw new Error(`Reset did not complete within 15 minutes (operation ${opId}).`);
+    throw this.resetReconciliationError("Completion was not confirmed within 15 minutes.", opId);
+  }
+
+  private resetReconciliationError(reason: string, opId?: string, cause?: unknown): Error {
+    const operation = opId ? ` (operation ${opId})` : "";
+    // Carry `cause` so IX_DEBUG=1 can still show the underlying transport
+    // failure — swallowing it left no way to tell these outcomes apart.
+    const error = new Error(
+      `${reason}${operation} Graph or pipeline changes may already have occurred. ` +
+      "Do not repeat the reset until an administrator has reconciled its effects and operation records.",
+      cause === undefined ? undefined : { cause });
+    // Marked so error rendering does not reclassify this by its cause and
+    // print "start the backend, then retry" over a do-not-repeat warning.
+    error.name = RESET_RECONCILIATION_ERROR;
+    return error;
   }
 
   private async runResetSync(syncPath: string): Promise<{ ok: boolean; message: string }> {

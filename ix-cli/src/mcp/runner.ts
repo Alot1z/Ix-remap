@@ -538,7 +538,19 @@ let proProbe: Promise<boolean> | undefined;
  * rather than offering tools whose every call answers "requires Ix Pro".
  */
 export function detectPro(): Promise<boolean> {
-  return (proProbe ??= tryLoadProCommands(new Command()));
+  // tryLoadProCommands now REJECTS for an installed-but-broken Pro. Cache the
+  // resolved answer, never the rejection: `??=` would otherwise memoize a
+  // rejected promise and every later caller — `ix mcp doctor`, the server's
+  // own startup — would inherit it. Not advertising the tools is the correct
+  // answer here anyway, and it does not reopen the guard: `buildProgram`
+  // awaits the same loader for every in-process call (the default runner —
+  // runCurrentIx only spawns a child when IX_MCP_SUBPROCESS=1), so a call
+  // that would need Pro still fails.
+  return (proProbe ??= tryLoadProCommands(new Command()).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[!!] Ix Pro is installed but failed to initialize: ${message}`);
+    return false;
+  }));
 }
 
 /** Spawn the CLI as a child process — one command per process, fully isolated. */
