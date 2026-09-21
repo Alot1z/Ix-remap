@@ -38,6 +38,9 @@ export const IX_MCP_OSS_TOOL_NAMES = [
   "ix_overview",
   "ix_read",
   "ix_diff",
+  // One tool for four relations. The four singles stay in the catalog for
+  // `--tools=all`; `--tools=core` advertises this instead.
+  "ix_neighbors",
   "ix_callers",
   "ix_callees",
   "ix_imported_by",
@@ -115,29 +118,30 @@ const WRITE_OPEN_WORLD: ToolAnnotations = {
 const UNVERIFIED = (title: string): ToolAnnotations => ({ title });
 
 const TOOL_ANNOTATIONS: Record<(typeof IX_MCP_TOOL_NAMES)[number], ToolAnnotations> = {
-  ix_health: { ...READ_ONLY, title: "Check Ix backend and graph readiness" },
+  ix_health: { ...READ_ONLY, title: "Is the graph up to date. Call once at most; every other tool reports its own failure" },
   ix_locate: { ...READ_ONLY, title: "Resolve a symbol to its canonical target" },
   ix_search: { ...READ_ONLY, title: "Search the graph by name" },
   ix_text: { ...READ_ONLY, title: "Search text across the indexed repository" },
-  ix_impact: { ...READ_ONLY, title: "Analyze the blast radius of changing a symbol" },
-  ix_map: { ...WRITE, title: "Ingest or refresh the workspace architecture map" },
-  ix_overview: { ...READ_ONLY, title: "Show the structural overview of a target" },
+  ix_impact: { ...READ_ONLY, title: "What a change to this would reach. Members and dependents carry path:lines" },
+  ix_map: { ...WRITE, title: "Re-ingest the workspace. Slow; run after editing code, not before reading it" },
+  ix_overview: { ...READ_ONLY, title: "One call: what a file or symbol is, what it holds, and what it touches" },
   // Not "graph-bounded": `ix read` resolves an exact file path before it
   // consults the graph at all, so the title has to describe the whole command.
   ix_read: { ...READ_ONLY, title: "Read source from the workspace" },
-  ix_diff: { ...READ_ONLY, title: "Show the structural diff between revisions" },
-  ix_callers: { ...READ_ONLY, title: "List incoming call edges" },
-  ix_callees: { ...READ_ONLY, title: "List outgoing call edges" },
-  ix_imported_by: { ...READ_ONLY, title: "List incoming import edges" },
-  ix_imports: { ...READ_ONLY, title: "List outgoing import edges" },
+  ix_diff: { ...READ_ONLY, title: "What changed between two graph revisions, by entity rather than by line" },
+  ix_neighbors: { ...READ_ONLY, title: "List a symbol's callers, callees, imports or importers" },
+  ix_callers: { ...READ_ONLY, title: "Who calls this. Rows carry path:lines. Prefer ix_neighbors" },
+  ix_callees: { ...READ_ONLY, title: "What this calls. Rows carry path:lines. Prefer ix_neighbors" },
+  ix_imported_by: { ...READ_ONLY, title: "What imports this. Rows carry path:lines. Prefer ix_neighbors" },
+  ix_imports: { ...READ_ONLY, title: "What this imports. Rows carry path:lines. Prefer ix_neighbors" },
   ix_depends: { ...READ_ONLY, title: "Show downstream dependencies" },
-  ix_trace: { ...READ_ONLY, title: "Trace execution paths through a symbol" },
-  ix_explain: { ...READ_ONLY, title: "Explain a symbol using graph evidence" },
+  ix_trace: { ...READ_ONLY, title: "Follow edges through a symbol, or find a path to another one. Bounded by depth" },
+  ix_explain: { ...READ_ONLY, title: "What a symbol is for, from its edges: role, importance, and who uses it with path:lines" },
   ix_rank: { ...READ_ONLY, title: "Rank graph entities by importance" },
   ix_inventory: { ...READ_ONLY, title: "List graph entities by kind" },
-  ix_smells: { ...WRITE, title: "Detect graph-backed architecture smells" },
-  ix_stats: { ...READ_ONLY, title: "Return graph-wide statistics" },
-  ix_subsystems: { ...READ_ONLY, title: "List graph-derived subsystems" },
+  ix_smells: { ...WRITE, title: "Orphans, god modules and cycles the graph can see. Not a linter" },
+  ix_stats: { ...READ_ONLY, title: "Node and edge counts by kind. Use to tell an empty graph from a missing symbol" },
+  ix_subsystems: { ...READ_ONLY, title: "The regions the map grouped this repo into, with health and confidence" },
   ix_history: { ...READ_ONLY, title: "Show provenance and patch history" },
   ix_ingest: { ...WRITE_OPEN_WORLD, title: "Ingest a path or GitHub repository into the graph" },
   // Reads the graph and composes a bundle; the CLI's --save and --out, which are
@@ -180,11 +184,42 @@ const TOOL_OUTPUT_SCHEMA: Partial<Record<(typeof IX_MCP_TOOL_NAMES)[number], z.Z
   // passing `structured: true` receives.
 };
 
+/** Which catalog to advertise. */
+export type ToolsetName = "core" | "all";
+
+/**
+ * The tools an agent actually needs, and the default.
+ *
+ * `tools/list` is paid on every session before a single call is made, and the
+ * full catalog is 26 tools of which a recorded run used four. The cost is not
+ * only bytes: a model choosing between 26 near-identical names picks worse than
+ * one choosing between ten, and `ix_callers` / `ix_callees` / `ix_imports` /
+ * `ix_imported_by` had byte-identical schemas differing only in a word.
+ *
+ * Those four are one `ix_neighbors{relation}` here. Everything that is gone is
+ * still reachable with `--tools=all`, which advertises the whole catalog —
+ * including the four singles, so nothing that works today stops working.
+ */
+export const IX_MCP_CORE_TOOL_NAMES = [
+  "ix_health",
+  "ix_locate",
+  "ix_search",
+  "ix_text",
+  "ix_impact",
+  "ix_overview",
+  "ix_read",
+  "ix_neighbors",
+  "ix_explain",
+  "ix_context",
+] as const;
+
 interface CreateServerOptions {
   version?: string;
   runIx?: IxRunner;
   /** Advertise the Pro tools. Resolved by {@link detectPro} at startup. */
   proAvailable?: boolean;
+  /** Which catalog to advertise. Defaults to `core`. */
+  tools?: ToolsetName;
 }
 
 type ToolInput = Record<string, unknown>;
@@ -231,24 +266,39 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     version,
   });
 
-  registerTool(server, "ix_health", "Check Ix backend and graph readiness", {}, async () =>
+  // `core` unless asked otherwise. A tool left out here is not removed from the
+  // CLI, only from what this session is told about.
+  const toolset: ToolsetName = options.tools ?? "core";
+  const core = new Set<string>(IX_MCP_CORE_TOOL_NAMES);
+  // The Pro tools are exempt from the core gate. They are already conditional
+  // on Pro being installed, and "Pro is installed, so its tools are offered"
+  // is a contract a toolset choice has no business silently reversing.
+  const ctx: RegisterContext = {
+    server,
+    advertise: (name: string) =>
+      toolset === "all"
+      || core.has(name)
+      || (IX_MCP_PRO_TOOL_NAMES as readonly string[]).includes(name),
+  };
+
+  registerTool(ctx, "ix_health", "Check Ix backend and graph readiness", {}, async () =>
     runFormatted(runIx, "ix_health", ix("status")),
   );
   registerTool(
-    server,
+    ctx,
     "ix_locate",
-    "Resolve a symbol to its canonical graph-backed target",
+    "One name to one definition, with its path:lines. Use before reading when a name is ambiguous",
     { symbol: z.string().min(1) },
     async (input) => runFormatted(runIx, "ix_locate", ix("locate", [stringArg(input, "symbol")])),
   );
   registerTool(
-    server,
+    ctx,
     "ix_search",
-    "Search the graph by name, ranked, with each hit's path",
+    "Find a symbol by name. Ranked, each row carries path:lines. Use instead of grep for a definition",
     {
       term: z.string().min(1),
-      kind: z.string().min(1).optional().describe("narrow to one entity kind"),
-      path: z.string().min(1).optional().describe("narrow to files whose path contains this"),
+      kind: z.string().min(1).optional(),
+      path: z.string().min(1).optional(),
       language: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(200).default(10),
     },
@@ -261,9 +311,9 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_text",
-    "Search text across the indexed repository and return ranked hits",
+    "Literal or regex search, code ranked above tests above prose. Use instead of grep for a string",
     {
       pattern: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(20),
@@ -278,14 +328,14 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_impact",
     "Analyze the blast radius and risk of changing a symbol or file",
     { target: z.string().min(1) },
     async (input) => runFormatted(runIx, "ix_impact", ix("impact", [stringArg(input, "target")])),
   );
   registerTool(
-    server,
+    ctx,
     "ix_map",
     "Ingest one path or refresh the full workspace architecture map",
     { file: z.string().min(1).optional() },
@@ -295,21 +345,21 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_overview",
     "Return the structural overview of a symbol, file, or subsystem",
     { target: z.string().min(1) },
     async (input) => runFormatted(runIx, "ix_overview", ix("overview", [stringArg(input, "target")])),
   );
   registerTool(
-    server,
+    ctx,
     "ix_read",
-    "Read a symbol's source, or a line range of a file",
+    "Source for a symbol, or path:start-end for a range. Prefer a range over a whole file",
     {
       symbol: z.string().min(1).describe("a symbol, a path, or `path:start-end`"),
       kind: z.string().min(1).optional(),
       path: z.string().min(1).optional(),
-      pick: z.number().int().min(1).max(50).optional().describe("choose the Nth candidate, 1-based"),
+      pick: z.number().int().min(1).max(50).optional().describe("Nth candidate, 1-based"),
     },
     // Nothing is forwarded as a size bound: `ix read` owns its own cap, and a
     // second one here would be a number to keep in sync with it. A range goes
@@ -318,7 +368,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       runFormatted(runIx, "ix_read", ix("read", [stringArg(input, "symbol")], symbolOptions(input, { limit: false }))),
   );
   registerTool(
-    server,
+    ctx,
     "ix_diff",
     "Show the structural diff between two graph revisions",
     {
@@ -336,14 +386,35 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       return runFormatted(runIx, "ix_diff", ix("diff", positionals, input.summary === true ? ["--summary"] : []));
     },
   );
-  registerSymbolTool(server, runIx, "ix_callers", "List incoming call edges", "callers");
-  registerSymbolTool(server, runIx, "ix_callees", "List outgoing call edges", "callees");
-  registerSymbolTool(server, runIx, "ix_imported_by", "List incoming import edges", "imported-by");
-  registerSymbolTool(server, runIx, "ix_imports", "List outgoing import edges", "imports");
   registerTool(
-    server,
+    ctx,
+    "ix_neighbors",
+    "Who calls, is called by, imports or is imported by a symbol. Rows carry path:lines",
+    {
+      ...SYMBOL_TOOL_INPUT,
+      relation: z
+        .enum(["callers", "callees", "imports", "imported_by"])
+        .describe("callers = who calls it; callees = what it calls"),
+    },
+    async (input) => {
+      const relation = stringArg(input, "relation");
+      // The CLI spells one of them with a dash.
+      const command = relation === "imported_by" ? "imported-by" : relation;
+      return runFormatted(
+        runIx,
+        "ix_neighbors",
+        ix(command, [stringArg(input, "symbol")], symbolOptions(input)),
+      );
+    },
+  );
+  registerSymbolTool(ctx, runIx, "ix_callers", "List incoming call edges", "callers");
+  registerSymbolTool(ctx, runIx, "ix_callees", "List outgoing call edges", "callees");
+  registerSymbolTool(ctx, runIx, "ix_imported_by", "List incoming import edges", "imported-by");
+  registerSymbolTool(ctx, runIx, "ix_imports", "List outgoing import edges", "imports");
+  registerTool(
+    ctx,
     "ix_depends",
-    "Show downstream dependencies to a bounded depth",
+    "The dependent tree, bounded. Use when one hop of ix_neighbors is not enough",
     {
       symbol: z.string().min(1),
       depth: z.number().int().min(1).max(5).default(2),
@@ -354,7 +425,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       ])),
   );
   registerTool(
-    server,
+    ctx,
     "ix_trace",
     "Trace execution paths through a symbol",
     {
@@ -372,7 +443,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerSymbolTool(
-    server,
+    ctx,
     runIx,
     "ix_explain",
     "Explain a symbol using graph evidence",
@@ -382,9 +453,9 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     { symbol: SYMBOL_TOOL_INPUT.symbol, kind: SYMBOL_TOOL_INPUT.kind, path: SYMBOL_TOOL_INPUT.path, pick: SYMBOL_TOOL_INPUT.pick },
   );
   registerTool(
-    server,
+    ctx,
     "ix_rank",
-    "Rank graph entities by importance or connectivity",
+    "The most connected entities of a kind. Use to find where to start in an unfamiliar repo",
     {
       by: z.string().min(1).default("dependents"),
       kind: z.string().min(1).default("class"),
@@ -402,9 +473,9 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_inventory",
-    "List graph entities by kind, optionally scoped to a repository path",
+    "Every entity of one kind, grouped by file. Use instead of a glob to enumerate symbols",
     {
       // Optional, and `--limit` is forwarded, because the CLI's own contract is
       // `--kind` required and `--path` an optional filter. Requiring a path
@@ -422,7 +493,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_smells",
     "Detect graph-backed architecture smells",
     {
@@ -435,23 +506,23 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
     async (input) => runSmells(runIx, input),
   );
-  registerTool(server, "ix_stats", "Return graph-wide statistics", {}, async () =>
+  registerTool(ctx, "ix_stats", "Return graph-wide statistics", {}, async () =>
     runFormatted(runIx, "ix_stats", ix("stats")),
   );
-  registerTool(server, "ix_subsystems", "List graph-derived subsystems", {}, async () =>
+  registerTool(ctx, "ix_subsystems", "List graph-derived subsystems", {}, async () =>
     runFormatted(runIx, "ix_subsystems", ix("subsystems")),
   );
   registerTool(
-    server,
+    ctx,
     "ix_history",
-    "Show provenance and patch history for a file or symbol",
+    "Which revisions touched this, and what each patch said it was doing",
     { target: z.string().min(1) },
     async (input) => runFormatted(runIx, "ix_history", ix("history", [stringArg(input, "target")])),
   );
   registerTool(
-    server,
+    ctx,
     "ix_context",
-    "Build a bounded, deterministic context bundle for a symbol, file, or entity",
+    "Start here. Ranked evidence around a target, every row a path:lines, ending in reads to run",
     {
       target: z.string().min(1),
       as_of_rev: z.number().int().nonnegative().optional().describe("graph revision for historical context"),
@@ -489,9 +560,9 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
     },
   );
   registerTool(
-    server,
+    ctx,
     "ix_ingest",
-    "Ingest a path, or issues/PRs/commits from a GitHub repository, into the graph",
+    "Add a path or a GitHub repo to the graph. Slow; ix_map is the usual way in",
     {
       path: z.string().min(1).optional(),
       github: z.string().min(1).optional().describe("owner/repo"),
@@ -517,11 +588,11 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   );
 
   if (options.proAvailable) {
-    registerTool(server, "ix_briefing", "Load the Ix Pro session briefing", {}, async () =>
+    registerTool(ctx, "ix_briefing", "Load the Ix Pro session briefing", {}, async () =>
       runJson(runIx, "ix_briefing", ix("briefing")),
     );
     registerTool(
-      server,
+      ctx,
       "ix_decisions",
       "List Ix Pro architecture decisions, optionally scoped to a path",
       { path: z.string().min(1).optional() },
@@ -532,7 +603,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       },
     );
     registerTool(
-      server,
+      ctx,
       "ix_decide",
       "Record an architecture decision with its rationale",
       {
@@ -551,11 +622,11 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   return server;
 }
 
-export async function startIxMcpServer(version = "0.0.0"): Promise<void> {
+export async function startIxMcpServer(version = "0.0.0", tools: ToolsetName = "core"): Promise<void> {
   // Before anything can throw: the CLI's own handlers exit the process on any
   // stray error, which for a server means losing every tool mid-session.
   installServerErrorHandlers();
-  const server = createIxMcpServer({ version, proAvailable: await detectPro() });
+  const server = createIxMcpServer({ version, tools, proAvailable: await detectPro() });
   // A dedicated handle on fd 1 rather than process.stdout, which the in-process
   // runner patches to capture command output.
   await server.connect(new StdioServerTransport(process.stdin, createProtocolStdout()));
@@ -572,10 +643,10 @@ export async function startIxMcpServer(version = "0.0.0"): Promise<void> {
  */
 const SYMBOL_TOOL_INPUT = {
   symbol: z.string().min(1),
-  kind: z.string().min(1).optional().describe("narrow to one entity kind"),
-  path: z.string().min(1).optional().describe("narrow to files whose path contains this"),
-  pick: z.number().int().min(1).max(50).optional().describe("choose the Nth candidate, 1-based"),
-  limit: z.number().int().min(1).max(500).optional().describe("max rows"),
+  kind: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  pick: z.number().int().min(1).max(50).optional().describe("Nth candidate, 1-based"),
+  limit: z.number().int().min(1).max(500).optional(),
 } as const;
 
 /** Turn the shared disambiguation input into CLI flags. */
@@ -591,27 +662,36 @@ function symbolOptions(input: ToolInput, opts: { limit?: boolean } = {}): string
 }
 
 function registerSymbolTool(
-  server: McpServer,
+  ctx: RegisterContext,
   runIx: IxRunner,
   name: string,
   description: string,
   command: string,
   input: z.ZodRawShape = SYMBOL_TOOL_INPUT,
 ): void {
-  registerTool(server, name, description, input, async (args) =>
+  registerTool(ctx, name, description, input, async (args) =>
     runFormatted(runIx, name, ix(command, [stringArg(args, "symbol")], symbolOptions(args))),
   );
 }
 
+/** The server being built, and whether this session advertises a given tool. */
+interface RegisterContext {
+  server: McpServer;
+  advertise: (name: string) => boolean;
+}
+
 function registerTool(
-  server: McpServer,
+  ctx: RegisterContext,
   name: string,
   description: string,
   inputSchema: z.ZodRawShape,
   handler: (input: ToolInput) => Promise<CallToolResult>,
   outputSchema?: z.ZodType,
 ): void {
-  server.registerTool(
+  // Not registered at all rather than registered and hidden: a tool the client
+  // cannot see but can still call is a surface with no documentation.
+  if (!ctx.advertise(name)) return;
+  ctx.server.registerTool(
     name,
     {
       description,

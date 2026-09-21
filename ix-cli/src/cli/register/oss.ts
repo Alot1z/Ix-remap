@@ -81,6 +81,7 @@ const OPTION_CHOICES: Record<string, Record<string, string[]>> = {
   subsystems: { sort: ["importance", "confidence", "size", "alpha"] },
   savings: { model: ["opus", "sonnet", "haiku", "gpt-4o"] },
   context: { depth: ["compact", "standard", "full", "shallow", "deep"] },
+  mcp: { tools: ["core", "all"] },
 };
 
 /**

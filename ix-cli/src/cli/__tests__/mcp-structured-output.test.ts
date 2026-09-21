@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function connect(runIx: IxRunner): Promise<Client> {
-  const server = createIxMcpServer({ version: "test", runIx });
+  const server = createIxMcpServer({ version: "test", runIx, tools: "all" });
   const client = new Client({ name: "ix-mcp-structured-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -169,7 +169,10 @@ describe("ix mcp structured output", () => {
     // every session pays to connect to this server, for a shape only a caller
     // passing `structured: true` receives.
     expect(context).toBeLessThan(1500);
-    expect(total).toBeLessThan(12_500);
+    // Against the full catalog, which is what `connect` builds here. What a
+    // session actually pays is the core set, and `mcp-toolset.test.ts` holds
+    // that number.
+    expect(total).toBeLessThan(16_000);
   });
 
   it("attaches structuredContent only where an outputSchema was declared", async () => {
@@ -180,6 +183,7 @@ describe("ix mcp structured output", () => {
     const server = createIxMcpServer({
       version: "test",
       proAvailable: true,
+      tools: "all",
       runIx: async () => ({ ok: true, stdout: JSON.stringify({ shape: "unverified" }), stderr: "" }),
     });
     const client = new Client({ name: "ix-mcp-structured-pro-test", version: "1.0.0" });

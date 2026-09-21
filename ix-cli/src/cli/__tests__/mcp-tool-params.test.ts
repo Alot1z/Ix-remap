@@ -13,7 +13,9 @@ afterEach(async () => {
 });
 
 async function connect(runIx: IxRunner): Promise<Client> {
-  const server = createIxMcpServer({ version: "test", runIx });
+  // `all`: the four single-relation tools are what these cases are about, and
+  // `--tools=core` advertises `ix_neighbors` in their place.
+  const server = createIxMcpServer({ version: "test", runIx, tools: "all" });
   const client = new Client({ name: "ix-mcp-params-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
