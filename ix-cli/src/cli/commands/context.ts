@@ -1462,7 +1462,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
       id: resolved.id,
       name: resolved.name,
       kind: resolved.kind,
-      path: facts.path,
+      ...locationFields(targetLocation(facts) ?? {}),
       stale,
     },
   ];
@@ -1676,7 +1676,7 @@ function rankEvidence(input: {
     score: 0,
     reason: "resolved target — the bundle is centered on this entity",
     refs: [target.id],
-    ...locationField(input.facts.path ? { path: input.facts.path } : undefined),
+    ...locationField(targetLocation(input.facts)),
   });
 
   type Structural = Omit<EvidenceItem, "kind" | "score">;
@@ -1687,7 +1687,8 @@ function rankEvidence(input: {
       source: "facts.container",
       title: `container ${input.facts.container.name} (${input.facts.container.kind})`,
       reason: "contains the target",
-      refs: [],
+      refs: [input.facts.container.id],
+      ...locationField(input.facts.container),
     });
   }
   // Names alone when the facts carry no locations, so a caller that builds its
@@ -1863,6 +1864,8 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
       // surface, the ranked evidence is what it exists to deliver, and
       // `--format json` carries the rest for a caller that wants it.
       ...bundle.evidence.map(evidenceRecord(undefined)),
+      // Last, so it reads as the closing instruction it is.
+      ...nextReads(bundle).map((cmd) => llmLine("next", { cmd })),
     ]);
     return;
   }
@@ -1888,6 +1891,12 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
       const where = item.location ? `${formatLocation(item.location)} — ` : "";
       console.log(`         ${where}${item.reason}`);
     }
+  }
+
+  const reads = nextReads(bundle);
+  if (reads.length > 0) {
+    renderSection("Next");
+    for (const cmd of reads) console.log(`  ${cmd}`);
   }
 
   const trunc = bundle.truncation;
@@ -2004,6 +2013,41 @@ function locationFields(ref: Located): Located {
 }
 
 /** An evidence `location`, or nothing when the path is unknown. */
+/** The target's own `path:start-end`, or just its path when it has no range. */
+function targetLocation(facts: ContextFacts): Located | undefined {
+  if (!facts.path) return undefined;
+  return { path: facts.path, lineStart: facts.lineStart, lineEnd: facts.lineEnd };
+}
+
+/**
+ * The reads worth making next, most valuable first.
+ *
+ * The evidence rows carry `path:start-end` and the caller still has to decide
+ * which of them to open — so the bundle ends by saying so, as commands rather
+ * than coordinates. The saving this exists for is the whole-file read: on the
+ * benchmark set one avoided 34-61k-character read is worth more than every
+ * byte the bundle spends, and an agent handed a path with no range opens the
+ * file.
+ *
+ * Deduped, because a caller and a dependent are frequently the same function,
+ * and taken in evidence order, which is already the ranking — the target first,
+ * then its members, what it reaches, and what reaches it.
+ */
+export function nextReads(bundle: ContextBundle, limit = 3): string[] {
+  const seen = new Set<string>();
+  const reads: string[] = [];
+  for (const item of bundle.evidence) {
+    const loc = item.location;
+    if (!loc?.path || loc.lineStart === undefined || loc.lineEnd === undefined) continue;
+    const range = `${loc.path}:${loc.lineStart}-${loc.lineEnd}`;
+    if (seen.has(range)) continue;
+    seen.add(range);
+    reads.push(`ix read ${range}`);
+    if (reads.length === limit) break;
+  }
+  return reads;
+}
+
 function locationField(ref: Located | undefined): { location?: EvidenceLocation } {
   if (!ref?.path) return {};
   return { location: { ...locationFields(ref), path: ref.path } };
