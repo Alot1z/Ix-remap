@@ -6,7 +6,8 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveWorkspaceId } from "../bootstrap.js";
 import { formatNodes, relativePath, printJson } from "../format.js";
-import { scoreCandidate, resolveReadSystemId } from "../resolve.js";
+import { baseScore, originPenalty, hasDefinitionOf, mergeById, resolveReadSystemId } from "../resolve.js";
+import { isFileStemMatch } from "../candidate-origin.js";
 import { applyRoleFilter, roleHint } from "../role-filter.js";
 import { stderr } from "../stderr.js";
 import { llmLine, llmShortId } from "../llm.js";
@@ -44,12 +45,21 @@ const STRUCTURAL_KINDS = new Set([
  * Lower score = better match.
  *
  * Combines backend weight (_search_weight from AQL) with client-side
- * resolver scoring for fine-grained ranking.
+ * resolver scoring for fine-grained ranking. The backend weighs only how the
+ * NAME matched, so the kind of thing that matched is judged here:
+ *
+ *   - A file whose stem is the term (`borderStylesReset.js`) is weighed as an
+ *     exact name, not the partial match the backend scores it as — it is the
+ *     definition of an anonymous default export.
+ *   - An exact-name row that is not a code definition — an import entity, a
+ *     CSS selector / markdown heading / JSON key for a code-like term, or a
+ *     copy in build output, a fixture or a sample (`originPenalty`) — is capped
+ *     at tier 2 and sorts behind the definitions in it. Demoted, not dropped.
  *
  * Tiers (for JSON output):
  *   0 — exact name + exact kind
  *   1 — exact name + structural kind
- *   2 — exact name (any kind)
+ *   2 — exact name (any kind), or an exact name that is not a code definition
  *   3 — partial name match (backend weight 60)
  *   4 — provenance/claim/decision match
  *   5 — fuzzy/incidental match
@@ -58,35 +68,57 @@ function rankScore(
   node: any,
   term: string,
   requestedKind: string | undefined,
-  pathFilter: string | undefined
+  pathFilter: string | undefined,
+  requestedLanguage?: string,
 ): { tier: number; score: number; matchSource: string } {
+  const rank = baseRank(node, term, requestedKind, pathFilter, requestedLanguage);
+  // Only the name tiers are capped: a demoted row stays a name match, it just
+  // no longer claims to be the best kind of one.
+  if (rank.demoted && rank.tier < 2) rank.tier = 2;
+  return { tier: rank.tier, score: rank.score, matchSource: rank.matchSource };
+}
+
+function baseRank(
+  node: any,
+  term: string,
+  requestedKind: string | undefined,
+  pathFilter: string | undefined,
+  requestedLanguage: string | undefined,
+): { tier: number; score: number; matchSource: string; demoted: boolean } {
   // Weight is embedded in attrs by the backend AQL (survives parseNode → GraphNode → JSON)
-  const backendWeight: number = node.attrs?._search_weight ?? (node as any)._search_weight ?? 0;
-  const resolverScore = scoreCandidate(node, term, { kind: requestedKind, path: pathFilter });
+  const reportedWeight: number = node.attrs?._search_weight ?? (node as any)._search_weight ?? 0;
+  const stemMatch = reportedWeight < 100 && isFileStemMatch(node, term);
+  const backendWeight = stemMatch && reportedWeight >= 60 ? 100 : reportedWeight;
+  const nameScore = baseScore(node, term, { kind: requestedKind, path: pathFilter });
+  const penalty = originPenalty(node, term, { kind: requestedKind, language: requestedLanguage });
+  const demoted = penalty > 0;
+  // The tier comes from how the name matched; the penalty only orders rows
+  // inside a tier (and caps the name tiers, above).
+  const resolverScore = nameScore + penalty;
+  const exactSource = stemMatch ? "file_stem" : "name_exact";
 
   // Backend weight provides relevance signal, resolver refines within tier
   if (backendWeight >= 100) {
     // Exact backend name match — use resolver to sub-rank
-    if (resolverScore <= -3) return { tier: 0, score: -backendWeight + resolverScore, matchSource: "name_exact" };
-    if (resolverScore <= 0) return { tier: 1, score: -backendWeight + resolverScore, matchSource: "name_exact" };
-    return { tier: 2, score: -backendWeight + resolverScore, matchSource: "name_exact" };
+    if (nameScore <= -3) return { tier: 0, score: -backendWeight + resolverScore, matchSource: exactSource, demoted };
+    if (nameScore <= 0) return { tier: 1, score: -backendWeight + resolverScore, matchSource: exactSource, demoted };
+    return { tier: 2, score: -backendWeight + resolverScore, matchSource: exactSource, demoted };
   }
   if (backendWeight >= 60) {
-    return { tier: 3, score: -backendWeight + resolverScore, matchSource: "name_partial" };
+    return { tier: 3, score: -backendWeight + resolverScore, matchSource: "name_partial", demoted };
   }
   if (backendWeight >= 40) {
-    return { tier: 4, score: -backendWeight, matchSource: "provenance" };
+    return { tier: 4, score: -backendWeight, matchSource: "provenance", demoted };
   }
   if (backendWeight >= 20) {
-    return { tier: 4, score: -backendWeight, matchSource: "claim_or_decision" };
+    return { tier: 4, score: -backendWeight, matchSource: "claim_or_decision", demoted };
   }
 
   // No backend weight — fall back to pure resolver scoring
-  if (resolverScore <= -8) return { tier: 0, score: resolverScore, matchSource: "resolver" };
-  if (resolverScore <= -3) return { tier: 0, score: resolverScore, matchSource: "resolver" };
-  if (resolverScore <= 0) return { tier: 1, score: resolverScore, matchSource: "resolver" };
-  if (resolverScore <= 2) return { tier: 2, score: resolverScore, matchSource: "resolver" };
-  return { tier: 5, score: resolverScore, matchSource: "attrs" };
+  if (nameScore <= -3) return { tier: 0, score: resolverScore, matchSource: "resolver", demoted };
+  if (nameScore <= 0) return { tier: 1, score: resolverScore, matchSource: "resolver", demoted };
+  if (nameScore <= 2) return { tier: 2, score: resolverScore, matchSource: "resolver", demoted };
+  return { tier: 5, score: resolverScore, matchSource: "attrs", demoted: false };
 }
 
 /**
@@ -184,6 +216,9 @@ function normalizePath(value: string | undefined): string {
 
 const PATH_CANDIDATE_LIMIT = 2000;
 
+/** How far the window is widened, once, to reach a definition crowded out by same-named rows. */
+const DEFINITION_WINDOW = 200;
+
 export function registerSearchCommand(program: Command): void {
   program
     .command("search <term>")
@@ -199,8 +234,12 @@ export function registerSearchCommand(program: Command): void {
     .option("--semantic", "Use vector-similarity (embedding) search instead of keyword matching")
     .addHelpText("after", `\nRanking priority (score 1.00 down to 0.17):
   1. Exact name + exact kind match
-  2. Exact name + structural kind (class, function, etc.)
-  3. Exact name (any kind)
+  2. Exact name + structural kind (class, function, etc.), or the file named
+     after the term (borderStylesReset.js for borderStylesReset)
+  3. Exact name (any kind). Same-named rows that are not the code definition
+     rank here, behind it: imports of the name, CSS selectors, markdown
+     headings and JSON keys (for a code-like term), and copies in build
+     output (dist/, build/, *.min.js, *-output.*), fixtures and samples
   4. Exact filename/module match
   5. Container-aware near match
   6. Fuzzy/incidental match — dropped when any of 1-5 matched
@@ -282,13 +321,46 @@ Examples:
       const pathWindowLimited = effectivePathFilter && !opts.semantic
         && fetchLimit === PATH_CANDIDATE_LIMIT && rawNodes.length >= fetchLimit;
 
+      // Definitions first (see rankScore) only helps if the definition is in
+      // the window. The backend fills it by weight — every exact name before
+      // any partial one, in no useful order within a weight — so a name that is
+      // imported in thirty files can fill the window with imports while the
+      // definition sits past it. When the window came back full and holds no
+      // definition of the term, look further, at most twice:
+      //   1. the window ends on an exact-name row, so more exact names follow:
+      //      re-fetch once with a wider window;
+      //   2. still none: ask for files by that name — the definition of an
+      //      anonymous default export is its file, a partial match the backend
+      //      may rank anywhere among the partials.
+      if (!opts.semantic && limit > 0 && rawNodes.length >= fetchLimit && !hasDefinitionOf(nodes, term)) {
+        const last: any = rawNodes[rawNodes.length - 1];
+        if (fetchLimit < DEFINITION_WINDOW && (last?.attrs?._search_weight ?? last?._search_weight ?? 0) >= 100) {
+          fetchLimit = DEFINITION_WINDOW;
+          rawNodes = await fetchCandidates(fetchLimit);
+          nodes = filterPath(rawNodes);
+        }
+        if (!hasDefinitionOf(nodes, term) && (!opts.kind || opts.kind === "file")) {
+          const files = await client.search(term, {
+            limit: 20,
+            kind: "file",
+            language: opts.language,
+            asOfRev: opts.asOf ? parseInt(opts.asOf, 10) : undefined,
+            workspaceId,
+            systemId,
+            scope: effectivePathFilter ? normalizePathSeparators(effectivePathFilter) : undefined,
+          });
+          rawNodes = mergeById(rawNodes, files.filter((n: any) => isFileStemMatch(n, term)));
+          nodes = filterPath(rawNodes);
+        }
+      }
+
       // Re-rank client-side using shared scoring + backend weight. The rank object
       // is still computed for display (tier/score), but for semantic search we keep
       // the backend's vector-similarity order and skip the keyword-based re-sort,
       // which would otherwise demote semantically-relevant results lacking the term.
       const scored = nodes.map(n => ({
         node: n,
-        rank: rankScore(n, term, opts.kind, effectivePathFilter),
+        rank: rankScore(n, term, opts.kind, effectivePathFilter, opts.language),
       }));
 
       if (!opts.semantic) scored.sort(searchSort);
