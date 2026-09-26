@@ -128,11 +128,15 @@ function deduplicateUpsertEdges(ops: PatchOp[]): PatchOp[] {
 }
 
 /**
- * Part of every patch id, so bumping it makes the next `ix map` re-send every
- * file instead of keeping patches built by the old extractor. Bump it whenever
- * the same source would now produce different nodes or edges -- 1.26: JS/TS
- * calls resolve by scope, not name alone, and helper-loaded / dist/ imports
- * link to their sources; unchanged files would otherwise keep the old edges.
+ * Part of every patch id, and the backend skips a patch id it has already
+ * applied. Bump it whenever the same source would now produce different nodes
+ * or edges, or re-ingesting an unchanged file (`ix ingest --force`) yields the
+ * old id and the new output never lands -- 1.26: JS/TS calls resolve by scope,
+ * not name alone, and helper-loaded / dist/ imports link to their sources.
+ *
+ * A bump does not trigger that re-ingest: `ix map` skips every file whose mtime
+ * or source hash is unchanged, so an unchanged file keeps the edges the old
+ * extractor built until the file changes or `ix ingest --force` runs.
  */
 export function extractorName(): string {
   return `tree-sitter/1.26`;
