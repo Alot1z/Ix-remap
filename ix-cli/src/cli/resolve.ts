@@ -456,12 +456,23 @@ export async function resolveEntityFull(
   return { resolved: false, ambiguous: false, hiddenTestCount, ...(suggestions.length ? { suggestions } : {}) };
 }
 
-/** True when some candidate is a code definition named `symbol` (or its defining file). */
+/**
+ * True when some candidate is a code definition named `symbol` (or its defining file).
+ *
+ * Code kinds only: `candidateOrigin` calls anything it cannot place a
+ * definition, and that includes the `region` nodes `ix map` names after
+ * directories and modules (`Format`, `Search`, `CLI`, provenance `ix:map`).
+ * Counting one would skip the lookup for the file that defines the name.
+ */
 export function hasDefinitionOf(nodes: any[], symbol: string): boolean {
   const symbolLower = symbol.toLowerCase();
   return nodes.some((n: any) => {
     const name = String(n.name || n.attrs?.name || "").toLowerCase();
-    return (name === symbolLower || isFileStemMatch(n, symbol)) && candidateOrigin(n) === "definition";
+    const sourceUri = String(n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "");
+    return (name === symbolLower || isFileStemMatch(n, symbol))
+      && STRUCTURAL_KINDS.has(String(n.kind || "").toLowerCase())
+      && !sourceUri.startsWith("ix:")
+      && candidateOrigin(n) === "definition";
   });
 }
 

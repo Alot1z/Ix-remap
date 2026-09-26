@@ -78,6 +78,19 @@ describe("resolver: definitions over imports", () => {
     expect(result.resolved && result.entity.id).toBe("file");
   });
 
+  it("looks further when the window holds only a map region of the name, not a definition", async () => {
+    // `ix map` names regions after directories and modules (`Format`, `Search`,
+    // `CLI`), with provenance `ix:map`. A region is not a code definition, so
+    // it must not stop the lookup for the defining file.
+    const fake = client([
+      { id: "region", name: "Format", kind: "region", provenance: { sourceUri: "ix:map" }, attrs: {} } as any,
+      ...Array.from({ length: 40 }, (_, i) => n(`json-${i}`, "format", "config_entry", `pkg${i}/package.json`)),
+      n("file", "format.ts", "file", "src/cli/format.ts"),
+    ]);
+    const result = await resolveEntityFull(fake, "format", ALL_KINDS, { format: "json" } as any);
+    expect(result.resolved && result.entity.id).toBe("file");
+  });
+
   it("does not look further when a definition is in the window", async () => {
     const fake = client([
       n("fn", "parseConfig", "function", "src/config.ts"),

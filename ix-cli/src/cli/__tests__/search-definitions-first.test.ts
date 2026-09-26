@@ -103,6 +103,16 @@ describe("search: definitions rank above import entities", () => {
     expect(out.results.length).toBe(10);
   });
 
+  it("looks for the defining file when the window holds only a map region of the name", async () => {
+    dataset([
+      { id: "region", name: "Format", kind: "region", provenance: { sourceUri: "ix:map" }, attrs: { _search_weight: 100 } },
+      ...Array.from({ length: 40 }, (_, i) => n(`json-${i}`, "format", "config_entry", `pkg${i}/package.json`, 100)),
+      n("file", "format.ts", "file", "src/cli/format.ts", 60),
+    ]);
+    const out = await run("format");
+    expect(ids(out)[0]).toBe("file");
+  });
+
   it("does not spend an extra request when a definition is already in the window", async () => {
     dataset([
       n("fn", "parseConfig", "function", "src/config.ts", 100),
