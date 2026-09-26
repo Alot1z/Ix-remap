@@ -268,7 +268,9 @@ export async function searchPath(
   maxDepth: number,
   maxNodes: number,
 ): Promise<{ path: PathNode[] | null; cut: boolean; cutReason?: "node-cap" | "depth" }> {
-  if (maxNodes < 1) return { path: null, cut: false };
+  // A cap below one admits not even the source, so nothing was searched:
+  // that is the budget talking, not evidence that no route exists.
+  if (maxNodes < 1) return { path: null, cut: true, cutReason: "node-cap" };
   if (fromId === toId) return { path: [{ id: fromId, name: "", kind: "" }], cut: false };
   const nodeMap = new Map<string, { name: string; kind: string }>();
 

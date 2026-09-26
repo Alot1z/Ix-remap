@@ -125,6 +125,12 @@ describe('searchPath cut semantics', () => {
     expect(cut).toEqual({ path: null, cut: true, cutReason: 'node-cap' });
   });
 
+  it('reports a node-cap cut at cap zero, where not even the source is admitted', async () => {
+    const client = makeClient({ A: { out: [n('b')] } });
+    const cut = await searchPath(client as any, 'A', 'b', ['REL'], 10, 0);
+    expect(cut).toEqual({ path: null, cut: true, cutReason: 'node-cap' });
+  });
+
   it('reports cut with reason depth when nodes beyond maxDepth remain unexplored', async () => {
     const client = makeClient({ A: { out: [n('x')] }, x: { out: [n('y')] } });
     const cut = await searchPath(client as any, 'A', 'B', ['REL'], 1, 10);
