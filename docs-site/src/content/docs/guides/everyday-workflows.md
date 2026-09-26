@@ -66,12 +66,13 @@ ix diff 1 5 --summary           # changes between two graph revisions
 
 ## Give an agent a starting point
 
-`ix context` builds a bounded, deterministic bundle about one target: the entity, its relationships, and the evidence
-behind them. It's built to be pasted into a prompt or read by an agent.
+`ix context` builds a bounded, deterministic bundle about one target: the entity, its relationships, the evidence
+behind them, the other files most closely connected to it, and the recent commits to its file. It's built to be pasted
+into a prompt or read by an agent.
 
 ```bash
 ix context IngestionService --format llm
-ix context IngestionService --max-tokens 3000     # a larger evidence budget
+ix context IngestionService --max-tokens 6000     # a larger evidence budget (default 3000)
 ix context IngestionService --save ingest-review  # keep it to resume or diff later
 ```
 
