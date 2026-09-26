@@ -11,6 +11,9 @@ import { readStitchScope, writeStitchScope } from "./config.js";
 import { reportAmbiguousTarget, reportResolutionFailure } from "./ui.js";
 import { relativePath } from "./format.js";
 import { isQuiet } from "./output-shape.js";
+import {
+  candidateOrigin, isFileStemMatch, looksLikeCodeIdentifier, requestsNonCode,
+} from "./candidate-origin.js";
 
 /**
  * The read scope for the current working directory: a co-ingested multi-repo system
@@ -202,15 +205,54 @@ function normalizeForPathMatch(value: string | undefined): string {
 // ── Scoring ───────────────────────────────────────────────────────────────
 
 /**
+ * Score added to a candidate that shares the name but is not the code
+ * definition (see candidate-origin.ts for how each is recognised).
+ *
+ * - An import entity is a single-line `module`: +5 cancels the -3 container
+ *   boost it gets as a `module` and leaves it +2 behind a bare exact match, so
+ *   a same-named function (-1), class (-3) or defining file (0) all beat it.
+ * - A CSS selector, markdown heading or JSON key (+10, only for a term that
+ *   looks like a code identifier and only when the caller did not ask for that
+ *   kind or language) and a copy in build output, a fixture or a sample (+10)
+ *   land behind the import: an import at least points at the definition. 10
+ *   is enough to put even a PascalCase CSS class (-7 with the type boost)
+ *   behind a same-named function (-1).
+ *
+ * A demotion, never a filter — when nothing else shares the name these are
+ * still the best (and only) answer.
+ */
+export function originPenalty(
+  node: any,
+  symbol: string,
+  opts?: { kind?: string; language?: string },
+): number {
+  switch (candidateOrigin(node)) {
+    case "import": return 5;
+    case "generated": return 10;
+    case "non-code": return looksLikeCodeIdentifier(symbol) && !requestsNonCode(opts) ? 10 : 0;
+    default: return 0;
+  }
+}
+
+/**
  * Score a candidate node for resolution.
  * Lower is better. Combines:
- *   - exact name match (0 vs 10)
+ *   - exact name match (0), defining-file stem match (3), prefix (15), other (30)
  *   - exact kind match when --kind provided (-5)
  *   - strong path match when --path provided (-4)
  *   - structural kind boost (-3 for container, -1 for method/function)
- *   - penalty for fuzzy/incidental matches (+5)
+ *   - penalty for an import / non-code / generated candidate (originPenalty)
  */
 export function scoreCandidate(
+  node: any,
+  symbol: string,
+  opts?: { kind?: string; path?: string; language?: string }
+): number {
+  return baseScore(node, symbol, opts) + originPenalty(node, symbol, opts);
+}
+
+/** `scoreCandidate` without the origin penalty: how well the NAME matched. */
+export function baseScore(
   node: any,
   symbol: string,
   opts?: { kind?: string; path?: string }
@@ -225,6 +267,11 @@ export function scoreCandidate(
   // ── Name match ──────────────────────────────────────────────────────
   if (name === symbolLower) {
     score = 0; // exact name match — best tier
+  } else if (isFileStemMatch(node, symbol)) {
+    // `borderStylesReset.js` for `borderStylesReset`: the file is the
+    // definition of an anonymous default export. Behind a same-named symbol
+    // (a function nets -1, this nets 0), ahead of an import of it (+2).
+    score = 3;
   } else if (name.startsWith(symbolLower)) {
     score = 15; // prefix match — moderate
   } else {
@@ -310,13 +357,28 @@ export async function resolveEntityFull(
   await ensureReadScope(client); // fold in a Path-2 stitched system (Ix#225 Half B)
   const { workspaceId, systemId } = activeScope();
   const kindFilter = opts?.kind;
-  const nodes = await client.search(symbol, {
-    limit: opts?.searchLimit ?? (effectivePath ? 200 : looksTypeLikeSymbol(symbol) ? 50 : 30),
+  const searchLimit = opts?.searchLimit ?? (effectivePath ? 200 : looksTypeLikeSymbol(symbol) ? 50 : 30);
+  let nodes = await client.search(symbol, {
+    limit: searchLimit,
     kind: kindFilter,
     nameOnly: true,
     workspaceId,
     systemId,
   });
+
+  // The backend orders its window by weight — every exact name before every
+  // partial one — so when a name is imported in dozens of files, the window is
+  // all imports and the file that DEFINES it (`borderStylesReset.js`, a
+  // partial match for `borderStylesReset`) never arrives. Only when the window
+  // came back full and holds no definition of the name, ask for files by that
+  // name directly: a handful of rows, merged in and scored like the rest.
+  if (nodes.length >= searchLimit && (!kindFilter || kindFilter === "file")
+      && !hasDefinitionOf(nodes, symbol)) {
+    const files = await client.search(symbol, {
+      limit: 20, kind: "file", nameOnly: true, workspaceId, systemId,
+    });
+    nodes = mergeById(nodes, files.filter((n: any) => isFileStemMatch(n, symbol)));
+  }
 
   if (nodes.length === 0) {
     // Nothing to suggest: the search matched no name, and re-running it without
@@ -352,15 +414,18 @@ export async function resolveEntityFull(
   // Prefer case-sensitive exact matches. Fall back to case-insensitive only if none found.
   // This prevents e.g. 'Apply' (capital A) from matching lowercase 'apply' module import
   // aliases before finding the actual 'Apply' method entities.
+  // A file whose stem is the symbol counts as an exact name: it is the only
+  // definition an anonymous default export has, and scoring then puts it
+  // behind a same-named symbol but ahead of an import of the name.
   const exactCaseName = filteredNodes.filter((n: any) => {
     const name = (n.name || n.attrs?.name || "");
-    return name === symbol;
+    return name === symbol || (isFileStemMatch(n, symbol) && name.startsWith(symbol));
   });
   const exactName = exactCaseName.length > 0
     ? exactCaseName
     : filteredNodes.filter((n: any) => {
         const name = (n.name || n.attrs?.name || "").toLowerCase();
-        return name === symbolLower;
+        return name === symbolLower || isFileStemMatch(n, symbol);
       });
 
   // Score exact-name candidates
@@ -385,6 +450,20 @@ export async function resolveEntityFull(
   missProse(opts, `No entity found matching "${symbol}".`);
   const suggestions = toSuggestions(filteredNodes);
   return { resolved: false, ambiguous: false, hiddenTestCount, ...(suggestions.length ? { suggestions } : {}) };
+}
+
+/** True when some candidate is a code definition named `symbol` (or its defining file). */
+export function hasDefinitionOf(nodes: any[], symbol: string): boolean {
+  const symbolLower = symbol.toLowerCase();
+  return nodes.some((n: any) => {
+    const name = String(n.name || n.attrs?.name || "").toLowerCase();
+    return (name === symbolLower || isFileStemMatch(n, symbol)) && candidateOrigin(n) === "definition";
+  });
+}
+
+export function mergeById<T extends { id?: unknown }>(base: T[], extra: T[]): T[] {
+  const seen = new Set(base.map((n) => n.id));
+  return [...base, ...extra.filter((n) => !seen.has(n.id))];
 }
 
 /**
