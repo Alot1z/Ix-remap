@@ -44,6 +44,31 @@ export const contextBundleSchema = z.object({
     resolutionMode: z.string(),
     path: z.string().optional(),
   }),
+  // Both optional, and only on a bundle built with `--from-issue`: every
+  // bundle saved before them, and every bundle built from a named target,
+  // still validates. Declared rather than left out, because zod strips an
+  // undeclared key on the way to disk and on the way back.
+  issue: z
+    .object({
+      startingPoints: z.array(
+        z.object({
+          token: z.string(),
+          id: z.string().optional(),
+          name: z.string(),
+          kind: z.string(),
+          path: z.string(),
+          lineStart: z.number().int().positive().optional(),
+          lineEnd: z.number().int().positive().optional(),
+          via: z.enum(["path in issue", "identifier in issue", "bm25 fallback"]),
+        }),
+      ),
+      unresolved: z.array(z.string()),
+      fallback: z.boolean(),
+    })
+    .optional(),
+  rankedFiles: z
+    .array(z.object({ path: z.string(), score: z.number(), reason: z.string() }))
+    .optional(),
   entities: z.array(
     z.object({
       id: z.string(),

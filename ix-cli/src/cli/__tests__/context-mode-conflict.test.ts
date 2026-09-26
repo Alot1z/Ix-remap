@@ -246,6 +246,11 @@ describe("mode-flag coverage does not drift from the command", () => {
   ];
   /** Meaningful to every mode, so in neither group. */
   const CONTEXT_UNIVERSAL_FLAGS = ["format"];
+  /**
+   * Where the target comes from, in place of the positional. Builds a bundle,
+   * so `--out` and `--save` take it, and every budget applies to it.
+   */
+  const CONTEXT_TARGET_FLAGS = ["fromIssue"];
 
   function registeredAttributes(register: (p: Command) => void, name: string): string[] {
     const program = new Command();
@@ -257,7 +262,7 @@ describe("mode-flag coverage does not drift from the command", () => {
 
   it("classifies every option ix context registers", () => {
     expect(registeredAttributes(registerContextCommand, "context")).toEqual(
-      [...CONTEXT_MODE_FLAGS, ...CONTEXT_BUILD_FLAGS, ...CONTEXT_UNIVERSAL_FLAGS].sort(),
+      [...CONTEXT_MODE_FLAGS, ...CONTEXT_BUILD_FLAGS, ...CONTEXT_UNIVERSAL_FLAGS, ...CONTEXT_TARGET_FLAGS].sort(),
     );
   });
 
@@ -295,6 +300,25 @@ describe("mode-flag coverage does not drift from the command", () => {
           `no rule for --${a} + --${b}`,
         ).toBeTruthy();
       }
+    }
+  });
+
+  it("refuses --from-issue with a second target or a mode that does not build from it", () => {
+    expect(detectContextModeConflict({ fromIssue: "issue.md" }, "Widget")).toMatch(/--from-issue/);
+    for (const mode of ["list", "resume", "diff"] as const) {
+      const opts = { fromIssue: "issue.md", [mode]: mode === "list" ? true : "x" } as Record<string, unknown>;
+      expect(detectContextModeConflict(opts), `--from-issue + --${mode}`).toMatch(/--from-issue/);
+    }
+    // --kind, --path and --pick choose among the candidates for a named
+    // target; an issue has none, so they would change nothing.
+    for (const flag of ["kind", "path", "pick"]) {
+      expect(detectContextModeConflict({ fromIssue: "-", [flag]: 1 }), `--from-issue + --${flag}`).toBeTruthy();
+    }
+  });
+
+  it("lets --from-issue build, write and save like a named target", () => {
+    for (const extra of [{}, { out: "b.json" }, { save: "x" }, { format: "llm" }, { depth: "full" }, { maxTokens: 800 }]) {
+      expect(detectContextModeConflict({ fromIssue: "-", ...extra })).toBeUndefined();
     }
   });
 

@@ -31,6 +31,7 @@ the backend, and maps the repo. Re-run it per repo.
 | Step | Command | Example |
 |---|---|---|
 | Bounded context to start from | `ix context` | `ix context IngestionService` |
+| Start from an issue or bug report | `ix context --from-issue` | `ix context --from-issue issue.md` (or `-` for stdin) |
 | Understand a component | `ix explain` | `ix explain IngestionService` |
 | Trace a flow | `ix trace` | `ix trace user_login_flow` |
 | Blast radius of a change | `ix impact` | `ix impact verify_token` |

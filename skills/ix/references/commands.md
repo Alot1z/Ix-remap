@@ -23,6 +23,7 @@ These aggregate multiple graph operations into single bounded responses.
 | Hotspot discovery | `ix rank` | `ix rank --by dependents --kind class --top 10` |
 | One-shot summary | `ix overview` | `ix overview IngestionService` |
 | Deterministic context bundle | `ix context` | `ix context IngestionService` |
+| Files to read for an issue, ranked | `ix context --from-issue` | `ix context --from-issue issue.md --format llm` |
 | Scoped entity listing | `ix inventory` | `ix inventory --kind function --path auth.py` |
 
 ## Finding & Understanding Code
