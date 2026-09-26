@@ -34,6 +34,10 @@ trigger sync fallback. A refused redirect target also says nothing about whether
 the initial reset ran. Redirect responses therefore require reconciliation, with
 the original operation ID retained when known. Configure the direct backend
 endpoint before any operator-approved recovery; do not repeat an uncertain reset.
+Because the backend itself never redirects, a redirected start or sync request
+also names the redirect target's origin (never its path or query) and points at
+`IX_ENDPOINT` as the likely fix; a redirected status poll keeps the operation ID
+instead, since its start was already accepted.
 
 Authentication errors at start remain errors. This patch does not add tenant
 headers, credentials or an authorization bypass; the remote transport must

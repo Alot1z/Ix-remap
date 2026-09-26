@@ -107,6 +107,27 @@ describe.each(["reset", "resetCode"] as const)("%s never follows a reset redirec
     expect(remote.seen).toEqual([{ method: "POST", path: `${stem}/async`, body: "{}" }]);
   });
 
+  it("points a proxy redirect at the target origin without its path or query", async () => {
+    const remote = await fixture((_request, response) => {
+      response.writeHead(308, { location: "https://ix.example.com/v1/reset/async?token=secret" }); response.end();
+    });
+    const failure = await remoteClient(remote.endpoint)[method]().catch((error: unknown) => error);
+    const message = (failure as Error).message;
+    expect(message).toContain("redirected (308 to https://ix.example.com)");
+    expect(message).toContain("Do not repeat the reset");
+    expect(message).toContain(`a proxy at ${remote.endpoint} most likely did`);
+    expect(message).toContain("IX_ENDPOINT");
+    expect(message).not.toContain("secret");
+  });
+
+  it("resolves a relative Location against the endpoint in the hint", async () => {
+    const local = await fixture((_request, response) => {
+      response.writeHead(307, { location: "/elsewhere" }); response.end();
+    });
+    await expect(new IxClient(local.endpoint)[method]())
+      .rejects.toThrow(`synchronous reset route redirected (307 to ${local.endpoint})`);
+  });
+
   it.each([302, 303])("does not interpret a redirected %s/404 as an absent async route", async status => {
     const remote = await fixture((request, response) => {
       if (request.path === `${stem}/async`) {

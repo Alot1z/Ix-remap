@@ -633,7 +633,9 @@ The client never follows redirects on any reset request (`begin`, `status`,
 or either sync path): a 3xx stops with the same reconciliation warning rather
 than replaying the POST or treating a redirected 404 as an old backend, so a
 remote endpoint must be configured as the direct backend URL, not one a proxy
-redirects (e.g. `http://` behind an HTTPS redirect).
+redirects (e.g. `http://` behind an HTTPS redirect). For a redirected start or
+sync request the error names the target's origin and suggests setting
+`IX_ENDPOINT` to the direct URL.
 
 A 404 on `begin` falls back to the sync path (old backend). A 404 on `status`
 does **not**: the op ledger is in-process, so a restart, a different replica or
