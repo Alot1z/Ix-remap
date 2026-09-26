@@ -89,8 +89,9 @@ directories, and bare names that match at any depth. There is no `!` negation.
 
 ## Ix Pro
 
-Some commands (`plan`, `task`, `workflow`, `decide`, `goal`, `truth`, `bug`, `briefing` and their plurals) belong to
-Ix Pro. Without Pro they print `The '<name>' command requires Ix Pro.` Everything else on this page is open source.
+Some commands (`plan`, `plans`, `task`, `tasks`, `workflow`, `decide`, `decisions`, `goal`, `goals`, `truth`, `bug` and
+`briefing`) belong to Ix Pro. Without Pro they print `The '<name>' command requires Ix Pro.` Everything else on this
+page is open source.
 
 ## Deprecated
 
