@@ -222,6 +222,13 @@ export interface ParsedRelationship {
    * file. Absent means "at least one member-shaped use, or unknown".
    */
   bareCall?: true;
+  /**
+   * JS/TS IMPORTS only: `'helper'` marks a module path that was not written in
+   * an import statement but passed as a string literal to an import helper
+   * (`importModule(resolveModule("../../pkg/dist/x.js"))`). It is inferred, so
+   * it becomes an edge only when it resolves to exactly one tracked file.
+   */
+  importVia?: 'helper';
 }
 
 /**
@@ -547,6 +554,42 @@ function unwrapImportSpecifier(rawValue: string): string {
     .replace(/\\\\/g, '/')
     .replace(/^["'`<]/, '')
     .replace(/[>"'`]$/, '');
+}
+
+// Callee text that marks a call as an import helper: `importModule(...)`,
+// `resolveIngestionModule(...)`, `require.resolve(...)`, `lazyImport(...)`.
+const JS_IMPORT_HELPER_CALLEE = /import|require|module/i;
+// Module paths a JS/TS runtime can load: the source and build extensions.
+const JS_MODULE_PATH_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+/**
+ * The module path a JS/TS call passes to an import helper, or null.
+ *
+ * A dynamic `import("./x.js")` is already an IMPORTS edge (see the query), but
+ * loaders often route the specifier through a helper first, e.g.
+ * `importModule(resolveIngestionModule("../../../../core-ingestion/dist/languages.js"))`.
+ * Deliberately conservative, because this infers an import from a string:
+ *   - the callee's text must name importing (`JS_IMPORT_HELPER_CALLEE`),
+ *   - the FIRST argument must be a plain string literal (no substitutions),
+ *   - relative (`./`, `../`) and ending in a JS/TS module extension.
+ * `readFileSync("./x.ts")` and `path.join(dir, "x.js")` are never matched. The
+ * resolver then keeps the edge only when the path names exactly one tracked
+ * file (mapping a build path such as `dist/x.js` back to `src/x.ts`).
+ */
+function jsTsHelperImportSpecifier(callNode: any): string | null {
+  if (callNode?.type !== 'call_expression') return null;
+  const fn = callNode.childForFieldName?.('function');
+  if (!fn || (fn.type !== 'identifier' && fn.type !== 'member_expression')) return null;
+  if (!JS_IMPORT_HELPER_CALLEE.test(fn.text)) return null;
+  const firstArg = callNode.childForFieldName?.('arguments')?.namedChildren?.[0];
+  if (!firstArg) return null;
+  if (firstArg.type !== 'string' &&
+      !(firstArg.type === 'template_string' && !firstArg.namedChildren.some((c: any) => c.type === 'template_substitution'))) {
+    return null;
+  }
+  const spec = unwrapImportSpecifier(firstArg.text);
+  if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
+  return JS_MODULE_PATH_EXTENSION.test(spec) ? spec : null;
 }
 
 /**
@@ -2505,6 +2548,8 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     // that CALLS relationship is a plain identifier call (see ParsedRelationship.bareCall).
     const jsTsCallBareOnly = new Map<string, boolean>();
     const jsTsCallRelationship = new Map<string, ParsedRelationship>();
+    // JS/TS: helper-literal module paths already emitted (see importVia).
+    const jsTsHelperImports = new Set<string>();
     if (isJsTs) {
       for (const match of pass2Matches) {
         const importSource = match.captures.find((c: any) => c.name === 'import.source');
@@ -2971,6 +3016,20 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       const callName = match.captures.find((c: any) => c.name === 'call.name');
       if (callName) {
         const callee = callName.node.text;
+        // JavaScript `require("./x")` is already an IMPORTS edge via its own query.
+        if (isJsTs && !(language === SupportedLanguages.JavaScript && callee === 'require')) {
+          const helperImport = jsTsHelperImportSpecifier(match.captures.find((c: any) => c.name === 'call')?.node);
+          if (helperImport && !jsTsHelperImports.has(helperImport)) {
+            jsTsHelperImports.add(helperImport);
+            relationships.push({
+              srcName: fileName,
+              dstName: normalizeCapturedImport(helperImport, language),
+              predicate: 'IMPORTS',
+              importRaw: helperImport,
+              importVia: 'helper',
+            });
+          }
+        }
         if (!callee || callee.length <= 1) continue;
         const phpCallKind = language === SupportedLanguages.PHP
           ? callName.node.parent?.type === 'object_creation_expression'
@@ -4348,8 +4407,32 @@ export function resolveEdges(
           ? ['.jsx', '.tsx', '.d.ts']
           : ['.tsx', '.d.ts', '.jsx'];
         for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
+      } else if (extension === '.mjs' || extension === '.cjs') {
+        // `.mts` compiles to `.mjs` and `.cts` to `.cjs`, as `.ts` does to `.js`.
+        const sourceExt = extension === '.mjs' ? '.mts' : '.cts';
+        const suffixes = srcLanguage === SupportedLanguages.JavaScript
+          ? [extension, sourceExt]
+          : [sourceExt, extension];
+        for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
       } else {
         candidatePaths.push(target);
+      }
+      // A path into build output (`../pkg/dist/x.js`, typical of a dynamic
+      // import of a sibling package's compiled module) names a file that is
+      // not tracked; its source is the same path under `src/`. Tried only
+      // after every direct candidate, so a tracked `dist/` file still wins.
+      // Mirrors `sourceForms` in ix-cli's explain/text-references.ts, but uses
+      // the dist segment nearest the file: that is the package's outDir.
+      const lastDist = target.lastIndexOf('/dist/');
+      const distAt = lastDist !== -1 ? lastDist + 1 : target.startsWith('dist/') ? 0 : -1;
+      if (distAt !== -1) {
+        const distPrefix = `${target.slice(0, distAt)}dist/`;
+        const srcPrefix = `${target.slice(0, distAt)}src/`;
+        for (const candidatePath of [...candidatePaths]) {
+          if (candidatePath.startsWith(distPrefix)) {
+            candidatePaths.push(srcPrefix + candidatePath.slice(distPrefix.length));
+          }
+        }
       }
     }
 
@@ -4577,6 +4660,9 @@ export function resolveEdges(
         for (const entry of phpType.entries) importedFilePaths.add(entry.filePath);
         continue;
       }
+      // A helper-literal import is inferred and binds no names: it becomes an
+      // IMPORTS edge below but does not widen call-resolution scope.
+      if (rel.importVia === 'helper') continue;
       for (const fp of resolveImportTargets(srcFilePath, srcLanguage, rel.dstName, rel.importRaw)) {
         importedFilePaths.add(fp);
       }
@@ -4589,7 +4675,7 @@ export function resolveEdges(
       const fpResult = resultsByPath.get(fp);
       if (!fpResult) continue;
       for (const rel of fpResult.relationships) {
-        if (rel.predicate !== 'IMPORTS') continue;
+        if (rel.predicate !== 'IMPORTS' || rel.importVia === 'helper') continue;
         for (const transitiveFp of resolveImportTargets(fp, fpResult.language, rel.dstName, rel.importRaw)) {
           if (!importedFilePaths.has(transitiveFp)) transitiveFilePaths.add(transitiveFp);
         }
@@ -4651,6 +4737,13 @@ export function resolveEdges(
         const importMatches = pythonHasRelativeModuleImport && rel.importRaw === undefined
           ? []
           : resolveImportTargets(srcFilePath, result.language, rel.dstName, rel.importRaw);
+        // A helper-literal import (`importModule(resolve("../x/dist/y.js"))`) is
+        // inferred from a string, so it is kept only when that path names
+        // exactly one tracked file — never through the package fallbacks below.
+        if (rel.importVia === 'helper' && importMatches.length !== 1) {
+          if (importMatches.length > 1) stats.skippedAmbiguous++;
+          continue;
+        }
         if (importMatches.length === 1) {
           const fp = importMatches[0];
           resolved.push({

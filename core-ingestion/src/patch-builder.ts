@@ -181,7 +181,10 @@ export function buildPatch(
   previousSourceHash?: string,
   multiRepo?: MultiRepoContext,
 ): GraphPatchPayload {
-  const { entities, chunks, relationships } = result;
+  const { entities, chunks } = result;
+  // A helper-literal import is inferred and only means something once resolved
+  // to a tracked file; without resolution it would be a dangling edge.
+  const relationships = result.relationships.filter(r => r.importVia !== 'helper');
   // Two paths, deliberately distinct (see toMemberRelativePath):
   //  - filePath (workspace-relative, repo-prefixed in a co-ingest) is PROVENANCE:
   //    source_uri / file_uri / patch id. Reads reconstruct an absolute path by
@@ -496,7 +499,11 @@ export function buildPatchWithResolution(
     });
   }
 
-  const { entities, chunks, relationships } = result;
+  const { entities, chunks } = result;
+  // A helper-literal import (see ParsedRelationship.importVia) is inferred from a
+  // string, so it is emitted only when resolveEdges tied it to exactly one file.
+  const relationships = result.relationships.filter(r =>
+    r.importVia !== 'helper' || edgeResolution.has(`${r.srcName}:${r.predicate}:${r.dstName}`));
   // filePath = workspace-relative PROVENANCE (source_uri / file_uri / patch id);
   // idPath = member-relative IDENTITY (node / edge / chunk ids) so a member's ids are
   // byte-identical solo vs. co-ingested. Edge matching still keys on the full
