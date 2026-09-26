@@ -52,6 +52,16 @@ describe("resolver: definitions over imports", () => {
     ], "parseConfig")).toBe("fn");
   });
 
+  it("resolves a lowercase term to the PascalCase class, not the same-stem file (django paginator)", async () => {
+    // No entity is named exactly `paginator`: the case-insensitive fallback
+    // finds the class, and the file must not pre-empt that fallback just
+    // because its stem matches case-sensitively.
+    expect(await resolvedId([
+      n("cls", "Paginator", "class", "django/core/paginator.py", { line_end: 200 }),
+      n("file", "paginator.py", "file", "django/core/paginator.py", { line_end: 200 }),
+    ], "paginator")).toBe("cls");
+  });
+
   it("still prefers a same-named function over a same-stem file", async () => {
     expect(await resolvedId([
       n("file", "debounce.js", "file", "src/debounce.js"),

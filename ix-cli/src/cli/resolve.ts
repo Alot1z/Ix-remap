@@ -416,13 +416,17 @@ export async function resolveEntityFull(
   // aliases before finding the actual 'Apply' method entities.
   // A file whose stem is the symbol counts as an exact name: it is the only
   // definition an anonymous default export has, and scoring then puts it
-  // behind a same-named symbol but ahead of an import of the name.
-  const exactCaseName = filteredNodes.filter((n: any) => {
-    const name = (n.name || n.attrs?.name || "");
-    return name === symbol || (isFileStemMatch(n, symbol) && name.startsWith(symbol));
-  });
-  const exactName = exactCaseName.length > 0
-    ? exactCaseName
+  // behind a same-named symbol but ahead of an import of the name. It joins
+  // whichever set the NAMES chose and never chooses it: `paginator` must fall
+  // back to the class `Paginator`, not stop at `paginator.py` because only
+  // the file's stem matched case-sensitively.
+  const exactCaseSymbols = filteredNodes.filter((n: any) => (n.name || n.attrs?.name || "") === symbol);
+  const exactName = exactCaseSymbols.length > 0
+    ? [
+        ...exactCaseSymbols,
+        ...filteredNodes.filter((n: any) =>
+          isFileStemMatch(n, symbol) && (n.name || n.attrs?.name || "").startsWith(symbol)),
+      ]
     : filteredNodes.filter((n: any) => {
         const name = (n.name || n.attrs?.name || "").toLowerCase();
         return name === symbolLower || isFileStemMatch(n, symbol);
