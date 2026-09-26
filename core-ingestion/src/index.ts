@@ -214,6 +214,14 @@ export interface ParsedRelationship {
    * Undefined preserves compatibility with hand-built/older parse results.
    */
   importBinding?: boolean;
+  /**
+   * JS/TS CALLS only: true when every call site folded into this relationship
+   * calls a plain identifier (`foo()`, `new Foo()`), never a member
+   * (`obj.foo()`). A plain identifier is resolved by lexical scope, so it can
+   * only denote a module-scope declaration — never a class member in another
+   * file. Absent means "at least one member-shaped use, or unknown".
+   */
+  bareCall?: true;
 }
 
 /**
@@ -2493,6 +2501,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const importBindings: ImportBinding[] = [];
     const jsTsImportedLocalNames = new Set<string>();
     const jsTsImportUseHasUnshadowed = new Map<string, boolean>();
+    // JS/TS: per `${scope}\x00${callKey}`, whether every call site folded into
+    // that CALLS relationship is a plain identifier call (see ParsedRelationship.bareCall).
+    const jsTsCallBareOnly = new Map<string, boolean>();
+    const jsTsCallRelationship = new Map<string, ParsedRelationship>();
     if (isJsTs) {
       for (const match of pass2Matches) {
         const importSource = match.captures.find((c: any) => c.name === 'import.source');
@@ -3143,14 +3155,24 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
 
         const callKey = phpCallKind ? `${phpCallKind}:${effectiveCallee}` : effectiveCallee;
+        const bareKey = `${scope}\x00${callKey}`;
+        if (isJsTs) {
+          // `foo()` / `new Foo()`: the callee identifier hangs directly off the
+          // call. `obj.foo()` hangs off a member_expression instead.
+          const parentType = callName.node.parent?.type;
+          const isBare = !qualifierCapture && (parentType === 'call_expression' || parentType === 'new_expression');
+          jsTsCallBareOnly.set(bareKey, (jsTsCallBareOnly.get(bareKey) ?? true) && isBare);
+        }
         if (!seen.has(callKey)) {
           seen.add(callKey);
-          relationships.push({
+          const rel: ParsedRelationship = {
             srcName: caller,
             dstName: effectiveCallee,
             predicate: 'CALLS',
             ...(phpCallKind ? { phpCallKind } : {}),
-          });
+          };
+          relationships.push(rel);
+          if (isJsTs) jsTsCallRelationship.set(bareKey, rel);
         }
         continue;
       }
@@ -3178,6 +3200,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
         continue;
       }
+    }
+
+    for (const [bareKey, rel] of jsTsCallRelationship) {
+      if (jsTsCallBareOnly.get(bareKey) === true) rel.bareCall = true;
     }
 
     // A single relationship can represent multiple same-name uses in one scope.
@@ -3663,6 +3689,44 @@ const COMMODITY_CALLEE_NAMES: ReadonlySet<string> = new Set([
   // Function / JSON / Object builtins
   'bind', 'call', 'apply', 'stringify', 'toString', 'valueOf', 'hasOwnProperty',
 ]);
+
+// JS/TS globals that test runners (vitest `globals: true`, jest, mocha) and
+// runtimes inject without an import. In an ES/CommonJS module a bare identifier
+// is either declared in the file, bound by an import, or a global — a
+// module-scope function in some other file is never in scope. An UNBOUND call to
+// one of these names is therefore the global, and resolveEdges does not link it
+// to whatever in-repo symbol shares the name (observed: every test file's
+// `describe(...)` resolved to test-fixtures' `SampleCommand.describe`). An
+// explicit import binding or a same-file definition still wins.
+const JS_AMBIENT_CALLEES: ReadonlySet<string> = new Set([
+  'describe', 'it', 'test', 'expect', 'suite', 'bench',
+  'beforeEach', 'afterEach', 'beforeAll', 'afterAll',
+  'xdescribe', 'fdescribe', 'xit', 'fit', 'xtest',
+  'vi', 'jest',
+  'queueMicrotask', 'structuredClone', 'setImmediate', 'clearImmediate',
+  'atob', 'btoa', 'encodeURIComponent', 'decodeURIComponent', 'encodeURI', 'decodeURI',
+]);
+
+/** A JS/TS import specifier that names a package rather than a path. */
+function isBarePackageSpecifier(spec: string): boolean {
+  return spec.length > 0 && !spec.startsWith('.') && !spec.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(spec);
+}
+
+/**
+ * Whether `filePath` plausibly lives inside the package a bare specifier names:
+ * some directory on its path is the package name (`@acme/utils` ->
+ * `.../utils/...`) or its unscoped monorepo spelling (`@babel/types` ->
+ * `.../babel-types/...`). Node builtins (`node:fs`) are never in-repo.
+ */
+function fileIsInsidePackage(filePath: string, spec: string): boolean {
+  if (spec.startsWith('node:')) return false;
+  const parts = spec.split('/');
+  const scope = spec.startsWith('@') ? parts[0].slice(1) : undefined;
+  const name = scope !== undefined ? parts[1] : parts[0];
+  if (!name) return false;
+  const dirs = filePath.replace(/\\/g, '/').split('/').slice(0, -1);
+  return dirs.includes(name) || (scope !== undefined && dirs.includes(`${scope}-${name}`));
+}
 
 // A symbol defined in this many or more distinct files across the resolution
 // set is a project-level commodity; a single narrowed fuzzy-tier match for it is
@@ -4693,9 +4757,19 @@ export function resolveEdges(
       ) continue;
       if (rel.importBinding === false) continue;
 
+      // Lexical scope (JS/TS) — see JS_AMBIENT_CALLEES. An unbound bare call to
+      // a test-runner / runtime global has no in-repo target, whatever shares
+      // its name elsewhere. (`obj.describe()` is a member call, not the global.)
+      const srcIsJsTs = srcLanguage === SupportedLanguages.JavaScript || srcLanguage === SupportedLanguages.TypeScript;
+      if (
+        srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true &&
+        !binding && JS_AMBIENT_CALLEES.has(origDstName)
+      ) continue;
+
+      let bindingProviderFiles: string[] | undefined;
       if (rel.predicate === 'CALLS' || rel.predicate === 'EXTENDS' || rel.predicate === 'REFERENCES') {
         if (binding) {
-          const providerFiles = [...new Set(resolveImportTargets(
+          const providerFiles = bindingProviderFiles = [...new Set(resolveImportTargets(
             srcFilePath,
             srcLanguage,
             binding.pkg,
@@ -4751,6 +4825,38 @@ export function resolveEdges(
           }
         }
       }
+
+      // Reachability filter for every cross-file tier below (JS/TS only; other
+      // languages keep plain name matching):
+      //   - A bare call (`foo()`, rel.bareCall) is resolved by lexical scope, so
+      //     it can only denote a module-scope declaration. A class member of the
+      //     same name (`SampleCommand.describe`) is reachable only through a
+      //     receiver and is never a candidate.
+      //   - A name bound by an explicit import of a bare package specifier that
+      //     resolves to no in-repo file (`import { describe } from 'vitest'`)
+      //     comes from THAT package. Only a file plausibly inside it may match:
+      //     one in the co-ingested repo that publishes it (packageOf), else one
+      //     under a directory named after it (`packages/utils/**` for
+      //     `@acme/utils`, `packages/babel-types/**` for `@babel/types`). This
+      //     keeps monorepo workspace imports resolving while an external
+      //     package's names stop landing on unrelated same-named symbols.
+      const bareCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true;
+      const boundPackage = srcIsJsTs && binding && isBarePackageSpecifier(binding.pkg) &&
+        (bindingProviderFiles?.length ?? 0) === 0 && !(configuredBindingTargets?.length)
+        ? binding.pkg
+        : undefined;
+      const boundPackageRepo = boundPackage !== undefined ? packageOf?.(boundPackage) : undefined;
+      const reachable = (fp: string): boolean => {
+        if (bareCall && !(fileQKeys.get(fp)?.get(dstName) ?? []).includes(dstName)) return false;
+        if (boundPackage !== undefined) {
+          if (boundPackageRepo !== undefined && repoOf) return repoOf(fp) === boundPackageRepo;
+          return fileIsInsidePackage(fp, boundPackage);
+        }
+        return true;
+      };
+      // A bare call's target is the module-scope key, even when the file also
+      // has a same-named member that would make bestQKey ambiguous.
+      const targetQKey = (fp: string): string | null => bareCall ? dstName : bestQKey(fileQKeys, fp, dstName);
 
       // Tier 1b: qualifier-assisted (confidence 0.9 / 0.7)
       // For dotted names like "NodeKind.Decision" (emitted by field_expression queries):
@@ -4823,13 +4929,13 @@ export function resolveEdges(
       // Tier 2: import-scoped (confidence 0.9)
       const importMatches: string[] = [];
       for (const fp of importedFilePaths) {
-        if (fileHasSymbol.get(fp)?.has(dstName)) importMatches.push(fp);
+        if (fileHasSymbol.get(fp)?.has(dstName) && reachable(fp)) importMatches.push(fp);
       }
       const narrowedImportMatches = narrowByRepoDeps(narrowCCandidates(importMatches, srcFilePath, srcLanguage, srcName, dstName), srcFilePath);
 
       if (narrowedImportMatches.length === 1) {
         const fp = narrowedImportMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.9 });
         continue;
@@ -4850,13 +4956,13 @@ export function resolveEdges(
       // Tier 2.5: transitive import-scoped (confidence 0.8) — one re-export hop away
       const transitiveMatches: string[] = [];
       for (const fp of transitiveFilePaths) {
-        if (fileHasSymbol.get(fp)?.has(dstName)) transitiveMatches.push(fp);
+        if (fileHasSymbol.get(fp)?.has(dstName) && reachable(fp)) transitiveMatches.push(fp);
       }
       const narrowedTransitiveMatches = narrowByRepoDeps(narrowCCandidates(transitiveMatches, srcFilePath, srcLanguage, srcName, dstName), srcFilePath);
 
       if (narrowedTransitiveMatches.length === 1) {
         const fp = narrowedTransitiveMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue;
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.8 });
         continue;
@@ -4877,7 +4983,7 @@ export function resolveEdges(
       }
       stats.globalFallbacks++;
       const candidates = symbolToFiles.get(dstName) ?? [];
-      let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage);
+      let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage && reachable(fp));
       const importHint = pickCallerAlignedCandidate(importMatches, srcName, dstName)?.chosen
         ?? pickCallerAlignedCandidate(transitiveMatches, srcName, dstName)?.chosen;
       if (importHint) {
@@ -4891,7 +4997,7 @@ export function resolveEdges(
 
       if (resolvedMatches.length === 1) {
         const fp = resolvedMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.5 });
         stats.resolvedGlobal++;
