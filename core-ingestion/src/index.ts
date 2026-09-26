@@ -580,8 +580,10 @@ function jsTsHelperImportSpecifier(callNode: any): string | null {
   if (callNode?.type !== 'call_expression') return null;
   const fn = callNode.childForFieldName?.('function');
   if (!fn || (fn.type !== 'identifier' && fn.type !== 'member_expression')) return null;
-  if (!JS_IMPORT_HELPER_CALLEE.test(fn.text)) return null;
-  const firstArg = callNode.childForFieldName?.('arguments')?.namedChildren?.[0];
+  // The argument is checked before the callee: this runs for every call, and a
+  // member callee's text spans its whole receiver chain -- in a long builder
+  // chain (`b.step(x).step(y)...`) reading it per call is quadratic in the chain.
+  const firstArg = callNode.childForFieldName?.('arguments')?.firstNamedChild;
   if (!firstArg) return null;
   if (firstArg.type !== 'string' &&
       !(firstArg.type === 'template_string' && !firstArg.namedChildren.some((c: any) => c.type === 'template_substitution'))) {
@@ -589,7 +591,8 @@ function jsTsHelperImportSpecifier(callNode: any): string | null {
   }
   const spec = unwrapImportSpecifier(firstArg.text);
   if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
-  return JS_MODULE_PATH_EXTENSION.test(spec) ? spec : null;
+  if (!JS_MODULE_PATH_EXTENSION.test(spec)) return null;
+  return JS_IMPORT_HELPER_CALLEE.test(fn.text) ? spec : null;
 }
 
 /**
@@ -3216,10 +3219,11 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         const callKey = phpCallKind ? `${phpCallKind}:${effectiveCallee}` : effectiveCallee;
         const bareKey = `${scope}\x00${callKey}`;
         if (isJsTs) {
-          // `foo()` / `new Foo()`: the callee identifier hangs directly off the
-          // call. `obj.foo()` hangs off a member_expression instead.
-          const parentType = callName.node.parent?.type;
-          const isBare = !qualifierCapture && (parentType === 'call_expression' || parentType === 'new_expression');
+          // `foo()` / `new Foo()`: the JS/TS queries capture the callee as an
+          // `identifier` only there; `obj.foo()` captures a property_identifier.
+          // (Read from the node's own type: `.parent` walks down from the root
+          // in these bindings, which is quadratic in a long call chain.)
+          const isBare = !qualifierCapture && callName.node.type === 'identifier';
           jsTsCallBareOnly.set(bareKey, (jsTsCallBareOnly.get(bareKey) ?? true) && isBare);
         }
         if (!seen.has(callKey)) {
