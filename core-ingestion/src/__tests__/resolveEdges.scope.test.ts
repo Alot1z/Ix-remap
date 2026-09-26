@@ -145,6 +145,41 @@ describe('call resolution respects lexical scope (JS/TS)', () => {
     ]);
   });
 
+  it('does not un-drop an ambiguous global match by discarding same-named members', () => {
+    // `gte` here is a parameter. Globally, the name is a method in
+    // one file and a module-scope function in another: ambiguous before the
+    // scope rules, and it must stay ambiguous -- dropping the method first would
+    // make the unrelated module-scope `gte` look like the unique target.
+    const caller = parse(
+      'src/schema.ts',
+      'export function between(gte: (a: number, b: number) => boolean, min: number) {\n  return gte(min, 0);\n}\n',
+    );
+    const semver = parse('src/semver.ts', 'export function gte(a: string, b: string) { return a >= b; }\n');
+    const zod = parse('src/number.ts', 'export class NumberSchema { gte(n: number) { return this; } }\n');
+
+    const edges = resolveEdges([caller, semver, zod]);
+    expect(edges.filter(e => e.predicate === 'CALLS' && e.srcFilePath === 'src/schema.ts')).toEqual([]);
+    // Without the method elsewhere, the unique module-scope function keeps the
+    // global fallback exactly as before.
+    expect(callsTo(resolveEdges([caller, semver]), 'src/semver.ts')).toEqual([
+      expect.objectContaining({ dstName: 'gte', dstQualifiedKey: 'gte', confidence: 0.5 }),
+    ]);
+  });
+
+  it('resolves an ambient-named helper destructured from a CommonJS require (import tier)', () => {
+    const helpers = parse(
+      'lib/helpers.js',
+      'function test() { return 1; }\nfunction expect() { return 2; }\nmodule.exports = { test, expect };\n',
+    );
+    const user = parse(
+      'lib/use.js',
+      "const { test, expect } = require('./helpers');\nfunction go() { test(); expect(); }\nmodule.exports = { go };\n",
+    );
+
+    expect(callsTo(resolveEdges([user, helpers]), 'lib/helpers.js').map(e => e.dstQualifiedKey).sort())
+      .toEqual(['expect', 'test']);
+  });
+
   it('does not resolve a name imported from an external package to an unrelated in-repo symbol', () => {
     const caller = parse(
       'src/app.ts',
@@ -238,6 +273,15 @@ describe('dynamic and helper-literal imports (JS/TS)', () => {
     const src = parse('pkg/src/x.ts', 'export const x = 1;\n');
 
     expect(importsFrom(resolveEdges([loader, dist, src]), 'app/load.ts')).toEqual(['pkg/dist/x.js']);
+  });
+
+  it('does not map build output importing its own dist/ siblings to src/', () => {
+    // Shipped declarations reference their siblings with source extensions; the
+    // dependency is the sibling .d.ts, never the package's src/ tree.
+    const decl = parse('pkg/dist/cluster/Message.d.ts', 'import * as Rpc from "../rpc/Rpc.ts";\nexport type M = Rpc.R;\n');
+    const siblingSrc = parse('pkg/src/rpc/Rpc.ts', 'export type R = number;\n');
+
+    expect(importsFrom(resolveEdges([decl, siblingSrc]), 'pkg/dist/cluster/Message.d.ts')).toEqual([]);
   });
 
   it('ignores string literals passed to non-import calls', () => {

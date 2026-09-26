@@ -4423,10 +4423,14 @@ export function resolveEdges(
       // after every direct candidate, so a tracked `dist/` file still wins.
       // Mirrors `sourceForms` in ix-cli's explain/text-references.ts, but uses
       // the dist segment nearest the file: that is the package's outDir.
+      // Not from a file inside that same dist/ tree: build output importing its
+      // own siblings (a tracked `dist/x.d.ts` importing `./y.ts`) depends on the
+      // sibling build file, not on src/, and mapping it would add an edge from
+      // every such file into src/.
       const lastDist = target.lastIndexOf('/dist/');
       const distAt = lastDist !== -1 ? lastDist + 1 : target.startsWith('dist/') ? 0 : -1;
-      if (distAt !== -1) {
-        const distPrefix = `${target.slice(0, distAt)}dist/`;
+      const distPrefix = distAt !== -1 ? `${target.slice(0, distAt)}dist/` : undefined;
+      if (distPrefix !== undefined && !srcFilePath.replace(/\\/g, '/').startsWith(distPrefix)) {
         const srcPrefix = `${target.slice(0, distAt)}src/`;
         for (const candidatePath of [...candidatePaths]) {
           if (candidatePath.startsWith(distPrefix)) {
@@ -4851,13 +4855,14 @@ export function resolveEdges(
       if (rel.importBinding === false) continue;
 
       // Lexical scope (JS/TS) — see JS_AMBIENT_CALLEES. An unbound bare call to
-      // a test-runner / runtime global has no in-repo target, whatever shares
-      // its name elsewhere. (`obj.describe()` is a member call, not the global.)
+      // a test-runner / runtime global has no in-repo target beyond the files
+      // the caller imports, whatever shares its name elsewhere; it stops after
+      // the import tier below. The import tier still runs because CommonJS
+      // destructuring (`const { test } = require('./helpers')`) records no
+      // import binding. (`obj.describe()` is a member call, not the global.)
       const srcIsJsTs = srcLanguage === SupportedLanguages.JavaScript || srcLanguage === SupportedLanguages.TypeScript;
-      if (
-        srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true &&
-        !binding && JS_AMBIENT_CALLEES.has(origDstName)
-      ) continue;
+      const unboundAmbientCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true &&
+        !binding && JS_AMBIENT_CALLEES.has(origDstName);
 
       let bindingProviderFiles: string[] | undefined;
       if (rel.predicate === 'CALLS' || rel.predicate === 'EXTENDS' || rel.predicate === 'REFERENCES') {
@@ -4933,20 +4938,22 @@ export function resolveEdges(
       //     `@acme/utils`, `packages/babel-types/**` for `@babel/types`). This
       //     keeps monorepo workspace imports resolving while an external
       //     package's names stop landing on unrelated same-named symbols.
+      // The global tier applies the first rule differently -- see there.
       const bareCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true;
       const boundPackage = srcIsJsTs && binding && isBarePackageSpecifier(binding.pkg) &&
         (bindingProviderFiles?.length ?? 0) === 0 && !(configuredBindingTargets?.length)
         ? binding.pkg
         : undefined;
       const boundPackageRepo = boundPackage !== undefined ? packageOf?.(boundPackage) : undefined;
-      const reachable = (fp: string): boolean => {
-        if (bareCall && !(fileQKeys.get(fp)?.get(dstName) ?? []).includes(dstName)) return false;
-        if (boundPackage !== undefined) {
-          if (boundPackageRepo !== undefined && repoOf) return repoOf(fp) === boundPackageRepo;
-          return fileIsInsidePackage(fp, boundPackage);
-        }
-        return true;
+      const definesAtModuleScope = (fp: string): boolean =>
+        (fileQKeys.get(fp)?.get(dstName) ?? []).includes(dstName);
+      const insideBoundPackage = (fp: string): boolean => {
+        if (boundPackage === undefined) return true;
+        if (boundPackageRepo !== undefined && repoOf) return repoOf(fp) === boundPackageRepo;
+        return fileIsInsidePackage(fp, boundPackage);
       };
+      const reachable = (fp: string): boolean =>
+        (!bareCall || definesAtModuleScope(fp)) && insideBoundPackage(fp);
       // A bare call's target is the module-scope key, even when the file also
       // has a same-named member that would make bestQKey ambiguous.
       const targetQKey = (fp: string): string | null => bareCall ? dstName : bestQKey(fileQKeys, fp, dstName);
@@ -5033,6 +5040,7 @@ export function resolveEdges(
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.9 });
         continue;
       }
+      if (unboundAmbientCall) continue;
       // Commodity gate: beyond the precise import-scoped tier above, the remaining
       // tiers (transitive re-export hops at 0.8, global symbol fallback at 0.5)
       // resolve a bare call on name alone and can cross module/package/repo
@@ -5076,7 +5084,14 @@ export function resolveEdges(
       }
       stats.globalFallbacks++;
       const candidates = symbolToFiles.get(dstName) ?? [];
-      let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage && reachable(fp));
+      // A bare call never lands on a class member, but here -- unlike the import
+      // tiers -- members still count toward ambiguity. Nothing ties an unbound
+      // name to this tier's candidates: in an ES module it is usually a local,
+      // a parameter or a closure variable (`const gte = ...; gte(x)`). Filtering
+      // the members out first would turn an ambiguous name into a "unique" one
+      // and link that local to an unrelated module's function of the same name.
+      let globalMatches = candidates.filter(fp =>
+        fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage && insideBoundPackage(fp));
       const importHint = pickCallerAlignedCandidate(importMatches, srcName, dstName)?.chosen
         ?? pickCallerAlignedCandidate(transitiveMatches, srcName, dstName)?.chosen;
       if (importHint) {
@@ -5090,6 +5105,7 @@ export function resolveEdges(
 
       if (resolvedMatches.length === 1) {
         const fp = resolvedMatches[0];
+        if (bareCall && !definesAtModuleScope(fp)) continue; // only a member of that name
         const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.5 });
