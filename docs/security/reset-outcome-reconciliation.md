@@ -34,16 +34,20 @@ trigger sync fallback. A refused redirect target also says nothing about whether
 the initial reset ran. Redirect responses therefore require reconciliation, with
 the original operation ID retained when known. Configure the direct backend
 endpoint before any operator-approved recovery; do not repeat an uncertain reset.
+
 Authentication errors at start remain errors. This patch does not add tenant
 headers, credentials or an authorization bypass; the remote transport must
 establish the expected verified caller identity.
 
-`ix-cli/src/client/reset-outcome.test.ts` executes the real client with synthetic
-HTTP responses and asserts the exact request sequence. It covers success for
-both reset kinds, invalid/foreign operation IDs, partial failure, transport
-loss, deadlines and local/older-server compatibility. Live authenticated
-remote transport and supported-release integration still need verification
-before claiming deployment acceptance.
+`ix-cli/src/client/__tests__/reset-outcome.test.ts` executes the real client with
+synthetic HTTP responses and asserts the exact request sequence. It covers
+success for both reset kinds, invalid/foreign operation IDs, partial failure,
+transport loss, deadlines and local/older-server compatibility.
+`ix-cli/src/client/__tests__/reset-redirect.test.ts` drives the same client
+against real loopback HTTP servers and asserts that no reset request is
+replayed or reinterpreted after a 3xx on any of the four request paths. Live
+authenticated remote transport and supported-release integration still need
+verification before claiming deployment acceptance.
 
 Pro is an optional, separately installed private plugin; the OSS package does
 not fetch it as a dependency. Its explicit runtime resolution is therefore
