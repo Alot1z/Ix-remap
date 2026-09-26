@@ -387,6 +387,17 @@ export function registerContextCommand(program: Command): void {
       if (opts.diff) {
         const saved = loadInvestigation(opts.diff, opts.format);
         if (!saved) return;
+        if (saved.bundle.issue && !target) {
+          // The fresh side would be `ix context <centre>`: a named-target
+          // bundle without the issue's rows, so every diff would report them
+          // removed. The issue's text is not saved, so it cannot be rebuilt.
+          reportFailure(
+            "diff_unsupported",
+            `Investigation "${opts.diff}" was built with --from-issue, and --diff can only rebuild a bundle from a named target. Run ix context --resume ${opts.diff} to see it, or build it again with --from-issue.`,
+            opts.format,
+          );
+          return;
+        }
         // The fresh side of --diff is built with the saved investigation's own
         // budgets, the argument to `buildFreshBundle` below, so any --max-*
         // flags the caller passed are not applied to it. Captured here so the
@@ -1580,11 +1591,22 @@ async function fileNodeId(client: IxClient, path: string): Promise<string> {
   return (await findFileNode(client, path)) ?? `file:${path}`;
 }
 
+/**
+ * Search candidates for one file node. `scope` narrows the search to the path
+ * on a backend that applies it (Ix-memory >= 1.0.31); an older one ignores it
+ * and returns every file sharing the basename, so the limit has to reach past
+ * a monorepo's `index.ts`, `__init__.py` or `mod.rs` -- at 10 a file ranked
+ * eleventh among its namesakes had no node, and `--from-issue` discarded a path
+ * the issue named for a BM25 guess.
+ */
+const FILE_NODE_SEARCH_LIMIT = 200;
+
 /** A file's graph node id, or undefined when the graph has no node for it. */
-async function findFileNode(client: IxClient, path: string): Promise<string | undefined> {
+export async function findFileNode(client: IxClient, path: string): Promise<string | undefined> {
   const name = path.split("/").pop()!;
-  const nodes = await client.search(name, { kind: "file", nameOnly: true, limit: 10, ...activeReadScope() })
-    .catch(() => []);
+  const nodes = await client.search(name, {
+    kind: "file", nameOnly: true, limit: FILE_NODE_SEARCH_LIMIT, scope: path, ...activeReadScope(),
+  }).catch(() => []);
   return nodes.find((n) => relativePath(n.provenance?.sourceUri) === path)?.id;
 }
 
