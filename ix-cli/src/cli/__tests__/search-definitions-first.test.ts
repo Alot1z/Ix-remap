@@ -146,10 +146,9 @@ describe("search: code definitions rank above non-code and generated matches", (
     expect(ids(out).sort()).toEqual(["const", "css", "json"]);
   });
 
-  it("demotes definitions in dist/, build/, minified and fixture files below the source one", async () => {
+  it("demotes definitions in dist/, minified and fixture files below the source one", async () => {
     dataset([
       n("dist", "code", "function", "dist/index.js", 100),
-      n("build", "code", "function", "build/lib/code.js", 100),
       n("min", "code", "function", "vendor/code.min.js", 100),
       n("fixture", "code", "function", "test-plugin/fixtures/plugin.js", 100),
       n("sample", "code", "function", "samples/plugin.js", 100),
@@ -157,7 +156,20 @@ describe("search: code definitions rank above non-code and generated matches", (
     ]);
     const out = await run("code");
     expect(ids(out)[0]).toBe("src");
-    expect(out.results).toHaveLength(6);
+    expect(out.results).toHaveLength(5);
+  });
+
+  it("treats a committed build/ directory as source, ahead of an import of its definition", async () => {
+    // `ix map` ingests tracked files only, so a `build/` directory in the graph
+    // is committed source (VS Code's build/lib, Go's src/go/build, pip's
+    // operations/build), not build output.
+    dataset([
+      imp("import", "generate_metadata", "src/pip/_internal/distributions/sdist.py"),
+      n("fn", "generate_metadata", "function", "src/pip/_internal/operations/build/metadata.py", 100),
+    ]);
+    const out = await run("generate_metadata");
+    expect(ids(out)).toEqual(["fn", "import"]);
+    expect(out.results[0].tier).toBeLessThan(out.results[1].tier);
   });
 
   it("keeps a demoted row when it is the only match", async () => {

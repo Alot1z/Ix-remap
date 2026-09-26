@@ -239,7 +239,7 @@ export function registerSearchCommand(program: Command): void {
   3. Exact name (any kind). Same-named rows that are not the code definition
      rank here, behind it: imports of the name, CSS selectors, markdown
      headings and JSON keys (for a code-like term), and copies in build
-     output (dist/, build/, *.min.js, *-output.*), fixtures and samples
+     output (dist/, *.min.js, *-output.*), fixtures and samples
   4. Exact filename/module match
   5. Container-aware near match
   6. Fuzzy/incidental match — dropped when any of 1-5 matched

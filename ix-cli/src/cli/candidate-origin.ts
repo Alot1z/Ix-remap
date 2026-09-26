@@ -18,7 +18,7 @@
  *   as `config_entry`/`config`. For a term that looks like a code identifier
  *   these are almost never what the caller meant.
  * - **generated** — copies of the definition in build output (`dist/`,
- *   `build/`, `*.min.js`, `*-output.*`) and stand-ins in fixtures and samples.
+ *   `*.min.js`, `*-output.*`) and stand-ins in fixtures and samples.
  *
  * All three are demoted, never dropped: when nothing better matched they are
  * still the answer.
@@ -43,9 +43,18 @@ const NON_CODE_EXTENSIONS = new Set([
 /** Kinds core-ingestion emits only for docs and config, never for code. */
 const NON_CODE_KINDS = new Set(["heading", "section", "config_entry", "config"]);
 
-/** Build output and other derived copies of source. */
+/**
+ * Build output and other derived copies of source.
+ *
+ * Not `build/`. In a git repository `ix map` ingests only tracked files, so
+ * gitignored build output never reaches the graph (and the filesystem walk
+ * skips `build/` outright). What does arrive under `build/` is committed
+ * source: Go's `src/go/build`, VS Code's `build/lib`, Next.js's
+ * `packages/next/src/build`, pip's `operations/build`. Demoting it put every
+ * import of a name ahead of its only definition.
+ */
 const GENERATED_PATH_PATTERNS: RegExp[] = [
-  /(^|\/)(dist|build|generated|__generated__|node_modules)\//,
+  /(^|\/)(dist|generated|__generated__|node_modules)\//,
   /\.min\.[a-z0-9]+$/,
   /\.bundle\.[a-z0-9]+$/,
   /[-_.]output\.[a-z0-9]+$/,

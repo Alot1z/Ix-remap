@@ -94,6 +94,13 @@ describe("resolver: code over non-code", () => {
     ], "Prettier")).toBe("cls");
   });
 
+  it("resolves a definition under a committed build/ directory, not its import", async () => {
+    expect(await resolvedId([
+      imp("import", "generate_metadata", "src/pip/_internal/distributions/sdist.py"),
+      n("fn", "generate_metadata", "function", "src/pip/_internal/operations/build/metadata.py"),
+    ], "generate_metadata")).toBe("fn");
+  });
+
   it("resolves the source definition over a copy in build output", async () => {
     expect(await resolvedId([
       n("dist", "createServer", "function", "dist/server.js"),
