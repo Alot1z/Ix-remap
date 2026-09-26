@@ -317,6 +317,44 @@ export async function planIssue(
   };
 }
 
+/** BM25 files tried, best first, for one the graph has a node for. */
+export const CENTRE_FALLBACK_TRIES = 10;
+
+/**
+ * The starting point a bundle is centred on: the first start the graph has a
+ * node for, else the best BM25 file that has one.
+ *
+ * A start can have no node: the graph does not index every tracked file.
+ * On SWE-PolyBench two svelte issues named no code, BM25's top file was a
+ * `.svelte` component, and the command failed with no bundle at all while
+ * the fifth-ranked file was a perfectly good `.js` module. Walking BM25's
+ * ranking finds that one; the files the walk skipped still rank as usual.
+ * `walked` says the centre came from this walk, which is a fallback too.
+ */
+export async function chooseCentre(
+  starts: StartingPoint[],
+  bm25: Bm25Hit[],
+  findNode: (path: string) => Promise<string | undefined>,
+  tries = CENTRE_FALLBACK_TRIES,
+): Promise<{ starts: StartingPoint[]; centre?: StartingPoint; walked: boolean }> {
+  const located = await Promise.all(starts.map(async (s) => {
+    const id = s.id ?? (await findNode(s.path));
+    return id ? { ...s, id } : s;
+  }));
+  const found = located.find((s) => s.id);
+  if (found) return { starts: located, centre: found, walked: false };
+  const tried = new Set(located.map((s) => s.path));
+  for (const hit of bm25.filter((h) => !tried.has(h.path)).slice(0, tries)) {
+    const id = await findNode(hit.path);
+    if (!id) continue;
+    const centre: StartingPoint = {
+      token: hit.path, id, name: posix.basename(hit.path), kind: "file", path: hit.path, via: "bm25 fallback",
+    };
+    return { starts: [...located, centre], centre, walked: true };
+  }
+  return { starts: located, walked: false };
+}
+
 export interface RankedFile {
   path: string;
   /** BM25 against the issue, boosted by closeness to a starting point. */

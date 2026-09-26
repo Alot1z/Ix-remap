@@ -22,6 +22,8 @@ import type {
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { collectFacts, type ContextFacts, type EntityLocation } from "../explain/facts.js";
 import {
+  CENTRE_FALLBACK_TRIES,
+  chooseCentre,
   CLOSENESS_BOOST,
   planIssue,
   rankIssueFiles,
@@ -1610,7 +1612,7 @@ async function buildIssueBundle(
   try {
     text = await readIssueText(arg);
   } catch (error) {
-    reportFailure(
+    issueFailure(
       "issue_unreadable",
       `Cannot read the issue from ${arg === "-" ? "stdin" : `"${arg}"`}: ${(error as Error).message}`,
       opts.format,
@@ -1618,7 +1620,7 @@ async function buildIssueBundle(
     return undefined;
   }
   if (!text.trim()) {
-    reportFailure("empty_issue", `The issue ${arg === "-" ? "on stdin" : `in "${arg}"`} is empty.`, opts.format);
+    issueFailure("empty_issue", `The issue ${arg === "-" ? "on stdin" : `in "${arg}"`} is empty.`, opts.format);
     return undefined;
   }
 
@@ -1630,19 +1632,16 @@ async function buildIssueBundle(
     search: async (name) =>
       (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
   });
-  // A path start has no node yet; the graph may not have one either.
-  const starts: StartingPoint[] = await Promise.all(plan.starts.map(async (s) => {
-    const id = s.id ?? (await findFileNode(client, s.path));
-    return id ? { ...s, id } : s;
-  }));
-
-  const centre = starts.find((s) => s.id);
+  // A path start has no node yet, and the graph may not have one either: it
+  // does not index every tracked file. chooseCentre walks BM25 for one it does.
+  const { starts, centre, walked } = await chooseCentre(
+    plan.starts, plan.bm25, (path) => findFileNode(client, path));
   if (!centre) {
-    reportFailure(
+    issueFailure(
       "issue_unresolved",
       starts.length === 0
         ? `Nothing the issue names resolved to a definition${plan.unresolved.length > 0 ? ` (tried ${plan.unresolved.slice(0, 5).join(", ")})` : ""}, and no tracked source file matched its text. Name a symbol or file and run ix context <target>.`
-        : `The issue's starting points (${starts.map((s) => s.path).join(", ")}) have no node in the graph. Run ix map if this workspace has not been mapped.`,
+        : `Neither the issue's starting points (${starts.map((s) => s.path).join(", ")}) nor the ${CENTRE_FALLBACK_TRIES} source files that best match its text are in the graph. Name a symbol or file and run ix context <target>, or run ix map if this workspace has not been mapped.`,
       opts.format,
     );
     return undefined;
@@ -1679,11 +1678,26 @@ async function buildIssueBundle(
     issue: {
       startingPoints: starts,
       unresolved: plan.unresolved,
-      fallback: plan.fallback,
+      fallback: plan.fallback || walked,
       rankedFiles: rankIssueFiles({ starts, bm25: plan.bm25, near }),
       extraEntities: around.flatMap((n) => n.related),
     },
   });
+}
+
+/**
+ * A `--from-issue` failure, readable by the format asked for. `reportFailure`
+ * writes nothing to stdout under `--format json`, so a JSON caller got an empty
+ * stdout and had to scrape stderr; this prints the record the other commands'
+ * JSON failures use.
+ */
+function issueFailure(code: string, message: string, format: string | undefined): void {
+  if (format === "json") {
+    printJson({ error: code, message });
+    process.exitCode = 1;
+    return;
+  }
+  reportFailure(code, message, format);
 }
 
 /** A secondary starting point's one-hop facts and related files. Best-effort. */
