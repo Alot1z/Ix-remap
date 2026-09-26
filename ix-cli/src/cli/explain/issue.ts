@@ -73,9 +73,16 @@ export function isSourcePath(path: string): boolean {
   return CODE_FILE.test(path) && !NOISE.test(path) && !isTestPath(path);
 }
 
-// A path-like token with a code extension: `saving_api.py`, `src/a/index.ts`.
+// A path-like token with a code extension: `saving_api.py`, `src/a/index.ts`,
+// and the absolute path of a stack trace frame or the tail of a repository URL,
+// `/home/u/proj/src/a.py` and `//github.com/o/r/blob/main/src/a.py`, which
+// `resolveIssuePath` cuts down to the tracked path they end in.
+//
+// The lookbehind refuses `.` and `-` as well as `\w` and `/`: a match can then
+// only begin where a run of path characters begins, so a long unbroken run --
+// a pasted UUID list, a row of dots -- is scanned once, not once per `.`.
 const PATH = new RegExp(
-  `(?<![\\w/])((?:[\\w.-]+/)*[\\w.-]+\\.(?:${CODE_EXTENSIONS.join("|")}))\\b`, "g");
+  `(?<![\\w/.-])(\\/*(?:[\\w.-]+/)*[\\w.-]+\\.(?:${CODE_EXTENSIONS.join("|")}))\\b`, "g");
 const BACKTICK = /`([^`\n]{2,80})`/g;
 const WORD = /[A-Za-z_][A-Za-z0-9_]{2,}/g;
 // camelCase, PascalCase with two or more parts, snake_case, SCREAMING_SNAKE.
@@ -184,7 +191,7 @@ export async function pickStartingPoints(
   }
   for (const token of paths) {
     if (starts.length >= max) return { starts, unresolved };
-    const path = resolveToken(token, "", tracked, byBasename);
+    const path = resolveIssuePath(token, tracked, byBasename);
     if (!path || !isSourcePath(path)) {
       unresolved.push(token);
       continue;
@@ -219,6 +226,28 @@ export async function pickStartingPoints(
 }
 
 /**
+ * A path as an issue writes it, to the tracked file it names. First as
+ * `resolveToken` reads a path in code; then, for an absolute path from a
+ * stack trace or the tail of a repository URL, the longest of its suffixes
+ * that is a tracked path: `/home/u/proj/src/a.py` and
+ * `//github.com/o/r/blob/main/src/a.py` both name `src/a.py`.
+ */
+function resolveIssuePath(
+  token: string,
+  tracked: ReadonlySet<string>,
+  byBasename: ReadonlyMap<string, string[]>,
+): string | undefined {
+  const direct = resolveToken(token, "", tracked, byBasename);
+  if (direct) return direct;
+  const parts = token.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    const suffix = parts.slice(i).join("/");
+    if (tracked.has(suffix)) return suffix;
+  }
+  return undefined;
+}
+
+/**
  * Words for BM25: identifiers split at camelCase and underscores, lowercased,
  * parts of two letters or fewer dropped. `listByKind` is `list kind`, so an
  * issue that says "list by kind" matches the code that spells it as one word.
@@ -249,13 +278,18 @@ export function bm25Rank(
   k1 = 1.2,
   b = 0.75,
 ): Bm25Hit[] {
+  // Only the query's words are counted: BM25 needs no other term frequency,
+  // and a map of every word of every file is most of the memory and a third
+  // of the time on a large repository. A document's length is still every word.
+  const terms = [...new Set(bm25Tokens(query))];
+  const wanted = new Set(terms);
   const docs = new Map<string, { tf: Map<string, number>; length: number }>();
   for (const path of files) {
     const text = repo.read(path);
     if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) continue;
     const tf = new Map<string, number>();
     const tokens = bm25Tokens(`${path.replace(/\//g, " ")} ${text}`);
-    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+    for (const t of tokens) if (wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
     docs.set(path, { tf, length: tokens.length });
   }
   if (docs.size === 0) return [];
@@ -267,7 +301,6 @@ export function bm25Rank(
     for (const t of doc.tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);
   }
   const avg = total / n || 1;
-  const terms = [...new Set(bm25Tokens(query))];
   const out: Bm25Hit[] = [];
   for (const [path, doc] of docs) {
     let score = 0;
@@ -419,12 +452,30 @@ export async function readIssueText(
   arg: string,
   stdin: AsyncIterable<unknown> = process.stdin,
 ): Promise<string> {
-  if (arg !== "-") return readFileSync(arg, "utf8");
+  if (arg !== "-") return decodeIssue(readFileSync(arg));
   const chunks: Buffer[] = [];
   for await (const chunk of stdin) {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk as Uint8Array));
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeIssue(Buffer.concat(chunks));
+}
+
+/**
+ * UTF-8, unless a byte-order mark says UTF-16. Windows PowerShell 5.1's `>`
+ * writes UTF-16LE with a BOM, so `gh issue view 1 --json body -q .body >
+ * issue.md` there produces a file that, read as UTF-8, is every letter
+ * followed by a NUL: no name, no path, and no BM25 word in it.
+ */
+function decodeIssue(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return bytes.subarray(2).toString("utf16le");
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes.subarray(2, bytes.length - (bytes.length % 2)));
+    return swapped.swap16().toString("utf16le");
+  }
+  const text = bytes.toString("utf8");
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 function unique(items: string[]): string[] {
