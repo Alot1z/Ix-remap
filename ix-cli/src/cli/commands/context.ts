@@ -15,17 +15,30 @@ import { IxClient } from "../../client/api.js";
 import type {
   ConflictReport,
   DecisionReport,
+  GraphNode,
   IntentReport,
   StructuredContext,
 } from "../../client/types.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { collectFacts, type ContextFacts, type EntityLocation } from "../explain/facts.js";
+import {
+  CENTRE_FALLBACK_TRIES,
+  chooseCentre,
+  CLOSENESS_BOOST,
+  planIssue,
+  rankIssueFiles,
+  readIssueText,
+  type Closeness,
+  type RankedFile,
+  type StartingPoint,
+  type SymbolHit,
+} from "../explain/issue.js";
 import { collectRelatedFiles, MAX_RELATED, type RelatedRef } from "../explain/related-files.js";
 import { collectTextReferences, gitRepoAccess, type TextSource } from "../explain/text-references.js";
 import { coChangedFiles, gitRunner, recentCommits, type CommitRef } from "../explain/history.js";
 import { llmLine, llmShortId, printLlmLines } from "../llm.js";
 import { parseBudgetOption, parsePickOption, parseRevisionOption } from "../options.js";
-import { activeReadScope, resolveFileOrReport } from "../resolve.js";
+import { activeReadScope, ensureReadScope, resolveFileOrReport } from "../resolve.js";
 import { createStaleProbe, hasCompletedSourceGraphBaseline } from "../stale.js";
 import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
 import { printJson, relativePath } from "../format.js";
@@ -153,6 +166,8 @@ export function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
 }
 
 interface ContextOptions extends Partial<BudgetSnapshot> {
+  /** An issue or bug report to start from, in place of a target: a file, or `-` for stdin. */
+  fromIssue?: string;
   kind?: string;
   path?: string;
   pick?: number;
@@ -237,6 +252,13 @@ interface ContextBundle {
   /** The one explicitly declared time-dependent field. */
   generatedAt: string;
   target: { id: string; name: string; kind: string; resolutionMode: string; path?: string };
+  /**
+   * Where an issue's bundle starts, and what in the issue did not resolve.
+   * Only on a bundle built with `--from-issue`; absent, not empty, otherwise.
+   */
+  issue?: IssueSummary;
+  /** The files to read for the issue, best first. Only with `--from-issue`. */
+  rankedFiles?: RankedFile[];
   entities: Array<{
     id: string;
     name: string;
@@ -302,6 +324,10 @@ export function registerContextCommand(program: Command): void {
     .description(
       "Build a bounded, deterministic context bundle for a symbol, file, or entity (or resume/diff a saved investigation without a target)",
     )
+    .option(
+      "--from-issue <file>",
+      "Start from an issue or bug report instead of a target: a file, or - for stdin",
+    )
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
@@ -338,7 +364,7 @@ export function registerContextCommand(program: Command): void {
     .option("--list", "List saved investigations (no target, no backend)")
     .addHelpText(
       "after",
-      "\nExamples:\n  ix context IngestionService\n  ix context src/main.ts --format json\n  ix context Widget --max-entities 20 --max-evidence 10\n  ix context Widget --save widget-investigation\n  ix context --resume widget-investigation\n  ix context --diff widget-investigation\n  ix context --list",
+      "\nExamples:\n  ix context IngestionService\n  ix context src/main.ts --format json\n  ix context --from-issue issue.md --format llm\n  gh issue view 123 --json body -q .body | ix context --from-issue -\n  ix context Widget --max-entities 20 --max-evidence 10\n  ix context Widget --save widget-investigation\n  ix context --resume widget-investigation\n  ix context --diff widget-investigation\n  ix context --list",
     )
     .action(async (target: string | undefined, opts: ContextOptions) => {
       const conflict = detectContextModeConflict(opts, target);
@@ -361,6 +387,17 @@ export function registerContextCommand(program: Command): void {
       if (opts.diff) {
         const saved = loadInvestigation(opts.diff, opts.format);
         if (!saved) return;
+        if (saved.bundle.issue && !target) {
+          // The fresh side would be `ix context <centre>`: a named-target
+          // bundle without the issue's rows, so every diff would report them
+          // removed. The issue's text is not saved, so it cannot be rebuilt.
+          reportFailure(
+            "diff_unsupported",
+            `Investigation "${opts.diff}" was built with --from-issue, and --diff can only rebuild a bundle from a named target. Run ix context --resume ${opts.diff} to see it, or build it again with --from-issue.`,
+            opts.format,
+          );
+          return;
+        }
         // The fresh side of --diff is built with the saved investigation's own
         // budgets, the argument to `buildFreshBundle` below, so any --max-*
         // flags the caller passed are not applied to it. Captured here so the
@@ -377,13 +414,18 @@ export function registerContextCommand(program: Command): void {
         renderInvestigationDiff(saved, fresh, opts.format, requestedBudgets);
         return;
       }
+      if (opts.fromIssue) {
+        const bundle = await buildIssueBundle(opts.fromIssue, opts, clampBudgets(opts));
+        if (bundle) await emitBundle(bundle, opts);
+        return;
+      }
       if (!target) {
         // An error with a non-zero status, not a stdout warning with a zero one:
         // a script asked for a bundle and got none, and a `--format llm` caller
         // got a prose line in the middle of a record stream saying so.
         reportFailure(
           "missing_target",
-          "ix context requires a target unless --resume <id>, --diff <id> or --list is given.",
+          "ix context requires a target unless --from-issue <file>, --resume <id>, --diff <id> or --list is given.",
           opts.format,
         );
         return;
@@ -429,65 +471,70 @@ export function registerContextCommand(program: Command): void {
         graphCompleted: hasCompletedSourceGraphBaseline(),
       });
 
-      if (opts.save) {
-        saveInvestigation(opts.save, bundle);
-        renderNote(`Saved investigation "${opts.save}" (${bundle.entities.length} entities, ${bundle.relationships.length} relationships, ${bundle.evidence.length} evidence items). Resume with: ix context --resume ${opts.save}`);
-        return;
-      }
-
-      if (opts.out && opts.format !== "json") {
-        // stderr: --out still writes the file and still prints a note, so this
-        // advisory would otherwise sit in the stdout an `llm` caller is reading.
-        renderWarningErr("--out writes JSON; ignoring --format and forcing json.");
-      }
-      const out = opts.out;
-      if (out) {
-        const fs = await import("node:fs");
-        // Validate the network-derived bundle against the versioned contract
-        // before persisting it: only a bundle matching ix-context-bundle/1 is
-        // written, so a malformed or unexpected backend payload can never land
-        // in a caller-owned file (CodeQL js/network-data-written-to-file).
-        const parsed = contextBundleSchema.safeParse(bundle);
-        if (!parsed.success) {
-          reportFailure(
-            "out_refused",
-            `--out "${out}" refused: the bundle does not match the ${BUNDLE_SCHEMA} schema (${parsed.error.issues.length} issue(s)).`,
-            opts.format,
-          );
-          return;
-        }
-        // Atomic write: serialize to a private temp file in the SAME directory,
-        // then rename over the target, so the write is never a check-then-write
-        // race and a partial file is never visible (CodeQL js/file-system-race;
-        // same pattern as the config writer in src/cli/config.ts). Renaming
-        // onto an existing directory fails, which surfaces as the refusal below.
-        const targetPath = resolve(out);
-        const tmpPath = join(dirname(targetPath), `.${process.pid}.${Date.now().toString(36)}.tmp`);
-        try {
-          fs.writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2) + "\n", "utf8");
-          fs.renameSync(tmpPath, targetPath);
-        } catch (error) {
-          try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
-          const err = error as NodeJS.ErrnoException;
-          if (err.code === "EISDIR" || err.code === "EPERM") {
-            try {
-              if (fs.statSync(targetPath).isDirectory()) {
-                reportFailure(
-                  "out_refused",
-                  `--out "${out}" is a directory; refusing to write the bundle there.`,
-                  opts.format,
-                );
-                return;
-              }
-            } catch { /* target may not exist; fall through to rethrow */ }
-          }
-          throw error;
-        }
-        renderNote(`Wrote ${parsed.data.entities.length} entities, ${parsed.data.relationships.length} relationships, ${parsed.data.evidence.length} evidence items to ${out}`);
-        return;
-      }
-      renderBundle(bundle, opts.format);
+      await emitBundle(bundle, opts);
     });
+
+/** `--save`, `--out`, or render: what every freshly built bundle goes through. */
+async function emitBundle(bundle: ContextBundle, opts: ContextOptions): Promise<void> {
+  if (opts.save) {
+    saveInvestigation(opts.save, bundle);
+    renderNote(`Saved investigation "${opts.save}" (${bundle.entities.length} entities, ${bundle.relationships.length} relationships, ${bundle.evidence.length} evidence items). Resume with: ix context --resume ${opts.save}`);
+    return;
+  }
+
+  if (opts.out && opts.format !== "json") {
+    // stderr: --out still writes the file and still prints a note, so this
+    // advisory would otherwise sit in the stdout an `llm` caller is reading.
+    renderWarningErr("--out writes JSON; ignoring --format and forcing json.");
+  }
+  const out = opts.out;
+  if (out) {
+    const fs = await import("node:fs");
+    // Validate the network-derived bundle against the versioned contract
+    // before persisting it: only a bundle matching ix-context-bundle/1 is
+    // written, so a malformed or unexpected backend payload can never land
+    // in a caller-owned file (CodeQL js/network-data-written-to-file).
+    const parsed = contextBundleSchema.safeParse(bundle);
+    if (!parsed.success) {
+      reportFailure(
+        "out_refused",
+        `--out "${out}" refused: the bundle does not match the ${BUNDLE_SCHEMA} schema (${parsed.error.issues.length} issue(s)).`,
+        opts.format,
+      );
+      return;
+    }
+    // Atomic write: serialize to a private temp file in the SAME directory,
+    // then rename over the target, so the write is never a check-then-write
+    // race and a partial file is never visible (CodeQL js/file-system-race;
+    // same pattern as the config writer in src/cli/config.ts). Renaming
+    // onto an existing directory fails, which surfaces as the refusal below.
+    const targetPath = resolve(out);
+    const tmpPath = join(dirname(targetPath), `.${process.pid}.${Date.now().toString(36)}.tmp`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2) + "\n", "utf8");
+      fs.renameSync(tmpPath, targetPath);
+    } catch (error) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "EISDIR" || err.code === "EPERM") {
+        try {
+          if (fs.statSync(targetPath).isDirectory()) {
+            reportFailure(
+              "out_refused",
+              `--out "${out}" is a directory; refusing to write the bundle there.`,
+              opts.format,
+            );
+            return;
+          }
+        } catch { /* target may not exist; fall through to rethrow */ }
+      }
+      throw error;
+    }
+    renderNote(`Wrote ${parsed.data.entities.length} entities, ${parsed.data.relationships.length} relationships, ${parsed.data.evidence.length} evidence items to ${out}`);
+    return;
+  }
+  renderBundle(bundle, opts.format);
+}
 
 async function buildFreshBundle(
   target: string,
@@ -546,6 +593,7 @@ export type ContextModeOptions = Partial<ContextOptions>;
  * typed, and Commander's camelCase attribute is not that.
  */
 const BUILD_FLAGS: ReadonlyArray<[keyof ContextOptions, string]> = [
+  ["fromIssue", "--from-issue"],
   ["kind", "--kind"],
   ["path", "--path"],
   ["pick", "--pick"],
@@ -586,6 +634,24 @@ export function detectContextModeConflict(
   }
   if (opts.resume && target) {
     return `--resume takes no target; it renders the investigation you name, whatever that was built for. Drop "${target}", or use --diff <id> to compare a saved investigation against a fresh build of it.`;
+  }
+  if (opts.fromIssue !== undefined) {
+    // The issue is the target: it names its own starting points, so a second
+    // target, or a flag that narrows the candidates for one, has nothing to
+    // act on. `--diff` rebuilds a saved investigation by its target's name,
+    // which a bundle built from an issue does not have.
+    if (target) {
+      return `--from-issue takes no target; the issue's text picks the starting points. Drop "${target}", or drop --from-issue to build a bundle for it.`;
+    }
+    if (opts.diff) {
+      return "--from-issue cannot be combined with --diff; --diff rebuilds a saved investigation from its target's name. Save the issue's bundle with --save and --resume it instead.";
+    }
+    const narrowing = ([["kind", "--kind"], ["path", "--path"], ["pick", "--pick"]] as const)
+      .filter(([field]) => opts[field] !== undefined)
+      .map(([, flag]) => flag);
+    if (narrowing.length > 0 && !opts.list && !opts.resume) {
+      return `${narrowing.join(", ")} cannot be combined with --from-issue; ${narrowing.length > 1 ? "they narrow" : "it narrows"} the candidates for a named target, and the issue's starting points are chosen from its text.`;
+    }
   }
   // Flags that shape a bundle, given to a mode that builds none. Reported as
   // one message naming every offender, because dropping one at a time and
@@ -1445,6 +1511,22 @@ interface BuildInput {
    * silently reclassified.
    */
   graphCompleted?: boolean;
+  /** Set by `--from-issue`: the starting points and the ranked files. */
+  issue?: IssueBundleInput;
+}
+
+/** What `--from-issue` records in the bundle. */
+interface IssueSummary {
+  startingPoints: StartingPoint[];
+  unresolved: string[];
+  /** Nothing in the issue resolved; the start is BM25's best file. */
+  fallback: boolean;
+}
+
+export interface IssueBundleInput extends IssueSummary {
+  rankedFiles: RankedFile[];
+  /** The other starting points' related files, entered as entities. */
+  extraEntities?: EntityLocation[];
 }
 
 /**
@@ -1506,10 +1588,177 @@ async function collectHistory(
  * back to a synthetic id rather than dropping a file the graph has not seen.
  */
 async function fileNodeId(client: IxClient, path: string): Promise<string> {
+  return (await findFileNode(client, path)) ?? `file:${path}`;
+}
+
+/**
+ * Search candidates for one file node. `scope` narrows the search to the path
+ * on a backend that applies it (Ix-memory >= 1.0.31); an older one ignores it
+ * and returns every file sharing the basename, so the limit has to reach past
+ * a monorepo's `index.ts`, `__init__.py` or `mod.rs` -- at 10 a file ranked
+ * eleventh among its namesakes had no node, and `--from-issue` discarded a path
+ * the issue named for a BM25 guess.
+ */
+const FILE_NODE_SEARCH_LIMIT = 200;
+
+/** A file's graph node id, or undefined when the graph has no node for it. */
+export async function findFileNode(client: IxClient, path: string): Promise<string | undefined> {
   const name = path.split("/").pop()!;
-  const nodes = await client.search(name, { kind: "file", nameOnly: true, limit: 10, ...activeReadScope() })
-    .catch(() => []);
-  return nodes.find((n) => relativePath(n.provenance?.sourceUri) === path)?.id ?? `file:${path}`;
+  const nodes = await client.search(name, {
+    kind: "file", nameOnly: true, limit: FILE_NODE_SEARCH_LIMIT, scope: path, ...activeReadScope(),
+  }).catch(() => []);
+  return nodes.find((n) => relativePath(n.provenance?.sourceUri) === path)?.id;
+}
+
+/** Search candidates fetched per name the issue mentions; only exact names are kept. */
+const ISSUE_SEARCH_LIMIT = 20;
+
+/**
+ * `ix context --from-issue`: a bundle built from an issue's text rather than a
+ * named target. See `explain/issue.ts` for how starting points are chosen and
+ * files ranked.
+ *
+ * The bundle is centred on the first starting point the graph has a node for,
+ * built exactly as `ix context <that target>` would be. The other starting
+ * points enter it as entities, with their own related files, and every
+ * starting point's neighbourhood feeds the closeness that nudges the ranking.
+ * Their facts are collected without text references or git history: those
+ * are the expensive, centre-only parts of `collectContextFacts`.
+ */
+async function buildIssueBundle(
+  arg: string,
+  opts: ContextOptions,
+  budgets: BudgetSnapshot,
+): Promise<ContextBundle | undefined> {
+  let text: string;
+  try {
+    text = await readIssueText(arg);
+  } catch (error) {
+    issueFailure(
+      "issue_unreadable",
+      `Cannot read the issue from ${arg === "-" ? "stdin" : `"${arg}"`}: ${(error as Error).message}`,
+      opts.format,
+    );
+    return undefined;
+  }
+  if (!text.trim()) {
+    issueFailure("empty_issue", `The issue ${arg === "-" ? "on stdin" : `in "${arg}"`} is empty.`, opts.format);
+    return undefined;
+  }
+
+  const client = new IxClient(getEndpoint());
+  await ensureReadScope(client);
+  const scope = activeReadScope();
+  const plan = await planIssue(text, {
+    repo: gitRepoAccess(resolveWorkspaceRoot()),
+    search: async (name) =>
+      (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
+  });
+  // A path start has no node yet, and the graph may not have one either: it
+  // does not index every tracked file. chooseCentre walks BM25 for one it does.
+  const { starts, centre, walked } = await chooseCentre(
+    plan.starts, plan.bm25, (path) => findFileNode(client, path));
+  if (!centre) {
+    issueFailure(
+      "issue_unresolved",
+      starts.length === 0
+        ? `Nothing the issue names resolved to a definition${plan.unresolved.length > 0 ? ` (tried ${plan.unresolved.slice(0, 5).join(", ")})` : ""}, and no tracked source file matched its text. Name a symbol or file and run ix context <target>.`
+        : `Neither the issue's starting points (${starts.map((s) => s.path).join(", ")}) nor the ${CENTRE_FALLBACK_TRIES} source files that best match its text are in the graph. Name a symbol or file and run ix context <target>, or run ix map if this workspace has not been mapped.`,
+      opts.format,
+    );
+    return undefined;
+  }
+  const resolved = { id: centre.id!, name: centre.name, kind: centre.kind, resolutionMode: "issue" };
+  const [facts, context, around] = await Promise.all([
+    collectContextFacts(client, resolved),
+    client.contextForNode(resolved.id, { asOfRev: opts.asOfRev, depth: opts.depth }),
+    Promise.all(starts.filter((s) => s.id && s !== centre).map((s) => startNeighbourhood(client, s))),
+  ]);
+
+  const near = new Map<string, Closeness>();
+  const mark = (path: string | undefined, weight: number, reason: string) => {
+    if (!path) return;
+    const prior = near.get(path);
+    if (!prior || weight > prior.weight) near.set(path, { weight, reason });
+  };
+  for (const n of [{ start: centre, facts, related: facts.relatedRefs ?? [] }, ...around]) {
+    for (const ref of oneHopRefs(n.facts)) {
+      if (ref.path !== n.start.path) mark(ref.path, 1, `one hop from ${n.start.name}`);
+    }
+    for (const ref of n.related) mark(ref.path, 0.5, `near ${n.start.name}`);
+  }
+
+  return buildBundle({
+    resolved,
+    facts,
+    context,
+    provenance: facts.provenance,
+    asOfRev: opts.asOfRev,
+    depth: opts.depth,
+    budgets,
+    graphCompleted: hasCompletedSourceGraphBaseline(),
+    issue: {
+      startingPoints: starts,
+      unresolved: plan.unresolved,
+      fallback: plan.fallback || walked,
+      rankedFiles: rankIssueFiles({ starts, bm25: plan.bm25, near }),
+      extraEntities: around.flatMap((n) => n.related),
+    },
+  });
+}
+
+/**
+ * A `--from-issue` failure, readable by the format asked for. `reportFailure`
+ * writes nothing to stdout under `--format json`, so a JSON caller got an empty
+ * stdout and had to scrape stderr; this prints the record the other commands'
+ * JSON failures use.
+ */
+function issueFailure(code: string, message: string, format: string | undefined): void {
+  if (format === "json") {
+    printJson({ error: code, message });
+    process.exitCode = 1;
+    return;
+  }
+  reportFailure(code, message, format);
+}
+
+/** A secondary starting point's one-hop facts and related files. Best-effort. */
+async function startNeighbourhood(
+  client: IxClient,
+  start: StartingPoint,
+): Promise<{ start: StartingPoint; facts?: ContextFacts; related: RelatedRef[] }> {
+  try {
+    const facts = await collectFacts(client, start.id!, start.name, start.kind, "context");
+    const related = await collectRelatedFiles(client, { id: start.id!, kind: start.kind }, facts).catch(() => []);
+    return { start, facts, related };
+  } catch {
+    return { start, related: [] };
+  }
+}
+
+/** What a target reaches, and what reaches it, one step out. */
+function oneHopRefs(facts: ContextFacts | undefined): EntityLocation[] {
+  if (!facts) return [];
+  return [
+    ...(facts.importRefs ?? []), ...(facts.calleeRefs ?? []), ...(facts.topCallerRefs ?? []),
+    ...(facts.topDependentRefs ?? []), ...(facts.neighbourRefs ?? []),
+  ];
+}
+
+/** A search result as the starting-point picker reads it. */
+function symbolHit(node: GraphNode): SymbolHit {
+  const attrs = (node.attrs ?? {}) as Record<string, unknown>;
+  const line = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined);
+  const lineStart = line(attrs.line_start);
+  const lineEnd = line(attrs.line_end);
+  return {
+    id: node.id,
+    name: node.name || (typeof attrs.name === "string" ? attrs.name : ""),
+    kind: node.kind || "unknown",
+    path: relativePath(node.provenance?.sourceUri),
+    ...(lineStart !== undefined ? { lineStart } : {}),
+    ...(lineEnd !== undefined ? { lineEnd } : {}),
+  };
 }
 
 /** Imported files whose text is read for names, after the target's own. */
@@ -1609,7 +1858,13 @@ export function buildBundle(input: BuildInput): ContextBundle {
       });
     }
   };
+  const issue = input.issue;
   pushLocated([
+    // The issue's other starting points, right after the one the bundle is
+    // centred on: they are as much the target as it is.
+    ...(issue?.startingPoints ?? [])
+      .filter((s) => s.id && s.id !== resolved.id)
+      .map((s) => ({ id: s.id!, name: s.name, kind: s.kind, ...locationFields(s) })),
     ...memberRefs.slice(0, LEADING_MEMBERS),
     // What the target reaches, before what reaches it: an agent starting from
     // an entry point is looking for where to go next.
@@ -1623,6 +1878,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
     // Two steps out, ranked. After everything one step out, and ahead of the
     // backend's context nodes, which are ordered by kind and name only.
     ...(facts.relatedRefs ?? []),
+    ...(issue?.extraEntities ?? []),
   ]);
   // Compact and standard backend responses omit the full graph arrays and
   // carry the same graph as summaries. Falling back here keeps the default
@@ -1679,7 +1935,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
     .sort((a, b) => cmp(a.src, b.src) || cmp(a.dst, b.dst) || cmp(a.predicate, b.predicate))
     .map((edge) => ({ src: edge.src, dst: edge.dst, predicate: edge.predicate }));
 
-  const evidence = rankEvidence({ resolved, facts, context, relationships, prov, entities });
+  const evidence = rankEvidence({ resolved, facts, context, relationships, prov, entities, issue });
 
   const bundle: ContextBundle = {
     schema: BUNDLE_SCHEMA,
@@ -1691,6 +1947,12 @@ export function buildBundle(input: BuildInput): ContextBundle {
       resolutionMode: resolved.resolutionMode,
       ...(facts.path ? { path: facts.path } : {}),
     },
+    ...(issue
+      ? {
+          issue: { startingPoints: issue.startingPoints, unresolved: issue.unresolved, fallback: issue.fallback },
+          rankedFiles: issue.rankedFiles,
+        }
+      : {}),
     entities: [],
     relationships: [],
     claims: [...context.claims]
@@ -1815,6 +2077,7 @@ function rankEvidence(input: {
   relationships: Array<{ src: string; dst: string; predicate: string }>;
   prov: Record<string, unknown>;
   entities: ContextBundle["entities"];
+  issue?: IssueBundleInput;
 }): EvidenceItem[] {
   const items: EvidenceItem[] = [];
 
@@ -1829,6 +2092,10 @@ function rankEvidence(input: {
     refs: [target.id],
     ...locationField(targetLocation(input.facts)),
   });
+  // Straight after the target, ahead of everything structural: a file target
+  // with many members fills the default budget before score 10 runs out, and
+  // these two rows are what `--from-issue` exists to deliver.
+  if (input.issue) items.push(...issueEvidence(input.issue));
 
   type Structural = Omit<EvidenceItem, "kind" | "score">;
   const structural: Structural[] = [];
@@ -2008,6 +2275,50 @@ function rankEvidence(input: {
   return items.sort((a, b) => a.score - b.score || cmp(a.id, b.id));
 }
 
+/** Ranked files named in the evidence row; the JSON bundle carries the rest. */
+const SHOWN_RANKED_FILES = 10;
+
+/**
+ * The `--from-issue` rows: where the bundle starts and why, then the files to
+ * read, ranked against the issue's text.
+ */
+function issueEvidence(issue: IssueBundleInput): EvidenceItem[] {
+  const items: EvidenceItem[] = [];
+  const starts = issue.startingPoints;
+  if (starts.length > 0) {
+    const unresolved = issue.unresolved.length > 0
+      ? `; unresolved: ${issue.unresolved.slice(0, 8).join(", ")}${issue.unresolved.length > 8 ? ", ..." : ""}`
+      : "";
+    const why = starts.map((s) => `${s.token}: ${s.via}`).join("; ");
+    items.push({
+      id: "issue-starts",
+      kind: "target",
+      source: "issue.starts",
+      title: `starting points: ${starts.map((s) => `${s.name} (${formatLocation(locationFields(s) as EvidenceLocation)})`).join(", ")}`,
+      score: 1,
+      reason: (issue.fallback
+        ? "no code name in the issue resolved to a definition; starting from the file BM25 ranks first against the issue text; "
+        : "") + why + unresolved,
+      refs: starts.flatMap((s) => (s.id ? [s.id] : [])),
+      ...locationField(starts[0]),
+    });
+  }
+  const shown = issue.rankedFiles.slice(0, SHOWN_RANKED_FILES);
+  if (shown.length > 0) {
+    items.push({
+      id: "issue-ranked-files",
+      kind: "structural",
+      source: "issue.ranking",
+      title: `ranked files: ${shown.map((f) => f.path).join(", ")}`,
+      score: 2,
+      reason: `starting points first, then bm25 against the issue text, graph neighbours of a starting point boosted up to ${Math.round(CLOSENESS_BOOST * 100)}%; `
+        + shown.map((f) => `${f.path.split("/").pop()} (${f.reason})`).join("; "),
+      refs: [],
+    });
+  }
+  return items;
+}
+
 export function renderBundle(bundle: ContextBundle, format: string): void {
   if (format === "json") {
     printJson(bundle);
@@ -2047,6 +2358,9 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
       truncationAdvice(bundle)
         ? llmLine("diagnostic", { code: "bundle_truncated", message: truncationAdvice(bundle) })
         : null,
+      bundle.issue?.fallback
+        ? llmLine("diagnostic", { code: "issue_fallback", message: ISSUE_FALLBACK_NOTE })
+        : null,
       // Evidence only, as before. The entity, relationship and claim lists are
       // deliberately still counts here: `--format llm` is the token-minimal
       // surface, the ranked evidence is what it exists to deliver, and
@@ -2073,6 +2387,12 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
     `  conflicts:     ${conflictCount}${conflictCount > 0 ? " (run ix conflicts to inspect)" : ""}`,
   );
   console.log(`  intents:       ${bundle.intents.length}`);
+  if (bundle.issue) {
+    console.log(
+      `  from issue:    ${bundle.issue.startingPoints.length} starting point(s), ${bundle.rankedFiles?.length ?? 0} ranked files`,
+    );
+    if (bundle.issue.fallback) renderNote(ISSUE_FALLBACK_NOTE);
+  }
   if (bundle.freshness.stale) {
     renderWarning("Source has changed since last ingest. Run ix map to update.");
   }
@@ -2110,7 +2430,13 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
  * imports, calls, callers and dependents alike, and "cut: 48 structural" is the
  * uninformative sentence this exists to replace.
  */
+/** Said wherever a bundle's start came from BM25 rather than from the issue's names. */
+const ISSUE_FALLBACK_NOTE =
+  "Nothing the issue names resolved to a definition; the bundle starts from the file whose text matches the issue best (BM25).";
+
 const CUT_LABELS: Record<string, string> = {
+  "issue.starts": "starting points row",
+  "issue.ranking": "ranked files row",
   "facts.container": "container",
   "facts.members": "member",
   "facts.imports": "import",

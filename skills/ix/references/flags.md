@@ -189,6 +189,7 @@ Build a bounded, deterministic context bundle for a symbol, file, or entity (or 
 
 | Flag | Value | Default | Effect |
 |---|---|---|---|
+| `--from-issue` | `<file>` | — | Start from an issue or bug report instead of a target: a file, or `-` for stdin. Resolves the paths and code names it mentions to up to 3 definitions (tests, docs, build output and imports excluded), builds the bundle around the first, and adds a `rankedFiles` list: starting files first, then BM25 against the issue text, nudged by graph closeness. Falls back to the best BM25 file when nothing resolves. Not combinable with a target, `--kind`, `--path`, `--pick` or `--diff` |
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |

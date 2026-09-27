@@ -70,10 +70,11 @@ describe("context.ts call sites", () => {
       join(dirname(fileURLToPath(import.meta.url)), "..", "commands", "context.ts"),
       "utf8",
     );
-    // Two call sites, and both must convert. Leaving one behind makes `--diff`
+    // Three call sites, and all must be by id. Leaving one behind makes `--diff`
     // compare a by-id bundle against a by-name one and report the entire graph
-    // as changed on the first run after upgrade.
+    // as changed on the first run after upgrade. The third is `--from-issue`,
+    // which seeds from the node its starting point resolved to.
     expect(src).not.toContain("client.query(resolved.name");
-    expect(src.match(/client\.contextForNode\(resolved\.id/g) ?? []).toHaveLength(2);
+    expect(src.match(/client\.contextForNode\(resolved\.id/g) ?? []).toHaveLength(3);
   });
 });
