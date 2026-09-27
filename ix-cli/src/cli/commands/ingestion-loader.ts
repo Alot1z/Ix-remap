@@ -17,6 +17,7 @@ type PatchBuilderModule = {
   sourcePatchIdCandidates: (filePath: string, sourceHash: string, workspaceId: string) => string[];
   fileNodeId: (workspaceId: string, filePath: string) => string;
   symbolNodeId: (workspaceId: string, filePath: string, qualifiedKey: string) => string;
+  extractorName: () => string;
 };
 
 type LanguagesModule = {

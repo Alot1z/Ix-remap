@@ -13,7 +13,7 @@ import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
 import { getEndpoint, resolveWorkspaceRoot, clearStitchScopeCache } from '../config.js';
-import { isRev, loadIngestBaseline, saveIngestBaseline } from '../ingest-baseline.js';
+import { extractorChanged, isRev, loadIngestBaseline, saveIngestBaseline } from '../ingest-baseline.js';
 import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
 import { loadIngestionModules } from './ingestion-loader.js';
@@ -881,6 +881,7 @@ export function persistIngestBaselineIfClean(
   commitErrors: number,
   now?: Date,
   deletedFiles: Map<string, string[]> = new Map(),
+  extractor?: string | null,
 ): boolean {
   if (!ingestCompletedCleanly(parseErrors, commitErrors)) return false;
   // An empty mtime map is normally a discovery failure, not an empty repo —
@@ -894,7 +895,7 @@ export function persistIngestBaselineIfClean(
   // empty is a real state and is persisted; without them, it is still treated
   // as discovery having gone wrong.
   if (mtimes.size === 0 && deletedFiles.size === 0) return false;
-  saveIngestBaseline(projectRoot, mtimes, currentRev, now, deletedFiles);
+  saveIngestBaseline(projectRoot, mtimes, currentRev, now, deletedFiles, extractor);
   return true;
 }
 
@@ -1433,6 +1434,7 @@ export async function ingestFiles(
       sourcePatchIdCandidates,
       fileNodeId,
       symbolNodeId,
+      extractorName,
     },
     { languageFromPath },
   ] = await loadIngestionModules();
@@ -1934,6 +1936,18 @@ export async function ingestFiles(
     // A just-migrated workspace (new path-based id) has no nodes under the new id, so
     // skip the mtime pre-filter and re-ingest everything, exactly like --force.
     const previousBaseline = loadIngestBaseline(projectRoot);
+    const currentExtractor = extractorName();
+    if (!opts.force && extractorChanged(previousBaseline, currentExtractor)) {
+      process.stderr.write(
+        `\n  [extractor changed] ${previousBaseline?.extractor ?? 'unrecorded'} -> ${currentExtractor}. ` +
+        `Re-ingesting every file once.\n`,
+      );
+      opts.force = true;
+    }
+    // A --lang run re-extracts only its own files, so it must not record the
+    // new extractor for the rest; keep the old one and the next full run
+    // still re-ingests them.
+    const baselineExtractor = opts.lang ? previousBaseline?.extractor : currentExtractor;
     const previousMtimes = previousBaseline?.files ?? new Map<string, number>();
     const {
       previousDeletedFiles,
@@ -3279,6 +3293,7 @@ export async function ingestFiles(
               previousBaseline.currentRev,
               new Date(previousBaseline.lastIngestAt),
               durableDeletedFiles,
+              previousBaseline.extractor,
             );
           },
         });
@@ -3310,6 +3325,7 @@ export async function ingestFiles(
       commitErrors,
       undefined,
       nextDeletedFiles,
+      baselineExtractor,
     );
 
     // Migration cleanup (Ix#225 gap 2): the re-ingest under the new path-based id has

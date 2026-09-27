@@ -134,9 +134,9 @@ function deduplicateUpsertEdges(ops: PatchOp[]): PatchOp[] {
  * old id and the new output never lands -- 1.26: JS/TS calls resolve by scope,
  * not name alone, and helper-loaded / dist/ imports link to their sources.
  *
- * A bump does not trigger that re-ingest: `ix map` skips every file whose mtime
- * or source hash is unchanged, so an unchanged file keeps the edges the old
- * extractor built until the file changes or `ix ingest --force` runs.
+ * `ix map` skips files whose mtime or source hash is unchanged, which would
+ * keep the old extractor's edges on them, so the ingest baseline records this
+ * name and a run that finds a different one re-ingests every file once.
  */
 export function extractorName(): string {
   return `tree-sitter/1.26`;
