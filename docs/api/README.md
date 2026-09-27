@@ -629,6 +629,14 @@ lowercase RFC-4122 UUID), then poll `/v1/reset/status/{opId}` every 2s up to
 15 minutes. The status body repeats `opId`, and the client rejects a body
 naming a different operation.
 
+The client never follows redirects on any reset request (`begin`, `status`,
+or either sync path): a 3xx stops with the same reconciliation warning rather
+than replaying the POST or treating a redirected 404 as an old backend, so a
+remote endpoint must be configured as the direct backend URL, not one a proxy
+redirects (e.g. `http://` behind an HTTPS redirect). For a redirected start or
+sync request the error names the target's origin and suggests setting
+`IX_ENDPOINT` to the direct URL.
+
 A 404 on `begin` falls back to the sync path (old backend). A 404 on `status`
 does **not**: the op ledger is in-process, so a restart, a different replica or
 eviction drops the entry while the reset itself may have completed. Reset is

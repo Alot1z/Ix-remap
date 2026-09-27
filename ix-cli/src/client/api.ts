@@ -462,6 +462,9 @@ export class IxClient {
     try {
       beginResp = await fetch(`${this.endpoint}${asyncPath}`, {
         method: "POST",
+        // A redirect can replay a destructive POST or hide an accepted reset
+        // behind a later connection failure/404. Inspect the first response.
+        redirect: "manual",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
         signal: AbortSignal.timeout(30 * 1000),
@@ -476,6 +479,10 @@ export class IxClient {
       throw this.resetReconciliationError("The start response was unavailable.", undefined, error);
     }
 
+    if (beginResp.status >= 300 && beginResp.status < 400) {
+      await beginResp.body?.cancel().catch(() => {});
+      throw this.resetRedirectError("start route", beginResp);
+    }
     if (beginResp.status === 404) {
       return this.runResetSync(syncPath);
     }
@@ -503,6 +510,7 @@ export class IxClient {
       try {
         statusResp = await fetch(`${this.endpoint}/v1/reset/status/${opId}`, {
           method: "GET",
+          redirect: "manual",
           signal: AbortSignal.timeout(30 * 1000),
         });
       } catch (error) {
@@ -517,6 +525,7 @@ export class IxClient {
         throw this.resetReconciliationError("The status is unavailable or inaccessible.", opId);
       }
       if (statusResp.status !== 200) {
+        await statusResp.body?.cancel().catch(() => {});
         throw this.resetReconciliationError(`Status request returned ${statusResp.status}.`, opId);
       }
       let status: unknown;
@@ -539,13 +548,14 @@ export class IxClient {
     throw this.resetReconciliationError("Completion was not confirmed within 15 minutes.", opId);
   }
 
-  private resetReconciliationError(reason: string, opId?: string, cause?: unknown): Error {
+  private resetReconciliationError(reason: string, opId?: string, cause?: unknown, hint?: string): Error {
     const operation = opId ? ` (operation ${opId})` : "";
     // Carry `cause` so IX_DEBUG=1 can still show the underlying transport
     // failure — swallowing it left no way to tell these outcomes apart.
     const error = new Error(
       `${reason}${operation} Graph or pipeline changes may already have occurred. ` +
-      "Do not repeat the reset until an administrator has reconciled its effects and operation records.",
+      "Do not repeat the reset until an administrator has reconciled its effects and operation records." +
+      (hint ? ` ${hint}` : ""),
       cause === undefined ? undefined : { cause });
     // Marked so error rendering does not reclassify this by its cause and
     // print "start the backend, then retry" over a do-not-repeat warning.
@@ -553,13 +563,38 @@ export class IxClient {
     return error;
   }
 
+  // The backend never redirects, so a 3xx almost always comes from a proxy in
+  // front of it (typically http:// upgraded to https://), and every other
+  // command follows it silently. Say so, or the endpoint looks healthy
+  // everywhere except reset. Only origins are shown: a Location path or query
+  // (and endpoint userinfo) may carry credentials.
+  private resetRedirectError(route: string, resp: Response): Error {
+    let target = "";
+    try {
+      const location = resp.headers.get("location");
+      const origin = location ? new URL(location, resp.url || this.endpoint).origin : "null";
+      if (origin !== "null") target = ` to ${origin}`;
+    } catch { /* unparseable Location: omit the target */ }
+    let endpoint = this.endpoint;
+    try { endpoint = new URL(this.endpoint).origin; } catch { /* keep as configured */ }
+    return this.resetReconciliationError(
+      `The ${route} redirected (${resp.status}${target}).`, undefined, undefined,
+      `The Ix backend does not send redirects, so a proxy at ${endpoint} most likely did. ` +
+      "Set IX_ENDPOINT (or `endpoint` in ~/.ix/config.yaml) to the backend's direct URL.");
+  }
+
   private async runResetSync(syncPath: string): Promise<{ ok: boolean; message: string }> {
     const resp = await fetch(`${this.endpoint}${syncPath}`, {
       method: "POST",
+      redirect: "manual",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
       signal: AbortSignal.timeout(10 * 60 * 1000),
     });
+    if (resp.status >= 300 && resp.status < 400) {
+      await resp.body?.cancel().catch(() => {});
+      throw this.resetRedirectError("synchronous reset route", resp);
+    }
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`${resp.status}: ${text}`);

@@ -26,16 +26,32 @@ something the CLI can infer.
 
 Local synchronous reset and the existing synchronous fallback for an absent
 async **start** route remain. A 404 from **status** never invokes that fallback.
+
+The client never follows redirects for async start, status polling, local sync
+reset or legacy sync fallback. A redirected start may already have run; following
+307/308 can replay its POST, while following a redirect to a 404 can incorrectly
+trigger sync fallback. A refused redirect target also says nothing about whether
+the initial reset ran. Redirect responses therefore require reconciliation, with
+the original operation ID retained when known. Configure the direct backend
+endpoint before any operator-approved recovery; do not repeat an uncertain reset.
+Because the backend itself never redirects, a redirected start or sync request
+also names the redirect target's origin (never its path or query) and points at
+`IX_ENDPOINT` as the likely fix; a redirected status poll keeps the operation ID
+instead, since its start was already accepted.
+
 Authentication errors at start remain errors. This patch does not add tenant
 headers, credentials or an authorization bypass; the remote transport must
 establish the expected verified caller identity.
 
-`ix-cli/src/client/reset-outcome.test.ts` executes the real client with synthetic
-HTTP responses and asserts the exact request sequence. It covers success for
-both reset kinds, invalid/foreign operation IDs, partial failure, transport
-loss, deadlines and local/older-server compatibility. Live authenticated
-remote transport and supported-release integration still need verification
-before claiming deployment acceptance.
+`ix-cli/src/client/__tests__/reset-outcome.test.ts` executes the real client with
+synthetic HTTP responses and asserts the exact request sequence. It covers
+success for both reset kinds, invalid/foreign operation IDs, partial failure,
+transport loss, deadlines and local/older-server compatibility.
+`ix-cli/src/client/__tests__/reset-redirect.test.ts` drives the same client
+against real loopback HTTP servers and asserts that no reset request is
+replayed or reinterpreted after a 3xx on any of the four request paths. Live
+authenticated remote transport and supported-release integration still need
+verification before claiming deployment acceptance.
 
 Pro is an optional, separately installed private plugin; the OSS package does
 not fetch it as a dependency. Its explicit runtime resolution is therefore
