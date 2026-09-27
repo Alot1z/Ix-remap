@@ -13,7 +13,17 @@ vi.mock("../resolve.js", async (importOriginal) => ({
   resolveFileOrEntityFull: async (_client: unknown, name: string) => ({
     resolved: true, entity: { id: name, name, kind: "function" },
   }),
+  resolveFileOrReport: async (_client: unknown, name: string) => ({ id: name, name, kind: "function" }),
 }));
+
+async function runTrace(args: string[]) {
+  const program = new Command().name("ix").exitOverride();
+  registerTraceCommand(program);
+  const output: string[] = [];
+  vi.spyOn(console, "log").mockImplementation((...parts) => { output.push(parts.join(" ")); });
+  await program.parseAsync(["trace", "A", "--kind", "calls", ...args], { from: "user" });
+  return output.join("\n");
+}
 
 async function run(args: string[], format = "json", to = "C") {
   const program = new Command().name("ix").exitOverride();
@@ -75,5 +85,71 @@ describe("trace --to search budgets", () => {
 
   it("preserves an unrestricted successful route", async () => {
     expect(JSON.parse(await run([])).path).toHaveLength(3);
+  });
+});
+
+describe("trace completeness in command output", () => {
+  beforeEach(() => {
+    expand.mockReset().mockImplementation(async (id: string, opts: { direction: string }) => {
+      const adjacent: Record<string, string[]> = opts.direction === "out"
+        ? { A: ["B"], B: ["C"] } : { B: ["A"], C: ["B"] };
+      return { nodes: (adjacent[id] ?? []).map(name => ({ id: name, name, kind: "function" })), edges: [] };
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const codes = (out: { diagnostics?: Array<{ code: string }> }) => (out.diagnostics ?? []).map(d => d.code);
+
+  it("adds truncated when the node budget stopped a --to search", async () => {
+    const out = JSON.parse(await run(["--cap", "2"]));
+    expect(codes(out)).toEqual(["no_path", "truncated"]);
+    expect(out.diagnostics[1].message).toContain("Node cap of 2 reached");
+  });
+
+  it("adds depth_limited when the depth bound stopped a --to search", async () => {
+    const out = JSON.parse(await run(["--depth", "1"]));
+    expect(codes(out)).toEqual(["no_path", "depth_limited"]);
+    expect(out.diagnostics[1].message).toContain("Stopped descending at depth 1");
+  });
+
+  it("treats cap zero as a cut, not as proof that no route exists", async () => {
+    const out = JSON.parse(await run(["--cap", "0"]));
+    expect(codes(out)).toEqual(["no_path", "truncated"]);
+    expect(out.diagnostics[1].message).toContain("Node cap of 0 reached");
+  });
+
+  it("emits only no_path when the search exhausted the graph", async () => {
+    const out = JSON.parse(await run(["--depth", "10"], "json", "Z"));
+    expect(codes(out)).toEqual(["no_path"]);
+  });
+
+  it("prints the raise-the-bound hint under a cut miss in text output", async () => {
+    expect(await run(["--cap", "2"], "text")).toContain("Raise --cap");
+    expect(await run(["--depth", "10"], "text", "Z")).not.toContain("Raise --");
+  });
+
+  it("carries depth_limited in single-direction json", async () => {
+    const out = JSON.parse(await runTrace(["--downstream", "--depth", "1", "--format", "json"]));
+    expect(out.summary.depth_limited).toBe(true);
+    expect(codes(out)).toEqual(["depth_limited"]);
+  });
+
+  it("carries each direction's bounds in its own summary in both-direction json", async () => {
+    const limited = JSON.parse(await runTrace(["--depth", "1", "--format", "json"]));
+    expect(limited.traversal).toBeUndefined();
+    expect(limited.downstream.summary.depth_limited).toBe(true);
+    expect(codes(limited)).toEqual(["depth_limited"]);
+
+    const clean = JSON.parse(await runTrace(["--depth", "5", "--format", "json"]));
+    expect(clean.downstream.summary.depth_limited).toBeUndefined();
+    expect(clean.upstream.summary.truncated).toBeUndefined();
+    expect(clean.diagnostics).toBeUndefined();
+  });
+
+  it("names the direction that hit the node cap in both-direction json", async () => {
+    const out = JSON.parse(await runTrace(["--cap", "1", "--depth", "5", "--format", "json"]));
+    const cut = [out.upstream.summary.truncated, out.downstream.summary.truncated];
+    expect(cut).toContain(true);
+    expect(codes(out)).toEqual(["truncated"]);
   });
 });

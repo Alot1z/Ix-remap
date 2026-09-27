@@ -69,8 +69,11 @@ surfaces (#575).
   unbounded, which on a hub is thousands of nodes the caller pays for before
   seeing any. The output distinguishes the two ways a walk ends:
   `truncated=true` means the node cap dropped nodes, `depth_limited=true` means
-  the walk stopped descending and there may or may not be more. `--depth` and
-  `--cap` take anything.
+  the walk stopped descending and there may or may not be more. JSON carries
+  them per direction in each `summary`. When `ix trace --to` finds no route, a
+  search a bound cut short adds the same code after `no_path`; a bare `no_path`
+  means the whole reachable graph was searched. `--depth` and `--cap` take
+  anything.
 - **`ix ingest` honours `--exclude <glob>` and a `.ixignore` at the ingest
   root.** A deliberate subset of `.gitignore`: `#` comments, `*`, `?`, `**`, a
   leading `/` to anchor at the root, a trailing `/` for directories only, and a

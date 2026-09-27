@@ -250,17 +250,41 @@ export async function findPath(
   maxDepth: number = 10,
   maxNodes: number = Infinity,
 ): Promise<PathNode[] | null> {
-  if (maxNodes < 1) return null;
-  if (fromId === toId) return [{ id: fromId, name: "", kind: "" }];
+  const found = await searchPath(client, fromId, toId, predicates, maxDepth, maxNodes);
+  return found.path;
+}
+
+/**
+ * Budgeted route search that distinguishes "no route exists" from "a budget
+ * stopped the search before one was found": cut is true when the search ended
+ * early (node cap hit mid-flight, or nodes beyond maxDepth left unexplored)
+ * without reaching toId, with cutReason naming the bound to raise.
+ */
+export async function searchPath(
+  client: IxClient,
+  fromId: string,
+  toId: string,
+  predicates: string[],
+  maxDepth: number,
+  maxNodes: number,
+): Promise<{ path: PathNode[] | null; cut: boolean; cutReason?: "node-cap" | "depth" }> {
+  // A cap below one admits not even the source, so nothing was searched:
+  // that is the budget talking, not evidence that no route exists.
+  if (maxNodes < 1) return { path: null, cut: true, cutReason: "node-cap" };
+  if (fromId === toId) return { path: [{ id: fromId, name: "", kind: "" }], cut: false };
   const nodeMap = new Map<string, { name: string; kind: string }>();
 
   const queue: Array<{ id: string; path: string[] }> = [{ id: fromId, path: [fromId] }];
   const visited = new Set<string>([fromId]);
+  let depthCut = false;
 
   while (queue.length > 0) {
     const entry = queue.shift()!;
     const { id, path } = entry;
-    if (path.length - 1 >= maxDepth) continue;
+    if (path.length - 1 >= maxDepth) {
+      depthCut = true;
+      continue;
+    }
 
     const [outResult, inResult] = await Promise.all([
       client.expand(id, { direction: "out", predicates, hops: 1 }),
@@ -269,7 +293,7 @@ export async function findPath(
 
     for (const n of [...outResult.nodes, ...inResult.nodes]) {
       if (visited.has(n.id)) continue;
-      if (visited.size >= maxNodes) return null;
+      if (visited.size >= maxNodes) return { path: null, cut: true, cutReason: "node-cap" };
       visited.add(n.id);
       const name = n.name || n.attrs?.name || n.id.slice(0, 8);
       if (!nodeMap.has(n.id)) {
@@ -278,18 +302,34 @@ export async function findPath(
 
       if (n.id === toId) {
         const fullPath = [...path, n.id];
-        return fullPath.map((nodeId) => {
-          if (nodeId === fromId) return { id: nodeId, name: "", kind: "" }; // filled below
-          const meta = nodeMap.get(nodeId) ?? { name: nodeId.slice(0, 8), kind: "unknown" };
-          return { id: nodeId, ...meta };
-        });
+        return {
+          path: fullPath.map((nodeId) => {
+            if (nodeId === fromId) return { id: nodeId, name: "", kind: "" }; // filled below
+            const meta = nodeMap.get(nodeId) ?? { name: nodeId.slice(0, 8), kind: "unknown" };
+            return { id: nodeId, ...meta };
+          }),
+          cut: false,
+        };
       }
 
       queue.push({ id: n.id, path: [...path, n.id] });
     }
   }
 
-  return null;
+  return { path: null, cut: depthCut, cutReason: depthCut ? "depth" : undefined };
+}
+
+/**
+ * A directional walk's JSON summary. `truncated` and `depth_limited` appear
+ * only when true, matching the llm header fields of the same names.
+ */
+function traceSummary(r: { nodesVisited: number; maxDepthReached: number; truncated?: boolean; depthLimited?: boolean }) {
+  return {
+    nodes_visited: r.nodesVisited,
+    max_depth: r.maxDepthReached,
+    truncated: r.truncated ? true : undefined,
+    depth_limited: r.depthLimited ? true : undefined,
+  };
 }
 
 // ── Text rendering ───────────────────────────────────────────────────
@@ -379,6 +419,7 @@ export function renderTracePathLlm(
   from: { name: string; kind: string }, to: { name: string; kind: string },
   relKind: string, pathNodes: PathNode[],
   noPathMessage?: string,
+  cutHint?: { code: "truncated" | "depth_limited"; message: string },
 ): string[] {
   const lines = [llmLine("trace", [
     ["mode", "path"], ["from", from.name], ["to", to.name], ["kind", relKind],
@@ -386,6 +427,7 @@ export function renderTracePathLlm(
   ])];
   if (pathNodes.length === 0) {
     lines.push(llmLine("diagnostic", [["code", "no_path"], ["message", noPathMessage ?? `No route found from ${from.name} to ${to.name}.`]]));
+    if (cutHint) lines.push(llmLine("diagnostic", [["code", cutHint.code], ["message", cutHint.message]]));
     return lines;
   }
   for (const n of pathNodes) lines.push(llmLine("step", [["name", n.name], ["kind", n.kind]]));
@@ -394,15 +436,26 @@ export function renderTracePathLlm(
 
 export function renderTraceBothLlm(
   target: { id: string; name: string; kind: string }, relKind: string, maxDepth: number,
-  up: { tree: TraceNode[]; nodesVisited: number; maxDepthReached: number },
-  down: { tree: TraceNode[]; nodesVisited: number; maxDepthReached: number },
+  up: { tree: TraceNode[]; nodesVisited: number; maxDepthReached: number; truncated?: boolean; depthLimited?: boolean },
+  down: { tree: TraceNode[]; nodesVisited: number; maxDepthReached: number; truncated?: boolean; depthLimited?: boolean },
+  maxNodes: number = Infinity,
 ): string[] {
+  const truncated = !!(up.truncated || down.truncated);
+  const depthLimited = !!(up.depthLimited || down.depthLimited);
   const lines = [llmLine("trace", [
     ["mode", "directional"], ["target", target.name], ["kind", relKind],
     ["direction", "both"], ["depth", finiteDepth(maxDepth)], ["target_id", target.id?.slice(0, 8)],
+    ["truncated", truncated ? true : undefined],
+    ["depth_limited", depthLimited ? true : undefined],
     ["up_nodes", up.nodesVisited], ["up_depth", up.maxDepthReached],
     ["down_nodes", down.nodesVisited], ["down_depth", down.maxDepthReached],
   ])];
+  if (truncated || depthLimited) {
+    lines.push(llmLine("diagnostic", [
+      ["code", truncated ? "truncated" : "depth_limited"],
+      ["message", traversalHint(maxDepth, maxNodes, { truncated, depthLimited })],
+    ]));
+  }
   lines.push(...traceNodesLlm("up", up.tree, target.id));
   lines.push(...traceNodesLlm("down", down.tree, target.id));
   return lines;
@@ -411,17 +464,22 @@ export function renderTraceBothLlm(
 export function renderTraceSingleLlm(
   target: { id: string; name: string; kind: string }, relKind: string, direction: string, maxDepth: number,
   tree: TraceNode[], truncated: boolean, nodesVisited: number, maxDepthReached: number, maxNodes: number,
+  depthLimited: boolean = false,
 ): string[] {
   const lines = [llmLine("trace", [
     ["mode", "directional"], ["target", target.name], ["kind", relKind],
     ["direction", direction], ["depth", finiteDepth(maxDepth)], ["target_id", target.id?.slice(0, 8)],
     ["nodes", nodesVisited], ["max_depth", maxDepthReached], ["truncated", truncated ? true : undefined],
+    ["depth_limited", depthLimited ? true : undefined],
   ])];
   if (tree.length === 0) {
     lines.push(llmLine("diagnostic", [["code", "no_edges"], ["message", `No ${direction} ${relKind} found for ${target.name}.`]]));
   }
-  if (truncated) {
-    lines.push(llmLine("diagnostic", [["code", "truncated"], ["message", traversalHint(maxDepth, maxNodes, { truncated: true, depthLimited: false })]]));
+  if (truncated || depthLimited) {
+    lines.push(llmLine("diagnostic", [
+      ["code", truncated ? "truncated" : "depth_limited"],
+      ["message", traversalHint(maxDepth, maxNodes, { truncated, depthLimited })],
+    ]));
   }
   lines.push(...traceNodesLlm("node", tree, target.id));
   return lines;
@@ -509,9 +567,17 @@ export function registerTraceCommand(program: Command): void {
           const relKind = opts.kind ?? "mixed";
           const predicates = kindToPredicates(opts.kind);
 
-          const rawPath = await findPath(client, fromTarget.id, toTarget.id, predicates, maxDepth, maxNodes);
+          const { path: rawPath, cut: pathCut, cutReason } = await searchPath(client, fromTarget.id, toTarget.id, predicates, maxDepth, maxNodes);
           const bounded = Number.isFinite(maxDepth) || Number.isFinite(maxNodes);
           const noPathMessage = `No route found from ${fromTarget.name} to ${toTarget.name}${bounded ? " within the requested search limits" : ""}.`;
+          // Coded like the directional modes' cuts, so a caller knows whether to
+          // raise --cap or --depth without parsing the message.
+          const pathHint = bounded && pathCut
+            ? {
+                code: cutReason === "node-cap" ? "truncated" as const : "depth_limited" as const,
+                message: traversalHint(maxDepth, maxNodes, { truncated: cutReason === "node-cap", depthLimited: cutReason === "depth" }),
+              }
+            : undefined;
 
           // Fill in the from-node name (was left blank above)
           const pathNodes: PathNode[] = rawPath
@@ -534,11 +600,14 @@ export function registerTraceCommand(program: Command): void {
               output.summary = { path_length: pathNodes.length };
             } else {
               output.path = null;
+              // Both states print no_path, but a budget cut adds the bound that
+              // stopped it, so the caller can tell "none exists" from "search stopped".
               output.diagnostics = [
                 {
                   code: "no_path",
                   message: noPathMessage,
                 },
+                ...(pathHint ? [pathHint] : []),
               ];
             }
             printJson(output);
@@ -547,7 +616,7 @@ export function registerTraceCommand(program: Command): void {
 
           // ── llm output ─────────────────────────────────────────
           if (opts.format === "llm") {
-            for (const line of renderTracePathLlm(fromTarget, toTarget, relKind, pathNodes, noPathMessage)) console.log(line);
+            for (const line of renderTracePathLlm(fromTarget, toTarget, relKind, pathNodes, noPathMessage, pathHint)) console.log(line);
             return;
           }
 
@@ -560,6 +629,7 @@ export function registerTraceCommand(program: Command): void {
 
           if (pathNodes.length === 0) {
             console.log(`\n${noPathMessage}`);
+            if (pathHint) console.log(chalk.dim(`  ${pathHint.message}`));
             return;
           }
 
@@ -611,29 +681,40 @@ export function registerTraceCommand(program: Command): void {
 
           // ── JSON ──────────────────────────────────────────────
           if (opts.format === "json") {
-            printJson(
-              {
-                mode: "directional",
-                target: { name: target.name, kind: target.kind, path: relativePath(target.path) },
-                direction: "both",
-                kind: relKind,
-                depth: maxDepth,
-                upstream: {
-                  tree: upResult.tree.map(compactTreeNode),
-                  summary: { nodes_visited: upResult.nodesVisited, max_depth: upResult.maxDepthReached },
-                },
-                downstream: {
-                  tree: downResult.tree.map(compactTreeNode),
-                  summary: { nodes_visited: downResult.nodesVisited, max_depth: downResult.maxDepthReached },
-                },
+            const output: Record<string, unknown> = {
+              mode: "directional",
+              target: { name: target.name, kind: target.kind, path: relativePath(target.path) },
+              direction: "both",
+              kind: relKind,
+              depth: maxDepth,
+              // Per direction, in the same summary fields single-direction
+              // output uses, so a caller can see which side hit which bound.
+              upstream: {
+                tree: upResult.tree.map(compactTreeNode),
+                summary: traceSummary(upResult),
               },
-            );
+              downstream: {
+                tree: downResult.tree.map(compactTreeNode),
+                summary: traceSummary(downResult),
+              },
+            };
+            const bothTruncated = upResult.truncated || downResult.truncated;
+            const bothDepthLimited = upResult.depthLimited || downResult.depthLimited;
+            if (bothTruncated || bothDepthLimited) {
+              output.diagnostics = [
+                {
+                  code: bothTruncated ? "truncated" : "depth_limited",
+                  message: traversalHint(maxDepth, maxNodes, { truncated: bothTruncated, depthLimited: bothDepthLimited }),
+                },
+              ];
+            }
+            printJson(output);
             return;
           }
 
           // ── llm ───────────────────────────────────────────────
           if (opts.format === "llm") {
-            for (const line of renderTraceBothLlm(target, relKind, maxDepth, upResult, downResult)) console.log(line);
+            for (const line of renderTraceBothLlm(target, relKind, maxDepth, upResult, downResult, maxNodes)) console.log(line);
             return;
           }
 
@@ -676,11 +757,17 @@ export function registerTraceCommand(program: Command): void {
           renderSection("Summary");
           renderKeyValue("Nodes visited", String(totalNodes));
           renderKeyValue("Max depth", String(maxD));
+          if (upResult.truncated || downResult.truncated) {
+            renderKeyValue("Truncated", "true (node cap reached)");
+          }
+          if (upResult.depthLimited || downResult.depthLimited) {
+            renderKeyValue("Depth-limited", `true (stopped descending at depth ${maxD})`);
+          }
           return;
         }
 
         // ── Single direction ────────────────────────────────────────
-        const { tree, truncated, nodesVisited, maxDepthReached } = doUpstream
+        const { tree, truncated, depthLimited, nodesVisited, maxDepthReached } = doUpstream
           ? await buildTraceTree(client, target.id, { direction: "in", predicates, maxDepth, maxNodes })
           : await buildTraceTree(client, target.id, { direction: "out", predicates, maxDepth, maxNodes });
 
@@ -693,7 +780,7 @@ export function registerTraceCommand(program: Command): void {
             kind: relKind,
             depth: maxDepth,
             tree: tree.map(compactTreeNode),
-            summary: { nodes_visited: nodesVisited, max_depth: maxDepthReached },
+            summary: traceSummary({ nodesVisited, maxDepthReached, truncated, depthLimited }),
           };
 
           if (tree.length === 0) {
@@ -701,9 +788,12 @@ export function registerTraceCommand(program: Command): void {
               { code: "no_edges", message: `No ${direction} ${relKind} found for ${target.name}.` },
             ];
           }
-          if (truncated) {
+          if (truncated || depthLimited) {
             const diags = (output.diagnostics as unknown[]) ?? [];
-            (diags as unknown[]).push({ code: "truncated", message: traversalHint(maxDepth, maxNodes, { truncated: true, depthLimited: false }) });
+            (diags as unknown[]).push({
+              code: truncated ? "truncated" : "depth_limited",
+              message: traversalHint(maxDepth, maxNodes, { truncated, depthLimited }),
+            });
             output.diagnostics = diags;
           }
 
@@ -713,7 +803,7 @@ export function registerTraceCommand(program: Command): void {
 
         // ── llm ──────────────────────────────────────────────────────
         if (opts.format === "llm") {
-          for (const line of renderTraceSingleLlm(target, relKind, direction, maxDepth, tree, truncated, nodesVisited, maxDepthReached, maxNodes)) console.log(line);
+          for (const line of renderTraceSingleLlm(target, relKind, direction, maxDepth, tree, truncated, nodesVisited, maxDepthReached, maxNodes, depthLimited)) console.log(line);
           return;
         }
 
@@ -742,6 +832,8 @@ export function registerTraceCommand(program: Command): void {
         renderSection("Summary");
         renderKeyValue("Nodes visited", String(nodesVisited));
         renderKeyValue("Max depth", String(maxDepthReached));
+        if (truncated) renderKeyValue("Truncated", "true (node cap reached)");
+        if (depthLimited) renderKeyValue("Depth-limited", `true (stopped descending at depth ${maxDepth})`);
       },
     );
 }
