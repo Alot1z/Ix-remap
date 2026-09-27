@@ -3781,7 +3781,20 @@ function isBarePackageSpecifier(spec: string): boolean {
  * `.../utils/...`) or its unscoped monorepo spelling (`@babel/types` ->
  * `.../babel-types/...`). Node builtins (`node:fs`) are never in-repo.
  */
-function fileIsInsidePackage(filePath: string, spec: string): boolean {
+function fileIsInsidePackage(
+  filePath: string,
+  spec: string,
+  packageDirOf?: (packageName: string) => string | undefined,
+): boolean {
+  // A package this repo declares (its tracked package.json names it) is
+  // exactly that directory, whatever it is called: a library's own tests
+  // import it by name (`from "mylib"`) from a folder no directory name
+  // matches. The directory-name guess below is for everything else.
+  const declared = packageDirOf?.(packageNameOf(spec));
+  if (declared !== undefined) {
+    const file = filePath.replace(/\\/g, '/');
+    return declared === '' || file.startsWith(`${declared}/`);
+  }
   if (spec.startsWith('node:')) return false;
   const parts = spec.split('/');
   const scope = spec.startsWith('@') ? parts[0].slice(1) : undefined;
@@ -3789,6 +3802,12 @@ function fileIsInsidePackage(filePath: string, spec: string): boolean {
   if (!name) return false;
   const dirs = filePath.replace(/\\/g, '/').split('/').slice(0, -1);
   return dirs.includes(name) || (scope !== undefined && dirs.includes(`${scope}-${name}`));
+}
+
+/** The package part of a bare specifier: `@acme/utils/dates` -> `@acme/utils`, `lodash/fp` -> `lodash`. */
+function packageNameOf(spec: string): string {
+  const parts = spec.split('/');
+  return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
 }
 
 // A symbol defined in this many or more distinct files across the resolution
@@ -3844,6 +3863,9 @@ export function resolveEdges(
     // cross-repo gate so genuine edges survive even where import-to-package matching
     // can't bridge the gap (e.g. Java's Maven artifactId vs `import com.google...`).
     declaredRepoDeps?: Record<string, string[]>;
+    // JS/TS package name -> the directory (workspace-relative, POSIX, '' for
+    // the root) whose package.json declares it, when exactly one does.
+    packageDirOf?: (packageName: string) => string | undefined;
     // Workspace-aware JS/TS module resolution supplied by the CLI. `undefined`
     // preserves the existing fallback; an empty array is authoritative and
     // prevents a configured import from falling through to an unrelated stem.
@@ -4954,7 +4976,7 @@ export function resolveEdges(
       const insideBoundPackage = (fp: string): boolean => {
         if (boundPackage === undefined) return true;
         if (boundPackageRepo !== undefined && repoOf) return repoOf(fp) === boundPackageRepo;
-        return fileIsInsidePackage(fp, boundPackage);
+        return fileIsInsidePackage(fp, boundPackage, opts?.packageDirOf);
       };
       const reachable = (fp: string): boolean =>
         (!bareCall || definesAtModuleScope(fp)) && insideBoundPackage(fp);

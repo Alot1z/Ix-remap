@@ -17,6 +17,7 @@ import { extractorChanged, isRev, loadIngestBaseline, saveIngestBaseline } from 
 import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
 import { loadIngestionModules } from './ingestion-loader.js';
+import { declaredPackageDirs } from '../package-dirs.js';
 import { ensureWorkspaceIdState } from '../bootstrap.js';
 import { detectSystem, repoWorkspaceIdFor, lookupPackage, readPackageNames, readPackageDeps } from '../system.js';
 import { CLIENT_EXPECTED_SCHEMA_VERSION } from '../backend-status.js';
@@ -1919,6 +1920,7 @@ export async function ingestFiles(
     const resolveOpts = {
       ...crossRepoResolveOpts,
       resolveModuleSpecifier: createTypeScriptModuleResolver(workspaceRoot, filePaths),
+      packageDirOf: declaredPackageDirs(workspaceRoot, filePaths),
     };
 
     filesDiscovered = filePaths.length;

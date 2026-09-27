@@ -207,6 +207,32 @@ describe('call resolution respects lexical scope (JS/TS)', () => {
     ]);
   });
 
+  it('resolves a library\'s own tests importing it by package name', () => {
+    // No directory is called `mylib`, so only the package.json declaration can
+    // place it: the root declares it here, packages/tools declares another.
+    const test = parse(
+      'test/parse.test.ts',
+      'import { parse } from "mylib";\nimport { lint } from "mylib-tools/lint";\nexport function t() { parse(); lint(); }\n',
+    );
+    const lib = parse('src/parse.ts', 'export function parse() { return 1; }\n');
+    const tools = parse('packages/tools/src/lint.ts', 'export function lint() { return 1; }\n');
+    const dirs = new Map([['mylib', ''], ['mylib-tools', 'packages/tools']]);
+
+    expect(callsTo(resolveEdges([test, lib, tools]), 'src/parse.ts'), 'the directory-name guess alone').toEqual([]);
+    const edges = resolveEdges([test, lib, tools], undefined, undefined, { packageDirOf: name => dirs.get(name) });
+    expect(callsTo(edges, 'src/parse.ts')).toEqual([expect.objectContaining({ dstName: 'parse' })]);
+    expect(callsTo(edges, 'packages/tools/src/lint.ts')).toEqual([expect.objectContaining({ dstName: 'lint' })]);
+  });
+
+  it('keeps a declared package\'s names inside its own directory', () => {
+    const caller = parse('app/main.ts', 'import { parse } from "mylib-tools";\nexport function main() { return parse(); }\n');
+    const elsewhere = parse('src/parse.ts', 'export function parse() { return 1; }\n');
+    const dirs = new Map([['mylib-tools', 'packages/tools']]);
+
+    const edges = resolveEdges([caller, elsewhere], undefined, undefined, { packageDirOf: name => dirs.get(name) });
+    expect(callsTo(edges, 'src/parse.ts')).toEqual([]);
+  });
+
   it('leaves non-JS languages on name-based resolution', () => {
     const caller = parse('app/main.py', 'def main():\n    return helper_fn()\n');
     const target = parse('lib/helpers.py', 'def helper_fn():\n    return 1\n');
