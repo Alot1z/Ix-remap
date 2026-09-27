@@ -1944,10 +1944,10 @@ export async function ingestFiles(
       );
       opts.force = true;
     }
-    // A --lang run re-extracts only its own files, so it must not record the
-    // new extractor for the rest; keep the old one and the next full run
-    // still re-ingests them.
-    const baselineExtractor = opts.lang ? previousBaseline?.extractor : currentExtractor;
+    // A --lang or single-file run re-extracts only its own files, so it must
+    // not record the new extractor for the rest; keep the old one and the next
+    // full run still re-ingests them.
+    const baselineExtractor = (opts.lang || stat.isFile()) ? previousBaseline?.extractor : currentExtractor;
     const previousMtimes = previousBaseline?.files ?? new Map<string, number>();
     const {
       previousDeletedFiles,

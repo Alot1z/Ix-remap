@@ -846,6 +846,13 @@ describe("ingestFiles against a fake backend", () => {
       writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
       await ingestFiles(repo, { format: "text", lang: "typescript", suppressOutput: true, printSummary: false });
       expect(stored().extractor, "a --lang run must not vouch for the other languages").toBe("tree-sitter/0.1");
+
+      writeFileSync(join(repo, "root.ts"), "export const r = 1;\n", "utf8");
+      execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+      await incremental();
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+      await ingestFiles(join(repo, "root.ts"), { format: "text", suppressOutput: true, printSummary: false });
+      expect(stored().extractor, "a single-file run must not vouch for the rest").toBe("tree-sitter/0.1");
     } finally {
       stderr.mockRestore();
     }
