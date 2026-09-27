@@ -94,14 +94,14 @@ describe('renderTraceBothLlm completeness', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderTracePathLlm cut visibility', () => {
-  it('adds a search_cut diagnostic after no_path when the search was budget-cut', () => {
+  it('adds the cut\'s own code after no_path when the search was budget-cut', () => {
     const lines = renderTracePathLlm(
       { name: 'A', kind: 'function' }, { name: 'B', kind: 'function' }, 'mixed', [],
       'No route found from A to B within the requested search limits.',
-      CAP_HINT,
+      { code: 'truncated', message: CAP_HINT },
     );
     expect(lines[1]).toBe('diagnostic code=no_path message="No route found from A to B within the requested search limits."');
-    expect(lines[2]).toBe(`diagnostic code=search_cut message="${CAP_HINT}"`);
+    expect(lines[2]).toBe(`diagnostic code=truncated message="${CAP_HINT}"`);
   });
 
   it('adds nothing when no cut hint is given', () => {

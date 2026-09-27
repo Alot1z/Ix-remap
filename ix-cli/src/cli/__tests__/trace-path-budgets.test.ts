@@ -100,21 +100,21 @@ describe("trace completeness in command output", () => {
 
   const codes = (out: { diagnostics?: Array<{ code: string }> }) => (out.diagnostics ?? []).map(d => d.code);
 
-  it("adds search_cut naming the cap when the node budget stopped a --to search", async () => {
+  it("adds truncated when the node budget stopped a --to search", async () => {
     const out = JSON.parse(await run(["--cap", "2"]));
-    expect(codes(out)).toEqual(["no_path", "search_cut"]);
+    expect(codes(out)).toEqual(["no_path", "truncated"]);
     expect(out.diagnostics[1].message).toContain("Node cap of 2 reached");
   });
 
-  it("adds search_cut naming the depth when the depth bound stopped a --to search", async () => {
+  it("adds depth_limited when the depth bound stopped a --to search", async () => {
     const out = JSON.parse(await run(["--depth", "1"]));
-    expect(codes(out)).toEqual(["no_path", "search_cut"]);
+    expect(codes(out)).toEqual(["no_path", "depth_limited"]);
     expect(out.diagnostics[1].message).toContain("Stopped descending at depth 1");
   });
 
   it("treats cap zero as a cut, not as proof that no route exists", async () => {
     const out = JSON.parse(await run(["--cap", "0"]));
-    expect(codes(out)).toEqual(["no_path", "search_cut"]);
+    expect(codes(out)).toEqual(["no_path", "truncated"]);
     expect(out.diagnostics[1].message).toContain("Node cap of 0 reached");
   });
 
@@ -134,14 +134,22 @@ describe("trace completeness in command output", () => {
     expect(codes(out)).toEqual(["depth_limited"]);
   });
 
-  it("carries the traversal bounds in both-direction json only when one was hit", async () => {
+  it("carries each direction's bounds in its own summary in both-direction json", async () => {
     const limited = JSON.parse(await runTrace(["--depth", "1", "--format", "json"]));
-    expect(limited.traversal).toEqual({ truncated: false, depth_limited: true, node_cap: 100 });
+    expect(limited.traversal).toBeUndefined();
     expect(limited.downstream.summary.depth_limited).toBe(true);
     expect(codes(limited)).toEqual(["depth_limited"]);
 
     const clean = JSON.parse(await runTrace(["--depth", "5", "--format", "json"]));
-    expect(clean.traversal.depth_limited).toBeUndefined();
+    expect(clean.downstream.summary.depth_limited).toBeUndefined();
+    expect(clean.upstream.summary.truncated).toBeUndefined();
     expect(clean.diagnostics).toBeUndefined();
+  });
+
+  it("names the direction that hit the node cap in both-direction json", async () => {
+    const out = JSON.parse(await runTrace(["--cap", "1", "--depth", "5", "--format", "json"]));
+    const cut = [out.upstream.summary.truncated, out.downstream.summary.truncated];
+    expect(cut).toContain(true);
+    expect(codes(out)).toEqual(["truncated"]);
   });
 });
