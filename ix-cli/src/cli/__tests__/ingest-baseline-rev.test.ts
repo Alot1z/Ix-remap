@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { ingestMtimeCachePath } from "../config.js";
-import { loadIngestBaseline, saveIngestBaseline } from "../ingest-baseline.js";
+import { extractorChanged, loadIngestBaseline, saveIngestBaseline } from "../ingest-baseline.js";
 import { advanceRev } from "../commands/ingest.js";
 
 let home: string;
@@ -104,5 +104,30 @@ describe("advanceRev", () => {
     expect(advanceRev(3, Number.NaN)).toBe(3);
     expect(advanceRev(3, null)).toBe(3);
     expect(advanceRev(3, undefined)).toBe(3);
+  });
+});
+
+describe("ingest baseline extractor", () => {
+  const files = new Map<string, number>([["a.ts", 1_000]]);
+
+  it("round-trips the extractor and reads a missing one as null", () => {
+    const root = path.join(home, "p");
+    saveIngestBaseline(root, files, 1, new Date(), new Map(), "tree-sitter/9.9");
+    expect(loadIngestBaseline(root)?.extractor).toBe("tree-sitter/9.9");
+
+    saveIngestBaseline(root, files, 1);
+    expect(loadIngestBaseline(root)?.extractor).toBeNull();
+  });
+
+  it("counts an unrecorded or different extractor as a change, and no baseline as none", () => {
+    const root = path.join(home, "p");
+    expect(extractorChanged(null, "tree-sitter/9.9")).toBe(false);
+
+    saveIngestBaseline(root, files, 1, new Date(), new Map(), "tree-sitter/9.9");
+    expect(extractorChanged(loadIngestBaseline(root), "tree-sitter/9.9")).toBe(false);
+    expect(extractorChanged(loadIngestBaseline(root), "tree-sitter/9.10")).toBe(true);
+
+    saveIngestBaseline(root, files, 1);
+    expect(extractorChanged(loadIngestBaseline(root), "tree-sitter/9.9")).toBe(true);
   });
 });

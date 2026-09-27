@@ -11,6 +11,7 @@ interface SerializedIngestBaseline {
   currentRev?: number;
   lastIngestAt?: string;
   tracksMapBaseline?: boolean;
+  extractor?: string;
 }
 
 export interface IngestBaseline {
@@ -30,6 +31,12 @@ export interface IngestBaseline {
    * nothing has actually re-evaluated. See `hasCompletedMapFor`.
    */
   tracksMapBaseline: boolean;
+  /**
+   * The extractor (`extractorName()`) whose output the recorded files carry.
+   * Null on a baseline written before this was recorded, which could have been
+   * any extractor, so it counts as a change. See `extractorChanged`.
+   */
+  extractor: string | null;
 }
 
 /**
@@ -76,6 +83,7 @@ export function loadIngestBaseline(projectRoot: string): IngestBaseline | null {
       currentRev,
       lastIngestAt,
       tracksMapBaseline: data.tracksMapBaseline === true,
+      extractor: typeof data.extractor === "string" ? data.extractor : null,
     };
   } catch {
     return null;
@@ -88,6 +96,7 @@ export function saveIngestBaseline(
   currentRev: number,
   now: Date = new Date(),
   deletedFiles: Map<string, string[]> = new Map(),
+  extractor?: string | null,
 ): void {
   try {
     // Keep the last good rev rather than writing a shape the read side will
@@ -110,10 +119,23 @@ export function saveIngestBaseline(
       // to before the map marker existed. The first ingest after an upgrade
       // sets it, which is what ends the grandfathering for this workspace.
       tracksMapBaseline: true,
+      ...(extractor ? { extractor } : {}),
     };
     fs.mkdirSync(path.dirname(ingestMtimeCachePath(projectRoot)), { recursive: true });
     fs.writeFileSync(ingestMtimeCachePath(projectRoot), JSON.stringify(data));
   } catch {
     // The cache is an optimization and freshness hint. Ingestion itself succeeded.
   }
+}
+
+/**
+ * Whether the files in `baseline` were extracted by a different extractor.
+ *
+ * `ix map` skips a file whose mtime or source hash is unchanged, and neither
+ * sees an extractor bump, so without this an unchanged file keeps the nodes and
+ * edges the old extractor built until it is edited or `--force` runs. No
+ * baseline means nothing was skipped anyway, so it is not a change.
+ */
+export function extractorChanged(baseline: IngestBaseline | null, current: string): boolean {
+  return baseline !== null && baseline.extractor !== current;
 }

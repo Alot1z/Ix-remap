@@ -292,7 +292,7 @@ describe("workspace-scoped staleness", () => {
     const completedAt = new Date("2026-08-09T18:01:00.000Z");
     const deletedFiles = new Map([[filePath, ["caller.js"]]]);
     expect(
-      persistIngestBaselineIfClean(root, new Map(), 15, 0, 0, completedAt, deletedFiles),
+      persistIngestBaselineIfClean(root, new Map(), 15, 0, 0, completedAt, deletedFiles, "tree-sitter/9.9"),
     ).toBe(true);
 
     expect(loadIngestBaseline(root)).toEqual({
@@ -301,6 +301,7 @@ describe("workspace-scoped staleness", () => {
       currentRev: 15,
       lastIngestAt: completedAt.toISOString(),
       tracksMapBaseline: true,
+      extractor: "tree-sitter/9.9",
     });
   });
 

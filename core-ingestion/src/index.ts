@@ -214,6 +214,21 @@ export interface ParsedRelationship {
    * Undefined preserves compatibility with hand-built/older parse results.
    */
   importBinding?: boolean;
+  /**
+   * JS/TS CALLS only: true when every call site folded into this relationship
+   * calls a plain identifier (`foo()`, `new Foo()`), never a member
+   * (`obj.foo()`). A plain identifier is resolved by lexical scope, so it can
+   * only denote a module-scope declaration — never a class member in another
+   * file. Absent means "at least one member-shaped use, or unknown".
+   */
+  bareCall?: true;
+  /**
+   * JS/TS IMPORTS only: `'helper'` marks a module path that was not written in
+   * an import statement but passed as a string literal to an import helper
+   * (`importModule(resolveModule("../../pkg/dist/x.js"))`). It is inferred, so
+   * it becomes an edge only when it resolves to exactly one tracked file.
+   */
+  importVia?: 'helper';
 }
 
 /**
@@ -539,6 +554,45 @@ function unwrapImportSpecifier(rawValue: string): string {
     .replace(/\\\\/g, '/')
     .replace(/^["'`<]/, '')
     .replace(/[>"'`]$/, '');
+}
+
+// Callee text that marks a call as an import helper: `importModule(...)`,
+// `resolveIngestionModule(...)`, `require.resolve(...)`, `lazyImport(...)`.
+const JS_IMPORT_HELPER_CALLEE = /import|require|module/i;
+// Module paths a JS/TS runtime can load: the source and build extensions.
+const JS_MODULE_PATH_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+/**
+ * The module path a JS/TS call passes to an import helper, or null.
+ *
+ * A dynamic `import("./x.js")` is already an IMPORTS edge (see the query), but
+ * loaders often route the specifier through a helper first, e.g.
+ * `importModule(resolveIngestionModule("../../../../core-ingestion/dist/languages.js"))`.
+ * Deliberately conservative, because this infers an import from a string:
+ *   - the callee's text must name importing (`JS_IMPORT_HELPER_CALLEE`),
+ *   - the FIRST argument must be a plain string literal (no substitutions),
+ *   - relative (`./`, `../`) and ending in a JS/TS module extension.
+ * `readFileSync("./x.ts")` and `path.join(dir, "x.js")` are never matched. The
+ * resolver then keeps the edge only when the path names exactly one tracked
+ * file (mapping a build path such as `dist/x.js` back to `src/x.ts`).
+ */
+function jsTsHelperImportSpecifier(callNode: any): string | null {
+  if (callNode?.type !== 'call_expression') return null;
+  const fn = callNode.childForFieldName?.('function');
+  if (!fn || (fn.type !== 'identifier' && fn.type !== 'member_expression')) return null;
+  // The argument is checked before the callee: this runs for every call, and a
+  // member callee's text spans its whole receiver chain -- in a long builder
+  // chain (`b.step(x).step(y)...`) reading it per call is quadratic in the chain.
+  const firstArg = callNode.childForFieldName?.('arguments')?.firstNamedChild;
+  if (!firstArg) return null;
+  if (firstArg.type !== 'string' &&
+      !(firstArg.type === 'template_string' && !firstArg.namedChildren.some((c: any) => c.type === 'template_substitution'))) {
+    return null;
+  }
+  const spec = unwrapImportSpecifier(firstArg.text);
+  if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
+  if (!JS_MODULE_PATH_EXTENSION.test(spec)) return null;
+  return JS_IMPORT_HELPER_CALLEE.test(fn.text) ? spec : null;
 }
 
 /**
@@ -2493,6 +2547,12 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const importBindings: ImportBinding[] = [];
     const jsTsImportedLocalNames = new Set<string>();
     const jsTsImportUseHasUnshadowed = new Map<string, boolean>();
+    // JS/TS: per `${scope}\x00${callKey}`, whether every call site folded into
+    // that CALLS relationship is a plain identifier call (see ParsedRelationship.bareCall).
+    const jsTsCallBareOnly = new Map<string, boolean>();
+    const jsTsCallRelationship = new Map<string, ParsedRelationship>();
+    // JS/TS: helper-literal module paths already emitted (see importVia).
+    const jsTsHelperImports = new Set<string>();
     if (isJsTs) {
       for (const match of pass2Matches) {
         const importSource = match.captures.find((c: any) => c.name === 'import.source');
@@ -2959,6 +3019,20 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       const callName = match.captures.find((c: any) => c.name === 'call.name');
       if (callName) {
         const callee = callName.node.text;
+        // JavaScript `require("./x")` is already an IMPORTS edge via its own query.
+        if (isJsTs && !(language === SupportedLanguages.JavaScript && callee === 'require')) {
+          const helperImport = jsTsHelperImportSpecifier(match.captures.find((c: any) => c.name === 'call')?.node);
+          if (helperImport && !jsTsHelperImports.has(helperImport)) {
+            jsTsHelperImports.add(helperImport);
+            relationships.push({
+              srcName: fileName,
+              dstName: normalizeCapturedImport(helperImport, language),
+              predicate: 'IMPORTS',
+              importRaw: helperImport,
+              importVia: 'helper',
+            });
+          }
+        }
         if (!callee || callee.length <= 1) continue;
         const phpCallKind = language === SupportedLanguages.PHP
           ? callName.node.parent?.type === 'object_creation_expression'
@@ -3143,14 +3217,25 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
 
         const callKey = phpCallKind ? `${phpCallKind}:${effectiveCallee}` : effectiveCallee;
+        const bareKey = `${scope}\x00${callKey}`;
+        if (isJsTs) {
+          // `foo()` / `new Foo()`: the JS/TS queries capture the callee as an
+          // `identifier` only there; `obj.foo()` captures a property_identifier.
+          // (Read from the node's own type: `.parent` walks down from the root
+          // in these bindings, which is quadratic in a long call chain.)
+          const isBare = !qualifierCapture && callName.node.type === 'identifier';
+          jsTsCallBareOnly.set(bareKey, (jsTsCallBareOnly.get(bareKey) ?? true) && isBare);
+        }
         if (!seen.has(callKey)) {
           seen.add(callKey);
-          relationships.push({
+          const rel: ParsedRelationship = {
             srcName: caller,
             dstName: effectiveCallee,
             predicate: 'CALLS',
             ...(phpCallKind ? { phpCallKind } : {}),
-          });
+          };
+          relationships.push(rel);
+          if (isJsTs) jsTsCallRelationship.set(bareKey, rel);
         }
         continue;
       }
@@ -3178,6 +3263,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         }
         continue;
       }
+    }
+
+    for (const [bareKey, rel] of jsTsCallRelationship) {
+      if (jsTsCallBareOnly.get(bareKey) === true) rel.bareCall = true;
     }
 
     // A single relationship can represent multiple same-name uses in one scope.
@@ -3664,6 +3753,63 @@ const COMMODITY_CALLEE_NAMES: ReadonlySet<string> = new Set([
   'bind', 'call', 'apply', 'stringify', 'toString', 'valueOf', 'hasOwnProperty',
 ]);
 
+// JS/TS globals that test runners (vitest `globals: true`, jest, mocha) and
+// runtimes inject without an import. In an ES/CommonJS module a bare identifier
+// is either declared in the file, bound by an import, or a global — a
+// module-scope function in some other file is never in scope. An UNBOUND call to
+// one of these names is therefore the global, and resolveEdges does not link it
+// to whatever in-repo symbol shares the name (observed: every test file's
+// `describe(...)` resolved to test-fixtures' `SampleCommand.describe`). An
+// explicit import binding or a same-file definition still wins.
+const JS_AMBIENT_CALLEES: ReadonlySet<string> = new Set([
+  'describe', 'it', 'test', 'expect', 'suite', 'bench',
+  'beforeEach', 'afterEach', 'beforeAll', 'afterAll',
+  'xdescribe', 'fdescribe', 'xit', 'fit', 'xtest',
+  'vi', 'jest',
+  'queueMicrotask', 'structuredClone', 'setImmediate', 'clearImmediate',
+  'atob', 'btoa', 'encodeURIComponent', 'decodeURIComponent', 'encodeURI', 'decodeURI',
+]);
+
+/** A JS/TS import specifier that names a package rather than a path. */
+function isBarePackageSpecifier(spec: string): boolean {
+  return spec.length > 0 && !spec.startsWith('.') && !spec.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(spec);
+}
+
+/**
+ * Whether `filePath` plausibly lives inside the package a bare specifier names:
+ * some directory on its path is the package name (`@acme/utils` ->
+ * `.../utils/...`) or its unscoped monorepo spelling (`@babel/types` ->
+ * `.../babel-types/...`). Node builtins (`node:fs`) are never in-repo.
+ */
+function fileIsInsidePackage(
+  filePath: string,
+  spec: string,
+  packageDirOf?: (packageName: string) => string | undefined,
+): boolean {
+  // A package this repo declares (its tracked package.json names it) is
+  // exactly that directory, whatever it is called: a library's own tests
+  // import it by name (`from "mylib"`) from a folder no directory name
+  // matches. The directory-name guess below is for everything else.
+  const declared = packageDirOf?.(packageNameOf(spec));
+  if (declared !== undefined) {
+    const file = filePath.replace(/\\/g, '/');
+    return declared === '' || file.startsWith(`${declared}/`);
+  }
+  if (spec.startsWith('node:')) return false;
+  const parts = spec.split('/');
+  const scope = spec.startsWith('@') ? parts[0].slice(1) : undefined;
+  const name = scope !== undefined ? parts[1] : parts[0];
+  if (!name) return false;
+  const dirs = filePath.replace(/\\/g, '/').split('/').slice(0, -1);
+  return dirs.includes(name) || (scope !== undefined && dirs.includes(`${scope}-${name}`));
+}
+
+/** The package part of a bare specifier: `@acme/utils/dates` -> `@acme/utils`, `lodash/fp` -> `lodash`. */
+function packageNameOf(spec: string): string {
+  const parts = spec.split('/');
+  return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
 // A symbol defined in this many or more distinct files across the resolution
 // set is a project-level commodity; a single narrowed fuzzy-tier match for it is
 // not trustworthy. (Tunable; the named-list above carries the builtin-method load.)
@@ -3717,6 +3863,9 @@ export function resolveEdges(
     // cross-repo gate so genuine edges survive even where import-to-package matching
     // can't bridge the gap (e.g. Java's Maven artifactId vs `import com.google...`).
     declaredRepoDeps?: Record<string, string[]>;
+    // JS/TS package name -> the directory (workspace-relative, POSIX, '' for
+    // the root) whose package.json declares it, when exactly one does.
+    packageDirOf?: (packageName: string) => string | undefined;
     // Workspace-aware JS/TS module resolution supplied by the CLI. `undefined`
     // preserves the existing fallback; an empty array is authoritative and
     // prevents a configured import from falling through to an unrelated stem.
@@ -4284,8 +4433,36 @@ export function resolveEdges(
           ? ['.jsx', '.tsx', '.d.ts']
           : ['.tsx', '.d.ts', '.jsx'];
         for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
+      } else if (extension === '.mjs' || extension === '.cjs') {
+        // `.mts` compiles to `.mjs` and `.cts` to `.cjs`, as `.ts` does to `.js`.
+        const sourceExt = extension === '.mjs' ? '.mts' : '.cts';
+        const suffixes = srcLanguage === SupportedLanguages.JavaScript
+          ? [extension, sourceExt]
+          : [sourceExt, extension];
+        for (const suffix of suffixes) candidatePaths.push(`${base}${suffix}`);
       } else {
         candidatePaths.push(target);
+      }
+      // A path into build output (`../pkg/dist/x.js`, typical of a dynamic
+      // import of a sibling package's compiled module) names a file that is
+      // not tracked; its source is the same path under `src/`. Tried only
+      // after every direct candidate, so a tracked `dist/` file still wins.
+      // Mirrors `sourceForms` in ix-cli's explain/text-references.ts, but uses
+      // the dist segment nearest the file: that is the package's outDir.
+      // Not from a file inside that same dist/ tree: build output importing its
+      // own siblings (a tracked `dist/x.d.ts` importing `./y.ts`) depends on the
+      // sibling build file, not on src/, and mapping it would add an edge from
+      // every such file into src/.
+      const lastDist = target.lastIndexOf('/dist/');
+      const distAt = lastDist !== -1 ? lastDist + 1 : target.startsWith('dist/') ? 0 : -1;
+      const distPrefix = distAt !== -1 ? `${target.slice(0, distAt)}dist/` : undefined;
+      if (distPrefix !== undefined && !srcFilePath.replace(/\\/g, '/').startsWith(distPrefix)) {
+        const srcPrefix = `${target.slice(0, distAt)}src/`;
+        for (const candidatePath of [...candidatePaths]) {
+          if (candidatePath.startsWith(distPrefix)) {
+            candidatePaths.push(srcPrefix + candidatePath.slice(distPrefix.length));
+          }
+        }
       }
     }
 
@@ -4513,6 +4690,9 @@ export function resolveEdges(
         for (const entry of phpType.entries) importedFilePaths.add(entry.filePath);
         continue;
       }
+      // A helper-literal import is inferred and binds no names: it becomes an
+      // IMPORTS edge below but does not widen call-resolution scope.
+      if (rel.importVia === 'helper') continue;
       for (const fp of resolveImportTargets(srcFilePath, srcLanguage, rel.dstName, rel.importRaw)) {
         importedFilePaths.add(fp);
       }
@@ -4525,7 +4705,7 @@ export function resolveEdges(
       const fpResult = resultsByPath.get(fp);
       if (!fpResult) continue;
       for (const rel of fpResult.relationships) {
-        if (rel.predicate !== 'IMPORTS') continue;
+        if (rel.predicate !== 'IMPORTS' || rel.importVia === 'helper') continue;
         for (const transitiveFp of resolveImportTargets(fp, fpResult.language, rel.dstName, rel.importRaw)) {
           if (!importedFilePaths.has(transitiveFp)) transitiveFilePaths.add(transitiveFp);
         }
@@ -4587,6 +4767,13 @@ export function resolveEdges(
         const importMatches = pythonHasRelativeModuleImport && rel.importRaw === undefined
           ? []
           : resolveImportTargets(srcFilePath, result.language, rel.dstName, rel.importRaw);
+        // A helper-literal import (`importModule(resolve("../x/dist/y.js"))`) is
+        // inferred from a string, so it is kept only when that path names
+        // exactly one tracked file — never through the package fallbacks below.
+        if (rel.importVia === 'helper' && importMatches.length !== 1) {
+          if (importMatches.length > 1) stats.skippedAmbiguous++;
+          continue;
+        }
         if (importMatches.length === 1) {
           const fp = importMatches[0];
           resolved.push({
@@ -4693,9 +4880,20 @@ export function resolveEdges(
       ) continue;
       if (rel.importBinding === false) continue;
 
+      // Lexical scope (JS/TS) — see JS_AMBIENT_CALLEES. An unbound bare call to
+      // a test-runner / runtime global has no in-repo target beyond the files
+      // the caller imports, whatever shares its name elsewhere; it stops after
+      // the import tier below. The import tier still runs because CommonJS
+      // destructuring (`const { test } = require('./helpers')`) records no
+      // import binding. (`obj.describe()` is a member call, not the global.)
+      const srcIsJsTs = srcLanguage === SupportedLanguages.JavaScript || srcLanguage === SupportedLanguages.TypeScript;
+      const unboundAmbientCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true &&
+        !binding && JS_AMBIENT_CALLEES.has(origDstName);
+
+      let bindingProviderFiles: string[] | undefined;
       if (rel.predicate === 'CALLS' || rel.predicate === 'EXTENDS' || rel.predicate === 'REFERENCES') {
         if (binding) {
-          const providerFiles = [...new Set(resolveImportTargets(
+          const providerFiles = bindingProviderFiles = [...new Set(resolveImportTargets(
             srcFilePath,
             srcLanguage,
             binding.pkg,
@@ -4751,6 +4949,40 @@ export function resolveEdges(
           }
         }
       }
+
+      // Reachability filter for every cross-file tier below (JS/TS only; other
+      // languages keep plain name matching):
+      //   - A bare call (`foo()`, rel.bareCall) is resolved by lexical scope, so
+      //     it can only denote a module-scope declaration. A class member of the
+      //     same name (`SampleCommand.describe`) is reachable only through a
+      //     receiver and is never a candidate.
+      //   - A name bound by an explicit import of a bare package specifier that
+      //     resolves to no in-repo file (`import { describe } from 'vitest'`)
+      //     comes from THAT package. Only a file plausibly inside it may match:
+      //     one in the co-ingested repo that publishes it (packageOf), else one
+      //     under a directory named after it (`packages/utils/**` for
+      //     `@acme/utils`, `packages/babel-types/**` for `@babel/types`). This
+      //     keeps monorepo workspace imports resolving while an external
+      //     package's names stop landing on unrelated same-named symbols.
+      // The global tier applies the first rule differently -- see there.
+      const bareCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true;
+      const boundPackage = srcIsJsTs && binding && isBarePackageSpecifier(binding.pkg) &&
+        (bindingProviderFiles?.length ?? 0) === 0 && !(configuredBindingTargets?.length)
+        ? binding.pkg
+        : undefined;
+      const boundPackageRepo = boundPackage !== undefined ? packageOf?.(boundPackage) : undefined;
+      const definesAtModuleScope = (fp: string): boolean =>
+        (fileQKeys.get(fp)?.get(dstName) ?? []).includes(dstName);
+      const insideBoundPackage = (fp: string): boolean => {
+        if (boundPackage === undefined) return true;
+        if (boundPackageRepo !== undefined && repoOf) return repoOf(fp) === boundPackageRepo;
+        return fileIsInsidePackage(fp, boundPackage, opts?.packageDirOf);
+      };
+      const reachable = (fp: string): boolean =>
+        (!bareCall || definesAtModuleScope(fp)) && insideBoundPackage(fp);
+      // A bare call's target is the module-scope key, even when the file also
+      // has a same-named member that would make bestQKey ambiguous.
+      const targetQKey = (fp: string): string | null => bareCall ? dstName : bestQKey(fileQKeys, fp, dstName);
 
       // Tier 1b: qualifier-assisted (confidence 0.9 / 0.7)
       // For dotted names like "NodeKind.Decision" (emitted by field_expression queries):
@@ -4823,17 +5055,18 @@ export function resolveEdges(
       // Tier 2: import-scoped (confidence 0.9)
       const importMatches: string[] = [];
       for (const fp of importedFilePaths) {
-        if (fileHasSymbol.get(fp)?.has(dstName)) importMatches.push(fp);
+        if (fileHasSymbol.get(fp)?.has(dstName) && reachable(fp)) importMatches.push(fp);
       }
       const narrowedImportMatches = narrowByRepoDeps(narrowCCandidates(importMatches, srcFilePath, srcLanguage, srcName, dstName), srcFilePath);
 
       if (narrowedImportMatches.length === 1) {
         const fp = narrowedImportMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.9 });
         continue;
       }
+      if (unboundAmbientCall) continue;
       // Commodity gate: beyond the precise import-scoped tier above, the remaining
       // tiers (transitive re-export hops at 0.8, global symbol fallback at 0.5)
       // resolve a bare call on name alone and can cross module/package/repo
@@ -4850,13 +5083,13 @@ export function resolveEdges(
       // Tier 2.5: transitive import-scoped (confidence 0.8) — one re-export hop away
       const transitiveMatches: string[] = [];
       for (const fp of transitiveFilePaths) {
-        if (fileHasSymbol.get(fp)?.has(dstName)) transitiveMatches.push(fp);
+        if (fileHasSymbol.get(fp)?.has(dstName) && reachable(fp)) transitiveMatches.push(fp);
       }
       const narrowedTransitiveMatches = narrowByRepoDeps(narrowCCandidates(transitiveMatches, srcFilePath, srcLanguage, srcName, dstName), srcFilePath);
 
       if (narrowedTransitiveMatches.length === 1) {
         const fp = narrowedTransitiveMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue;
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.8 });
         continue;
@@ -4877,7 +5110,14 @@ export function resolveEdges(
       }
       stats.globalFallbacks++;
       const candidates = symbolToFiles.get(dstName) ?? [];
-      let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage);
+      // A bare call never lands on a class member, but here -- unlike the import
+      // tiers -- members still count toward ambiguity. Nothing ties an unbound
+      // name to this tier's candidates: in an ES module it is usually a local,
+      // a parameter or a closure variable (`const gte = ...; gte(x)`). Filtering
+      // the members out first would turn an ambiguous name into a "unique" one
+      // and link that local to an unrelated module's function of the same name.
+      let globalMatches = candidates.filter(fp =>
+        fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage && insideBoundPackage(fp));
       const importHint = pickCallerAlignedCandidate(importMatches, srcName, dstName)?.chosen
         ?? pickCallerAlignedCandidate(transitiveMatches, srcName, dstName)?.chosen;
       if (importHint) {
@@ -4891,7 +5131,8 @@ export function resolveEdges(
 
       if (resolvedMatches.length === 1) {
         const fp = resolvedMatches[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
+        if (bareCall && !definesAtModuleScope(fp)) continue; // only a member of that name
+        const dstQualifiedKey = targetQKey(fp);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName: origDstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.5 });
         stats.resolvedGlobal++;

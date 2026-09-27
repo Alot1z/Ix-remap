@@ -127,12 +127,23 @@ function deduplicateUpsertEdges(ops: PatchOp[]): PatchOp[] {
   return deduplicated;
 }
 
+/**
+ * Part of every patch id, and the backend skips a patch id it has already
+ * applied. Bump it whenever the same source would now produce different nodes
+ * or edges, or re-ingesting an unchanged file (`ix ingest --force`) yields the
+ * old id and the new output never lands -- 1.26: JS/TS calls resolve by scope,
+ * not name alone, and helper-loaded / dist/ imports link to their sources.
+ *
+ * `ix map` skips files whose mtime or source hash is unchanged, which would
+ * keep the old extractor's edges on them, so the ingest baseline records this
+ * name and a run that finds a different one re-ingests every file once.
+ */
 export function extractorName(): string {
-  return `tree-sitter/1.25`;
+  return `tree-sitter/1.26`;
 }
 
 /** Previous extractor versions — their patches are superseded when re-ingesting. */
-export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.24', 'tree-sitter/1.23', 'tree-sitter/1.22', 'tree-sitter/1.21', 'tree-sitter/1.20', 'tree-sitter/1.19', 'tree-sitter/1.18', 'tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
+export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.25', 'tree-sitter/1.24', 'tree-sitter/1.23', 'tree-sitter/1.22', 'tree-sitter/1.21', 'tree-sitter/1.20', 'tree-sitter/1.19', 'tree-sitter/1.18', 'tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
 
 /** Patch ids that may own the active graph entities for a stored source hash. */
 export function sourcePatchIdCandidates(
@@ -181,7 +192,10 @@ export function buildPatch(
   previousSourceHash?: string,
   multiRepo?: MultiRepoContext,
 ): GraphPatchPayload {
-  const { entities, chunks, relationships } = result;
+  const { entities, chunks } = result;
+  // A helper-literal import is inferred and only means something once resolved
+  // to a tracked file; without resolution it would be a dangling edge.
+  const relationships = result.relationships.filter(r => r.importVia !== 'helper');
   // Two paths, deliberately distinct (see toMemberRelativePath):
   //  - filePath (workspace-relative, repo-prefixed in a co-ingest) is PROVENANCE:
   //    source_uri / file_uri / patch id. Reads reconstruct an absolute path by
@@ -496,7 +510,11 @@ export function buildPatchWithResolution(
     });
   }
 
-  const { entities, chunks, relationships } = result;
+  const { entities, chunks } = result;
+  // A helper-literal import (see ParsedRelationship.importVia) is inferred from a
+  // string, so it is emitted only when resolveEdges tied it to exactly one file.
+  const relationships = result.relationships.filter(r =>
+    r.importVia !== 'helper' || edgeResolution.has(`${r.srcName}:${r.predicate}:${r.dstName}`));
   // filePath = workspace-relative PROVENANCE (source_uri / file_uri / patch id);
   // idPath = member-relative IDENTITY (node / edge / chunk ids) so a member's ids are
   // byte-identical solo vs. co-ingested. Edge matching still keys on the full

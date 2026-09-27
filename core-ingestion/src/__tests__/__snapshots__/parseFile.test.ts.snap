@@ -792,6 +792,7 @@ exports[`parseFile snapshots > snapshots a TypeScript command module 1`] = `
       "srcName": "runChecks",
     },
     {
+      "bareCall": true,
       "dstName": "runOne",
       "predicate": "CALLS",
       "srcName": "runChecks",
@@ -802,6 +803,7 @@ exports[`parseFile snapshots > snapshots a TypeScript command module 1`] = `
       "srcName": "runOne",
     },
     {
+      "bareCall": true,
       "dstName": "readFileSync",
       "predicate": "CALLS",
       "srcName": "runOne",
@@ -832,11 +834,13 @@ exports[`parseFile snapshots > snapshots a TypeScript command module 1`] = `
       "srcName": "CheckRunner.load",
     },
     {
+      "bareCall": true,
       "dstName": "statusOf",
       "predicate": "CALLS",
       "srcName": "CheckRunner.describe",
     },
     {
+      "bareCall": true,
       "dstName": "runChecks",
       "predicate": "CALLS",
       "srcName": "sample-command.ts",

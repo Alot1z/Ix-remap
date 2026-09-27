@@ -3,12 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { ingestFiles } from "../commands/ingest.js";
+import { ingestMtimeCachePath } from "../config.js";
 
 /**
  * Integration tests that drive `ingestFiles` end to end against a fake backend.
@@ -807,6 +808,54 @@ describe("ingestFiles against a fake backend", () => {
     // and `runFatal` fails with "expected the ingest to end fatally", which is
     // this test's real assertion.
     expect(message).toContain("30 of 30");
+  });
+
+  it("re-ingests everything once when the baseline names another extractor", async () => {
+    // `ix map` skips files by mtime and source hash, and neither sees an
+    // extractor bump, so the baseline records the extractor and a change
+    // forces one full re-ingest. Asserted through the notice and the stored
+    // name: this fake answers no source hashes, so its DB-reset guard makes
+    // every incremental run look forced anyway.
+    fixture(3);
+    const incremental = () =>
+      ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const stored = () =>
+      JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { extractor?: string };
+    const notices = (): string[] =>
+      stderr.mock.calls.map(([chunk]) => String(chunk)).filter(c => c.includes("[extractor changed]"));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await incremental();
+      const current = stored().extractor;
+      expect(current, "a clean run records its extractor").toMatch(/^tree-sitter\//);
+      expect(notices(), "a first run has no baseline to compare").toEqual([]);
+
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+      await incremental();
+      expect(notices()).toEqual([expect.stringContaining(`tree-sitter/0.1 -> ${current}`)]);
+      expect(stored().extractor).toBe(current);
+
+      await incremental();
+      expect(notices(), "the new name was recorded, so it happens once").toHaveLength(1);
+
+      const { extractor: _dropped, ...unrecorded } = stored();
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify(unrecorded));
+      await incremental();
+      expect(notices()[1], "a baseline from before this was recorded").toContain(`unrecorded -> ${current}`);
+
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+      await ingestFiles(repo, { format: "text", lang: "typescript", suppressOutput: true, printSummary: false });
+      expect(stored().extractor, "a --lang run must not vouch for the other languages").toBe("tree-sitter/0.1");
+
+      writeFileSync(join(repo, "root.ts"), "export const r = 1;\n", "utf8");
+      execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+      await incremental();
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+      await ingestFiles(join(repo, "root.ts"), { format: "text", suppressOutput: true, printSummary: false });
+      expect(stored().extractor, "a single-file run must not vouch for the rest").toBe("tree-sitter/0.1");
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("commits a healthy repo in one bulk, with no per-file fan-out", async () => {
