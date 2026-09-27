@@ -9,7 +9,7 @@ metadata:
 
 # Ix — Persistent Codebase Map
 
-Ix parses a repository with tree-sitter (26 languages) into a graph of symbols,
+Ix parses a repository with tree-sitter (27 languages) into a graph of symbols,
 calls and imports, kept in a local backend (ArangoDB via Docker) and persisted
 between sessions. Query it for structural answers — what a symbol is, what calls
 it, how a flow moves, what a change breaks, which files carry the most weight,

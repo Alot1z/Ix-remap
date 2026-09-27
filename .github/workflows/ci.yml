@@ -560,6 +560,29 @@ jobs:
       - name: Check markdown links
         run: node ix-cli/scripts/check-links.mjs
 
+  # The docs site renders docs/llm-format.md, docs/api/ and
+  # skills/ix/references/flags.md at build time, so a change to any of them can
+  # break it without touching docs-site/. In CI Passed's `needs` so that gates
+  # the merge; it lived in its own workflow, which branch protection ignores.
+  docs-site:
+    name: Build docs site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
   # One stable required-status-check context. Branch protection requires only
   # this job, so the matrix can be reshaped without orphaning required checks.
   # Fails if any upstream job failed OR was skipped/cancelled.
@@ -596,7 +619,7 @@ jobs:
   ci-success:
     name: CI Passed
     if: always()
-    needs: [static, test, e2e, api-parity, doc-parity, links, harness-install-smoke, harness-install-smoke-windows]
+    needs: [static, test, e2e, api-parity, doc-parity, links, docs-site, harness-install-smoke, harness-install-smoke-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
@@ -607,6 +630,7 @@ jobs:
           echo "api-parity=${{ needs.api-parity.result }}"
           echo "doc-parity=${{ needs.doc-parity.result }}"
           echo "links=${{ needs.links.result }}"
+          echo "docs-site=${{ needs.docs-site.result }}"
           echo "harness-install-smoke=${{ needs.harness-install-smoke.result }}"
           echo "harness-install-smoke-windows=${{ needs.harness-install-smoke-windows.result }}"
           [ "${{ needs.static.result }}" = "success" ] \
@@ -615,5 +639,6 @@ jobs:
             && [ "${{ needs.api-parity.result }}" = "success" ] \
             && [ "${{ needs.doc-parity.result }}" = "success" ] \
             && [ "${{ needs.links.result }}" = "success" ] \
+            && [ "${{ needs.docs-site.result }}" = "success" ] \
             && [ "${{ needs.harness-install-smoke.result }}" = "success" ] \
             && [ "${{ needs.harness-install-smoke-windows.result }}" = "success" ]

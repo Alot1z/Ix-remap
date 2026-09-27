@@ -74,7 +74,13 @@ into a prompt or read by an agent.
 ix context IngestionService --format llm
 ix context IngestionService --max-tokens 6000     # a larger evidence budget (default 3000)
 ix context IngestionService --save ingest-review  # keep it to resume or diff later
+ix context --from-issue issue.md                  # start from a bug report instead of a name
+gh issue view 42 --json body -q .body | ix context --from-issue -
 ```
+
+With `--from-issue`, Ix resolves the file paths (including those in stack traces and GitHub links) and code names the
+issue mentions to up to three definitions, builds the bundle around the first, and ranks the other files by how well
+they match the issue's text. When nothing resolves, it starts from the best-matching file.
 
 ## Tips
 
