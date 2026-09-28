@@ -73,7 +73,11 @@ surfaces (#575).
   them per direction in each `summary`. When `ix trace --to` finds no route, a
   search a bound cut short adds the same code after `no_path`; a bare `no_path`
   means the whole reachable graph was searched. `--depth` and `--cap` take
-  anything.
+  anything. When the cap cuts a `depends` or directional `trace` walk, the
+  nodes kept are the shallowest: every node at depth d before any at depth
+  d+1, so the first level is complete before the second begins. (The walk
+  used to be depth-first, and could spend the whole cap down its first
+  branch.) A walk the cap does not cut is the same tree it always was.
 - **`ix ingest` honours `--exclude <glob>` and a `.ixignore` at the ingest
   root.** A deliberate subset of `.gitignore`: `#` comments, `*`, `?`, `**`, a
   leading `/` to anchor at the root, a trailing `/` for directories only, and a

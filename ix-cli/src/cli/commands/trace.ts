@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveFileOrEntityFull, resolveFileOrReport, isRawId, activeReadScope, ensureReadScope } from "../resolve.js";
+import { resolveFileOrEntityFull, resolveFileOrReport, activeReadScope, ensureReadScope } from "../resolve.js";
 import type { ResolvedEntity } from "../resolve.js";
 import {
   renderSection,
@@ -18,6 +18,7 @@ import { compactTreeNode, relativePath, printJson } from "../format.js";
 import { llmLine, llmShortId, type LlmValue } from "../llm.js";
 import { traversalHint } from "./depends.js";
 import { parsePickOption } from "../options.js";
+import { createLimiter, EXPAND_CONCURRENCY, walkTree, type Limiter, type TreeWalkResult } from "../tree-walk.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -172,72 +173,28 @@ async function buildTraceTree(
     predicates: string[];
     maxDepth: number;
     maxNodes: number;
+    limiter?: Limiter;
   },
-): Promise<{
-  tree: TraceNode[];
-  truncated: boolean;
-  depthLimited: boolean;
-  nodesVisited: number;
-  maxDepthReached: number;
-}> {
-  const { direction, predicates, maxDepth, maxNodes } = opts;
-  const visited = new Set<string>([rootId]);
-  let nodesVisited = 0;
-  let truncated = false;
-  let depthLimited = false;
-  let maxDepthReached = 0;
-
-  async function expand(nodeId: string, depth: number): Promise<TraceNode[]> {
-    // See depends.ts: stopping at the depth bound is not evidence that
-    // anything was cut off.
-    if (depth > maxDepth) { depthLimited = true; return []; }
-    if (nodesVisited >= maxNodes) { truncated = true; return []; }
-    maxDepthReached = Math.max(maxDepthReached, depth);
-
+): Promise<TreeWalkResult<TraceNode>> {
+  const { direction, predicates, maxDepth, maxNodes, limiter } = opts;
+  return walkTree<TraceNode>({
+    rootId,
+    maxDepth,
+    maxNodes,
     // One call per predicate (matches depends.ts behaviour — order and dedup are stable)
-    const results = await Promise.all(
-      predicates.map((p) => client.expand(nodeId, { direction, predicates: [p], hops: 1 })),
-    );
-
-    const children: TraceNode[] = [];
-    const levelSeen = new Set<string>();
-
-    for (const result of results) {
-      for (const n of result.nodes) {
-        if (nodesVisited >= maxNodes) { truncated = true; break; }
-        if (levelSeen.has(n.id)) continue;
-
-        const name = n.name || n.attrs?.name || "";
-        const resolved = !!name && !isRawId(name);
-        const isCycle = visited.has(n.id);
-
-        nodesVisited++;
-        levelSeen.add(n.id);
-        visited.add(n.id);
-
-        const child: TraceNode = {
-          id: n.id,
-          name: resolved ? name : n.id.slice(0, 8),
-          kind: n.kind ?? "unknown",
-          resolved,
-          path: n.provenance?.sourceUri ?? n.provenance?.source_uri ?? undefined,
-          children: [],
-          ...(isCycle ? { cycle: true } : {}),
-        };
-
-        if (!isCycle && resolved) {
-          child.children = await expand(n.id, depth + 1);
-        }
-
-        children.push(child);
-      }
-    }
-
-    return children;
-  }
-
-  const tree = await expand(rootId, 1);
-  return { tree, truncated, depthLimited, nodesVisited, maxDepthReached };
+    predicates,
+    expand: (nodeId, p) => client.expand(nodeId, { direction, predicates: [p], hops: 1 }),
+    makeNode: (n, _p, { name, resolved, cycle }) => ({
+      id: n.id,
+      name: resolved ? name : n.id.slice(0, 8),
+      kind: n.kind ?? "unknown",
+      resolved,
+      path: n.provenance?.sourceUri ?? n.provenance?.source_uri ?? undefined,
+      children: [],
+      ...(cycle ? { cycle: true } : {}),
+    }),
+    limiter,
+  });
 }
 
 // ── Path search (BFS) ────────────────────────────────────────────────
@@ -274,46 +231,68 @@ export async function searchPath(
   if (fromId === toId) return { path: [{ id: fromId, name: "", kind: "" }], cut: false };
   const nodeMap = new Map<string, { name: string; kind: string }>();
 
-  const queue: Array<{ id: string; path: string[] }> = [{ id: fromId, path: [fromId] }];
+  // Breadth-first as before, and still read one entry at a time in queue
+  // order, so the route returned — the shortest, first-queued on a tie — does
+  // not change. What changes is that an entry's neighbours are requested as
+  // soon as it is queued, a bounded number at a time, instead of when the
+  // loop reaches it.
+  const limit = createLimiter(EXPAND_CONCURRENCY);
+  let done = false;
+  const noNodes = { nodes: [] as any[], edges: [] as any[] };
+  const neighbours = (id: string) => {
+    const both = Promise.all([
+      limit(() => (done ? Promise.resolve(noNodes) : client.expand(id, { direction: "out", predicates, hops: 1 }))),
+      limit(() => (done ? Promise.resolve(noNodes) : client.expand(id, { direction: "in", predicates, hops: 1 }))),
+    ]);
+    both.catch(() => {}); // read later, or never once a route is found
+    return both;
+  };
+  type Entry = { id: string; path: string[]; next?: ReturnType<typeof neighbours> };
+  const enqueue = (id: string, path: string[]): Entry =>
+    // An entry at the depth bound is never expanded, so nothing is fetched for it.
+    ({ id, path, next: path.length - 1 >= maxDepth ? undefined : neighbours(id) });
+
+  const queue: Entry[] = [enqueue(fromId, [fromId])];
   const visited = new Set<string>([fromId]);
   let depthCut = false;
 
-  while (queue.length > 0) {
-    const entry = queue.shift()!;
-    const { id, path } = entry;
-    if (path.length - 1 >= maxDepth) {
-      depthCut = true;
-      continue;
-    }
-
-    const [outResult, inResult] = await Promise.all([
-      client.expand(id, { direction: "out", predicates, hops: 1 }),
-      client.expand(id, { direction: "in", predicates, hops: 1 }),
-    ]);
-
-    for (const n of [...outResult.nodes, ...inResult.nodes]) {
-      if (visited.has(n.id)) continue;
-      if (visited.size >= maxNodes) return { path: null, cut: true, cutReason: "node-cap" };
-      visited.add(n.id);
-      const name = n.name || n.attrs?.name || n.id.slice(0, 8);
-      if (!nodeMap.has(n.id)) {
-        nodeMap.set(n.id, { name, kind: n.kind ?? "unknown" });
+  try {
+    for (let head = 0; head < queue.length; head++) {
+      const { path, next } = queue[head];
+      if (!next) {
+        depthCut = true;
+        continue;
       }
 
-      if (n.id === toId) {
-        const fullPath = [...path, n.id];
-        return {
-          path: fullPath.map((nodeId) => {
-            if (nodeId === fromId) return { id: nodeId, name: "", kind: "" }; // filled below
-            const meta = nodeMap.get(nodeId) ?? { name: nodeId.slice(0, 8), kind: "unknown" };
-            return { id: nodeId, ...meta };
-          }),
-          cut: false,
-        };
-      }
+      const [outResult, inResult] = await next;
 
-      queue.push({ id: n.id, path: [...path, n.id] });
+      for (const n of [...outResult.nodes, ...inResult.nodes]) {
+        if (visited.has(n.id)) continue;
+        if (visited.size >= maxNodes) return { path: null, cut: true, cutReason: "node-cap" };
+        visited.add(n.id);
+        const name = n.name || n.attrs?.name || n.id.slice(0, 8);
+        if (!nodeMap.has(n.id)) {
+          nodeMap.set(n.id, { name, kind: n.kind ?? "unknown" });
+        }
+
+        if (n.id === toId) {
+          const fullPath = [...path, n.id];
+          return {
+            path: fullPath.map((nodeId) => {
+              if (nodeId === fromId) return { id: nodeId, name: "", kind: "" }; // filled below
+              const meta = nodeMap.get(nodeId) ?? { name: nodeId.slice(0, 8), kind: "unknown" };
+              return { id: nodeId, ...meta };
+            }),
+            cut: false,
+          };
+        }
+
+        queue.push(enqueue(n.id, [...path, n.id]));
+      }
     }
+  } finally {
+    // Whatever is still queued behind the limiter is not sent.
+    done = true;
   }
 
   return { path: null, cut: depthCut, cutReason: depthCut ? "depth" : undefined };
@@ -674,9 +653,11 @@ export function registerTraceCommand(program: Command): void {
 
         // ── Both: run up + down in parallel ────────────────────────
         if (doBoth) {
+          // One limiter for both walks, so the in-flight bound is per command.
+          const limiter = createLimiter(EXPAND_CONCURRENCY);
           const [upResult, downResult] = await Promise.all([
-            buildTraceTree(client, target.id, { direction: "in", predicates, maxDepth, maxNodes }),
-            buildTraceTree(client, target.id, { direction: "out", predicates, maxDepth, maxNodes }),
+            buildTraceTree(client, target.id, { direction: "in", predicates, maxDepth, maxNodes, limiter }),
+            buildTraceTree(client, target.id, { direction: "out", predicates, maxDepth, maxNodes, limiter }),
           ]);
 
           // ── JSON ──────────────────────────────────────────────
