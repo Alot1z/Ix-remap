@@ -159,27 +159,27 @@ describe("ix trace directional output against the depth-first walk", () => {
   beforeEach(() => { inFlight = 0; maxInFlight = 0; });
   afterEach(() => vi.restoreAllMocks());
 
-  it("is identical upstream, downstream and both ways when no cap cuts", async () => {
-    for (let seed = 1; seed <= 12; seed++) {
-      const graph = randomGraph(seed, 25, 2);
-      for (const [depth, cap] of [[1000, 1000000], [3, 1000000], [2, 1000000]] as const) {
-        const bounds = ["--depth", String(depth), "--cap", String(cap)];
-        const up = await expected(graph, "in", depth, cap);
-        const down = await expected(graph, "out", depth, cap);
+  // One test per graph: each runs the whole command nine times, and all twelve
+  // in one test outran the 20 s timeout on the Windows CI runner.
+  it.each(Array.from({ length: 12 }, (_, i) => i + 1))("is identical upstream, downstream and both ways when no cap cuts (graph %i)", async (seed) => {
+    const graph = randomGraph(seed, 25, 2);
+    for (const [depth, cap] of [[1000, 1000000], [3, 1000000], [2, 1000000]] as const) {
+      const bounds = ["--depth", String(depth), "--cap", String(cap)];
+      const up = await expected(graph, "in", depth, cap);
+      const down = await expected(graph, "out", depth, cap);
 
-        serve(graph, seed);
-        const upOut = await trace(["--upstream", ...bounds]);
-        expect({ tree: upOut.tree ?? [], summary: upOut.summary }, `seed ${seed} up`).toEqual({ tree: up.tree, summary: up.summary });
+      serve(graph, seed);
+      const upOut = await trace(["--upstream", ...bounds]);
+      expect({ tree: upOut.tree ?? [], summary: upOut.summary }, `seed ${seed} up`).toEqual({ tree: up.tree, summary: up.summary });
 
-        serve(graph, seed + 100);
-        const downOut = await trace(["--downstream", ...bounds]);
-        expect({ tree: downOut.tree ?? [], summary: downOut.summary }, `seed ${seed} down`).toEqual({ tree: down.tree, summary: down.summary });
+      serve(graph, seed + 100);
+      const downOut = await trace(["--downstream", ...bounds]);
+      expect({ tree: downOut.tree ?? [], summary: downOut.summary }, `seed ${seed} down`).toEqual({ tree: down.tree, summary: down.summary });
 
-        serve(graph, seed + 200);
-        const both = await trace(bounds);
-        expect(both.upstream, `seed ${seed} both/up`).toEqual(up);
-        expect(both.downstream, `seed ${seed} both/down`).toEqual(down);
-      }
+      serve(graph, seed + 200);
+      const both = await trace(bounds);
+      expect(both.upstream, `seed ${seed} both/up`).toEqual(up);
+      expect(both.downstream, `seed ${seed} both/down`).toEqual(down);
     }
   });
 
