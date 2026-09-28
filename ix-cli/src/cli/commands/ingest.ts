@@ -13,7 +13,10 @@ import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
 import { getEndpoint, resolveWorkspaceRoot, clearStitchScopeCache } from '../config.js';
-import { extractorChanged, isRev, loadIngestBaseline, saveIngestBaseline } from '../ingest-baseline.js';
+import {
+  clearRebuildProgress, extractorChanged, isRev, loadIngestBaseline, loadRebuildProgress,
+  saveIngestBaseline, saveRebuildProgress,
+} from '../ingest-baseline.js';
 import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
 import { loadIngestionModules } from './ingestion-loader.js';
@@ -869,6 +872,9 @@ export async function commitBulkWithPayloadSplit<T, R>(
 export function advanceRev(current: number, incoming: unknown): number {
   return isRev(incoming) && incoming > current ? incoming : current;
 }
+
+/** How often, at most, an extractor re-ingest records its progress to disk. */
+const REBUILD_PROGRESS_SAVE_MS = 2_000;
 
 // ---------------------------------------------------------------------------
 // Mtime cache — skip readFileSync+sha256 for unchanged files
@@ -1939,17 +1945,32 @@ export async function ingestFiles(
     // skip the mtime pre-filter and re-ingest everything, exactly like --force.
     const previousBaseline = loadIngestBaseline(projectRoot);
     const currentExtractor = extractorName();
-    if (!opts.force && extractorChanged(previousBaseline, currentExtractor)) {
-      process.stderr.write(
-        `\n  [extractor changed] ${previousBaseline?.extractor ?? 'unrecorded'} -> ${currentExtractor}. ` +
-        `Re-ingesting every file once.\n`,
-      );
-      opts.force = true;
-    }
     // A --lang or single-file run re-extracts only its own files, so it must
     // not record the new extractor for the rest; keep the old one and the next
     // full run still re-ingests them.
-    const baselineExtractor = (opts.lang || stat.isFile()) ? previousBaseline?.extractor : currentExtractor;
+    const partialRun = Boolean(opts.lang) || stat.isFile();
+    const baselineExtractor = partialRun ? previousBaseline?.extractor : currentExtractor;
+    // Files a full re-ingest for this extractor has committed, recorded as they
+    // land so a run cut short resumes instead of starting over; null when no
+    // such re-ingest is under way.
+    let rebuildProgress: Map<string, number> | null = null;
+    let resumedRebuild: Map<string, number> | null = null;
+    if (!opts.force && extractorChanged(previousBaseline, currentExtractor)) {
+      if (!partialRun) {
+        const done = workspaceMigrated ? null : loadRebuildProgress(projectRoot, currentExtractor);
+        if (done && done.size > 0) resumedRebuild = done;
+        rebuildProgress = new Map(done ?? []);
+      }
+      process.stderr.write(
+        `\n  [extractor changed] ${previousBaseline?.extractor ?? 'unrecorded'} -> ${currentExtractor}. ` +
+        (resumedRebuild
+          ? `Resuming the re-ingest: ${resumedRebuild.size} of ${filePaths.length} files already done.\n`
+          : `Re-ingesting every file once.\n`),
+      );
+      // A resumed re-ingest is not forced: the files it already committed are
+      // skipped by mtime below, and every other file is forced one by one.
+      if (!resumedRebuild) opts.force = true;
+    }
     const previousMtimes = previousBaseline?.files ?? new Map<string, number>();
     const {
       previousDeletedFiles,
@@ -1962,7 +1983,28 @@ export async function ingestFiles(
     );
     const mtimeCache = (opts.force || workspaceMigrated)
       ? new Map<string, number>()
-      : new Map(previousMtimes);
+      : new Map(resumedRebuild ?? previousMtimes);
+    if (resumedRebuild) {
+      for (const filePath of filePaths) if (!resumedRebuild.has(filePath)) forceReingestPaths.add(filePath);
+    }
+    let rebuildSavedAt = 0;
+    // Committed patches carry the workspace-relative path; progress is keyed
+    // like the mtime baseline, by absolute path. Built on first use, after the
+    // stat loop below has filled `currentMtimes`.
+    let absoluteOf: Map<string, string> | undefined;
+    const noteRebuilt = rebuildProgress === null ? undefined : (item: { filePath: string }): void => {
+      absoluteOf ??= new Map([...currentMtimes.keys()].map(abs => [toWorkspaceRelative(abs), abs]));
+      const abs = absoluteOf.get(item.filePath);
+      const mtime = abs === undefined ? undefined : currentMtimes.get(abs);
+      if (abs === undefined || mtime === undefined) return;
+      rebuildProgress!.set(abs, mtime);
+      // Throttled: the whole map is rewritten each time, and a cut-short run
+      // loses at most this much of its work.
+      if (Date.now() - rebuildSavedAt >= REBUILD_PROGRESS_SAVE_MS) {
+        rebuildSavedAt = Date.now();
+        saveRebuildProgress(projectRoot, currentExtractor, rebuildProgress!);
+      }
+    };
     const currentMtimes = new Map<string, number>();
 
     // DB-reset guard: if the mtime cache has entries but the server returns no hashes
@@ -1973,6 +2015,8 @@ export async function ingestFiles(
       const sampleHashes = await loadExistingHashes(client, samplePaths, toWorkspaceRelative, sourceWorkspaceIdOf, debug);
       if (sampleHashes.size === 0) {
         mtimeCache.clear();
+        // What an unfinished re-ingest committed is gone with the rest.
+        rebuildProgress?.clear();
         if (debug) process.stderr.write(`\n  DB reset detected — invalidating mtime cache\n`);
       }
     }
@@ -2846,7 +2890,7 @@ export async function ingestFiles(
           }
         }
         if (preparedPatches.length === 0) return;
-        commitMs += await commitPreparedPatches(preparedPatches, batch.length);
+        commitMs += await commitPreparedPatches(preparedPatches, batch.length, { onCommitted: noteRebuilt });
       } finally {
         const totalSaveMs = Math.round(performance.now() - saveStart);
         timings.resolveMs += resolveEdgesMs;
@@ -2927,7 +2971,7 @@ export async function ingestFiles(
           progressCurrent = allParsed.length;
           return;
         }
-        commitMs += await commitPreparedPatches(preparedPatches, allParsed.length, { updateProgress: true });
+        commitMs += await commitPreparedPatches(preparedPatches, allParsed.length, { updateProgress: true, onCommitted: noteRebuilt });
       } finally {
         const totalSaveMs = Math.round(performance.now() - saveStart);
         timings.resolveMs += resolveEdgesMs;
@@ -3311,7 +3355,7 @@ export async function ingestFiles(
     // three guards would start caching mtimes for files whose patches never
     // landed. The next run would skip them as unchanged and they would stay
     // missing from the graph until a --force.
-    persistIngestBaselineIfClean(
+    const baselinePersisted = persistIngestBaselineIfClean(
       projectRoot,
       currentMtimes,
       latestRev,
@@ -3329,6 +3373,12 @@ export async function ingestFiles(
       nextDeletedFiles,
       baselineExtractor,
     );
+    if (rebuildProgress !== null) {
+      // Finished: the baseline now records the new extractor. Otherwise keep
+      // what landed, so the next run resumes from here.
+      if (baselinePersisted) clearRebuildProgress(projectRoot);
+      else saveRebuildProgress(projectRoot, currentExtractor, rebuildProgress);
+    }
 
     // Migration cleanup (Ix#225 gap 2): the re-ingest under the new path-based id has
     // committed, so delete the OLD id's now-orphaned nodes/edges/patches. Best-effort —

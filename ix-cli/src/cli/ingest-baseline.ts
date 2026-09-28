@@ -2,7 +2,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ingestMtimeCachePath } from "./config.js";
+import { ingestMtimeCachePath, ingestRebuildPath } from "./config.js";
 
 interface SerializedIngestBaseline {
   root: string;
@@ -138,4 +138,50 @@ export function saveIngestBaseline(
  */
 export function extractorChanged(baseline: IngestBaseline | null, current: string): boolean {
   return baseline !== null && baseline.extractor !== current;
+}
+
+/**
+ * Files an unfinished re-ingest for `extractor` has already committed, with the
+ * mtime each had then; null when there is none for this extractor.
+ *
+ * The re-ingest an extractor change forces takes about twice a first map, and
+ * the mtime baseline is written only when a run finishes. So a run cut short --
+ * an editor hook's timeout, a closed terminal -- used to leave nothing behind,
+ * and every later run started over and could be cut short at the same point.
+ * Recording progress as files land lets the next run skip what is done.
+ */
+export function loadRebuildProgress(projectRoot: string, extractor: string): Map<string, number> | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(ingestRebuildPath(projectRoot), "utf-8")) as {
+      root?: unknown; extractor?: unknown; files?: Record<string, unknown>;
+    };
+    if (data.root !== projectRoot || data.extractor !== extractor || !data.files || typeof data.files !== "object") {
+      return null;
+    }
+    const files = new Map<string, number>();
+    for (const [filePath, mtime] of Object.entries(data.files)) {
+      if (typeof mtime === "number" && Number.isFinite(mtime)) files.set(filePath, mtime);
+    }
+    return files;
+  } catch {
+    return null;
+  }
+}
+
+export function saveRebuildProgress(projectRoot: string, extractor: string, files: Map<string, number>): void {
+  try {
+    const target = ingestRebuildPath(projectRoot);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    // Via a temp file and rename: a process killed mid-write would otherwise
+    // leave a truncated file, and the next run would start over.
+    const tmp = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ root: projectRoot, extractor, files: Object.fromEntries(files) }));
+    fs.renameSync(tmp, target);
+  } catch {
+    // Progress is an optimization; losing it costs a longer re-ingest, not data.
+  }
+}
+
+export function clearRebuildProgress(projectRoot: string): void {
+  try { fs.rmSync(ingestRebuildPath(projectRoot), { force: true }); } catch { /* non-critical */ }
 }
