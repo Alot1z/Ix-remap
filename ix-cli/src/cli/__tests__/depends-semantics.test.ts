@@ -11,6 +11,8 @@ import * as path from "node:path";
 
 const dependsTsPath = path.resolve(__dirname, "../commands/depends.ts");
 const dependsContent = fs.readFileSync(dependsTsPath, "utf-8");
+// The walk itself is shared with `ix trace`.
+const walkContent = fs.readFileSync(path.resolve(__dirname, "../tree-walk.ts"), "utf-8");
 
 // ── Direction semantics ─────────────────────────────────────────────
 
@@ -42,9 +44,11 @@ describe("depends full-tree traversal", () => {
   });
 
   it("expands recursively via one-hop calls", () => {
-    // Uses hops: 1 for each level, then recurses
+    // Uses hops: 1 for each level; the shared walk fetches breadth-first and
+    // builds the tree by the depth-first recursion it always used.
     expect(dependsContent).toContain("hops: 1");
-    expect(dependsContent).toContain("await expand(n.id, depth + 1)");
+    expect(dependsContent).toContain("walkTree<DependencyNode>");
+    expect(walkContent).toContain("await expand(n.id, depth + 1)");
   });
 
   it("defaults to full traversal without --depth", () => {
@@ -59,20 +63,20 @@ describe("depends full-tree traversal", () => {
   });
 
   it("has cycle detection", () => {
-    expect(dependsContent).toContain("visited.has(n.id)");
+    expect(walkContent).toContain("visited.has(n.id)");
     expect(dependsContent).toContain("cycle: true");
   });
 
   it("has node cap safety limit", () => {
     expect(dependsContent).toContain("MAX_NODES");
-    expect(dependsContent).toContain("nodesVisited >= maxNodes");
+    expect(walkContent).toContain("nodesVisited >= opts.maxNodes");
   });
 
   it("reports a cap cut and a depth stop as the different things they are", () => {
     // Only the node cap can know that nodes were lost; reaching the depth
     // bound means the walk stopped descending, which is not the same claim.
-    expect(dependsContent).toContain("truncated = true");
-    expect(dependsContent).toContain("depthLimited = true");
+    expect(walkContent).toContain("truncated = true");
+    expect(walkContent).toContain("depthLimited = true");
     expect(dependsContent).toContain("traversalHint");
   });
 });

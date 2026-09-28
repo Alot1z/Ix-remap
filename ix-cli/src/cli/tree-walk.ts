@@ -1,0 +1,260 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
+import { isRawId } from "./resolve.js";
+
+/**
+ * The one-hop tree walk behind `ix trace` (directional modes) and `ix depends`.
+ *
+ * Both used to recurse depth-first and await each child's whole subtree before
+ * starting its sibling, so a walk cost one round trip per expanded node, in
+ * series: on the Ix repo's own graph, 1.2-1.8 s of a command whose client work
+ * was ~0.1 s. Here the fetching is breadth-first — a node's neighbours are
+ * requested the moment the node is discovered, through a bounded limiter — and
+ * the tree is built from the fetched lists in a fixed order, so which request
+ * returns first never shows in the output.
+ *
+ * Which tree comes back:
+ *
+ * - **The walk fits the node cap** (always, when there is no cap). The
+ *   breadth-first pass has then fetched every node the old depth-first walk
+ *   would expand, and that walk is replayed over the fetched lists. The tree —
+ *   shape, child order, dedup, which occurrence of a shared node is expanded
+ *   and which is marked `cycle` — and the counters are the old walk's exactly,
+ *   except that a cap spent exactly on the last node is no longer reported as
+ *   `truncated` when nothing was left to drop.
+ *   Replaying matters: breadth-first order would expand a shared node at its
+ *   shallowest occurrence, depth-first order at its first one in pre-order.
+ *   It has a cost under a depth limit: a node the depth-first walk first met
+ *   at the limit, and so never expanded, is fetched anyway when it also sits
+ *   shallower. On `ix trace ingestFiles --upstream` that is 20 nodes fetched
+ *   for the old walk's 10 — still no slower, the requests being parallel.
+ * - **The cap cuts the walk.** The breadth-first tree is returned as it stood
+ *   when the cap was reached: every node at depth d is kept before any node at
+ *   depth d+1, where the depth-first walk spent the whole budget down its first
+ *   branch. `truncated` is set only when a node was actually dropped.
+ */
+
+/** Runs a task when a slot is free; FIFO, so requests go out in walk order. */
+export type Limiter = <T>(task: () => Promise<T>) => Promise<T>;
+
+/**
+ * How many expand requests one command keeps in flight. The backend's
+ * throughput on 276 real expand bodies: 1.7 s at 1, 0.60 s at 6, 0.43 s at 8,
+ * 0.29 s at 16. Eight is four times one-at-a-time without letting a hub flood
+ * a backend other clients share.
+ */
+export const EXPAND_CONCURRENCY = 8;
+
+export function createLimiter(max: number): Limiter {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const pump = (): void => {
+    while (active < max && waiting.length > 0) {
+      active++;
+      waiting.shift()!();
+    }
+  };
+  return <T>(task: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      waiting.push(() => {
+        Promise.resolve()
+          .then(task)
+          .then(resolve, reject)
+          .finally(() => {
+            active--;
+            pump();
+          });
+      });
+      pump();
+    });
+}
+
+export interface TreeWalkOptions<T extends { children: T[] }> {
+  rootId: string;
+  maxDepth: number;
+  maxNodes: number;
+  /** One expand per predicate; a node's children are merged in this order. */
+  predicates: string[];
+  expand: (nodeId: string, predicate: string) => Promise<{ nodes: any[] }>;
+  /** Reorders one predicate's neighbours before the cap sees them. */
+  order?: (nodes: any[]) => any[];
+  makeNode: (raw: any, predicate: string, seen: { name: string; resolved: boolean; cycle: boolean }) => T;
+  /** Shared when several walks run at once, so the bound holds across them. */
+  limiter?: Limiter;
+}
+
+export interface TreeWalkResult<T> {
+  tree: T[];
+  truncated: boolean;
+  depthLimited: boolean;
+  nodesVisited: number;
+  maxDepthReached: number;
+}
+
+type Neighbours = (nodeId: string) => Promise<any[][]>;
+
+interface WalkState {
+  visited: Set<string>;
+  nodesVisited: number;
+  truncated: boolean;
+  depthLimited: boolean;
+  maxDepthReached: number;
+}
+
+export async function walkTree<T extends { children: T[] }>(opts: TreeWalkOptions<T>): Promise<TreeWalkResult<T>> {
+  const limit = opts.limiter ?? createLimiter(EXPAND_CONCURRENCY);
+  const fetched = new Map<string, Promise<any[][]>>();
+  // Set once the walk is decided: requests still queued behind the limiter are
+  // then skipped instead of sent.
+  let done = false;
+
+  const neighbours: Neighbours = (nodeId) => {
+    let lists = fetched.get(nodeId);
+    if (!lists) {
+      lists = Promise.all(
+        opts.predicates.map((p) =>
+          limit(async () => (done ? [] : (await opts.expand(nodeId, p)).nodes)),
+        ),
+      ).then((raw) => (opts.order ? raw.map(opts.order) : raw));
+      // A prefetch the walk never reads must not surface as an unhandled
+      // rejection; one it does read still throws where it is awaited.
+      lists.catch(() => {});
+      fetched.set(nodeId, lists);
+    }
+    return lists;
+  };
+
+  try {
+    const levels = await breadthFirst(opts, neighbours);
+    if (levels.truncated) return levels;
+    return await depthFirst(opts, neighbours);
+  } finally {
+    done = true;
+  }
+}
+
+function newState(rootId: string): WalkState {
+  return { visited: new Set([rootId]), nodesVisited: 0, truncated: false, depthLimited: false, maxDepthReached: 0 };
+}
+
+/** Count and mark one neighbour, the way both walk orders do. */
+function admit<T extends { children: T[] }>(
+  opts: TreeWalkOptions<T>, state: WalkState, n: any, predicate: string,
+): { node: T; followed: boolean } {
+  const name = n.name || n.attrs?.name || "";
+  const resolved = !!name && !isRawId(name);
+  const cycle = state.visited.has(n.id);
+  state.nodesVisited++;
+  state.visited.add(n.id);
+  return { node: opts.makeNode(n, predicate, { name, resolved, cycle }), followed: resolved && !cycle };
+}
+
+/**
+ * The old recursive walk, unchanged except that it reads each node's
+ * neighbours from the lists the breadth-first pass already fetched — which
+ * also lets it tell a spent budget from a cut.
+ */
+async function depthFirst<T extends { children: T[] }>(
+  opts: TreeWalkOptions<T>, neighbours: Neighbours,
+): Promise<TreeWalkResult<T>> {
+  const state = newState(opts.rootId);
+
+  async function expand(nodeId: string, depth: number): Promise<T[]> {
+    // Stopping at the depth bound is not the same as cutting something off:
+    // there may have been nothing below. `truncated` stays a claim that nodes
+    // were definitely lost — which only the node cap can know — and
+    // `depthLimited` says the walk stopped descending.
+    if (depth > opts.maxDepth) { state.depthLimited = true; return []; }
+    const lists = await neighbours(nodeId);
+    if (state.nodesVisited >= opts.maxNodes) {
+      // The budget is spent, but a node with nothing below it loses nothing.
+      // (The recursive walk used to say `truncated` here regardless, so a cap
+      // spent exactly on the last node claimed a cut that dropped nothing.)
+      if (lists.some((l) => l.length > 0)) state.truncated = true;
+      return [];
+    }
+    state.maxDepthReached = Math.max(state.maxDepthReached, depth);
+
+    const children: T[] = [];
+    // A node reached through two predicates is one child, not a child and
+    // then a spurious cycle.
+    const levelSeen = new Set<string>();
+    for (let i = 0; i < lists.length; i++) {
+      for (const n of lists[i]) {
+        if (state.nodesVisited >= opts.maxNodes) { state.truncated = true; break; }
+        if (levelSeen.has(n.id)) continue;
+        levelSeen.add(n.id);
+        const { node, followed } = admit(opts, state, n, opts.predicates[i]);
+        if (followed) node.children = await expand(n.id, depth + 1);
+        children.push(node);
+      }
+    }
+    return children;
+  }
+
+  const tree = await expand(opts.rootId, 1);
+  return { tree, ...counters(state) };
+}
+
+/**
+ * The same walk in breadth-first order: a FIFO queue of nodes to expand, each
+ * one's neighbours requested when it is queued and read strictly in queue
+ * order.
+ */
+async function breadthFirst<T extends { children: T[] }>(
+  opts: TreeWalkOptions<T>, neighbours: Neighbours,
+): Promise<TreeWalkResult<T>> {
+  const state = newState(opts.rootId);
+  const tree: T[] = [];
+  const queue: Array<{ id: string; depth: number; into: T[] }> = [];
+  const enqueue = (id: string, depth: number, into: T[]): void => {
+    queue.push({ id, depth, into });
+    // Written as the negation of the check below, so a NaN bound (an
+    // unparseable --depth, which never stops the walk) still prefetches.
+    if (!(depth > opts.maxDepth)) void neighbours(id);
+  };
+
+  enqueue(opts.rootId, 1, tree);
+  for (let head = 0; head < queue.length; head++) {
+    const { id, depth, into } = queue[head];
+    if (depth > opts.maxDepth) { state.depthLimited = true; continue; }
+
+    const lists = await neighbours(id);
+    if (state.nodesVisited >= opts.maxNodes) {
+      // The budget is spent, but a node with nothing below it loses nothing:
+      // only a neighbour that would have been listed makes this a cut.
+      if (lists.some((l) => l.length > 0)) state.truncated = true;
+    } else {
+      state.maxDepthReached = Math.max(state.maxDepthReached, depth);
+      const levelSeen = new Set<string>();
+      for (let i = 0; i < lists.length && !state.truncated; i++) {
+        for (const n of lists[i]) {
+          if (state.nodesVisited >= opts.maxNodes) { state.truncated = true; break; }
+          if (levelSeen.has(n.id)) continue;
+          levelSeen.add(n.id);
+          const { node, followed } = admit(opts, state, n, opts.predicates[i]);
+          if (followed) enqueue(n.id, depth + 1, node.children);
+          into.push(node);
+        }
+      }
+    }
+
+    if (state.truncated) {
+      // Nodes already kept at the last allowed depth were never descended
+      // into, cap or no cap — the depth-first walk reported those too.
+      if (queue.slice(head + 1).some((q) => q.depth > opts.maxDepth)) state.depthLimited = true;
+      break;
+    }
+  }
+
+  return { tree, ...counters(state) };
+}
+
+function counters(state: WalkState): Omit<TreeWalkResult<never>, "tree"> {
+  return {
+    truncated: state.truncated,
+    depthLimited: state.depthLimited,
+    nodesVisited: state.nodesVisited,
+    maxDepthReached: state.maxDepthReached,
+  };
+}

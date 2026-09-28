@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrReport, printResolved, isRawId } from "../resolve.js";
+import { walkTree, type TreeWalkResult } from "../tree-walk.js";
 import { compactTreeNode, relativePath, printJson } from "../format.js";
 import { llmLine, llmShortId } from "../llm.js";
 import { parsePickOption } from "../options.js";
@@ -57,100 +58,40 @@ function nodePriority(n: any): number {
 // ── Tree building ───────────────────────────────────────────────────
 
 /**
- * Build a full dependency tree by recursive one-hop expansion.
+ * Build a full dependency tree by one-hop expansion (see tree-walk.ts for the
+ * order requests go out in and the tree that comes back).
  * Stops at: frontier end, cycle, depth limit, or node cap.
  */
 export async function buildDependencyTree(
   client: IxClient,
   rootId: string,
   opts?: { maxDepth?: number; maxNodes?: number; predicates?: string[] },
-): Promise<{
-  tree: DependencyNode[];
-  truncated: boolean;
-  depthLimited: boolean;
-  nodesVisited: number;
-  maxDepthReached: number;
-}> {
-  const maxDepth = opts?.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const maxNodes = opts?.maxNodes ?? MAX_NODES;
+): Promise<TreeWalkResult<DependencyNode>> {
   const activePredicates = (opts?.predicates ?? ALL_DEPENDENCY_PREDICATES).filter((p) => p in PREDICATE_META);
-  const visited = new Set<string>([rootId]);
-  let nodesVisited = 0;
-  let truncated = false;
-  let depthLimited = false;
-  let maxDepthReached = 0;
-
-  async function expand(nodeId: string, depth: number): Promise<DependencyNode[]> {
-    // Stopping at the depth bound is not the same as cutting something off:
-    // there may have been nothing below. `truncated` stays a claim that nodes
-    // were definitely lost — which only the node cap can know — and
-    // `depthLimited` says the walk stopped descending. With an infinite
-    // default the distinction never mattered; with a default of 3 it is the
-    // difference between a true report and a lie on most leaf branches.
-    if (depth > maxDepth) { depthLimited = true; return []; }
-    if (nodesVisited >= maxNodes) { truncated = true; return []; }
-
-    maxDepthReached = Math.max(maxDepthReached, depth);
-
-    const expandResults = await Promise.all(
-      activePredicates.map((p) => client.expand(nodeId, { direction: "in", predicates: [p], hops: 1 })),
-    );
-
-    const children: DependencyNode[] = [];
-    // Track IDs added at this level to suppress same-level duplicates from
-    // multiple edge types (e.g. a node that both EXTENDS and REFERENCES the
-    // root would otherwise appear twice, the second time as a spurious cycle).
-    const levelSeen = new Set<string>();
-
-    const processNodes = async (rawNodes: any[], relation: "called_by" | "imported_by" | "referenced_by" | "extended_by" | "implemented_by", sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES" | "EXTENDS" | "IMPLEMENTS") => {
-      // Rank before the cap, or the cap keeps whatever the graph returned
-      // first. A node whose name is a raw id is a dangling reference nothing
-      // can follow, and one with no path costs a `locate` before it can be
-      // read; neither should displace a node carrying both. Stable within a
-      // band, and the predicate order (CALLS before IMPLEMENTS) is untouched.
-      const nodes = [...rawNodes].sort((a, b) => nodePriority(a) - nodePriority(b));
-      for (const n of nodes) {
-        if (nodesVisited >= maxNodes) { truncated = true; break; }
-        // Skip if already emitted at this level via a different edge type.
-        if (levelSeen.has(n.id)) continue;
-        const name = n.name || n.attrs?.name || "";
-        const resolved = !!name && !isRawId(name);
-        const isCycle = visited.has(n.id);
-
-        nodesVisited++;
-        levelSeen.add(n.id);
-        visited.add(n.id);
-
-        const child: DependencyNode = {
-          id: n.id,
-          name: resolved ? name : n.id.slice(0, 8),
-          kind: n.kind ?? "unknown",
-          resolved,
-          relation,
-          sourceEdge,
-          path: n.provenance?.source_uri ?? n.provenance?.sourceUri ?? n.attrs?.path ?? undefined,
-          children: [],
-          ...(isCycle ? { cycle: true } : {}),
-        };
-
-        if (!isCycle && resolved) {
-          child.children = await expand(n.id, depth + 1);
-        }
-
-        children.push(child);
-      }
-    };
-
-    for (let i = 0; i < activePredicates.length; i++) {
-      const meta = PREDICATE_META[activePredicates[i]];
-      await processNodes(expandResults[i].nodes, meta.relation, meta.sourceEdge);
-    }
-
-    return children;
-  }
-
-  const tree = await expand(rootId, 1);
-  return { tree, truncated, depthLimited, nodesVisited, maxDepthReached };
+  return walkTree<DependencyNode>({
+    rootId,
+    maxDepth: opts?.maxDepth ?? DEFAULT_MAX_DEPTH,
+    maxNodes: opts?.maxNodes ?? MAX_NODES,
+    predicates: activePredicates,
+    expand: (nodeId, p) => client.expand(nodeId, { direction: "in", predicates: [p], hops: 1 }),
+    // Rank before the cap, or the cap keeps whatever the graph returned
+    // first. A node whose name is a raw id is a dangling reference nothing
+    // can follow, and one with no path costs a `locate` before it can be
+    // read; neither should displace a node carrying both. Stable within a
+    // band, and the predicate order (CALLS before IMPLEMENTS) is untouched.
+    order: (nodes) => [...nodes].sort((a, b) => nodePriority(a) - nodePriority(b)),
+    makeNode: (n, p, { name, resolved, cycle }) => ({
+      id: n.id,
+      name: resolved ? name : n.id.slice(0, 8),
+      kind: n.kind ?? "unknown",
+      resolved,
+      relation: PREDICATE_META[p].relation,
+      sourceEdge: PREDICATE_META[p].sourceEdge,
+      path: n.provenance?.source_uri ?? n.provenance?.sourceUri ?? n.attrs?.path ?? undefined,
+      children: [],
+      ...(cycle ? { cycle: true } : {}),
+    }),
+  });
 }
 
 // ── Tree rendering ──────────────────────────────────────────────────
