@@ -581,6 +581,29 @@ paths:
         "200":
           description: Patch
 
+  /v1/revisions/current:
+    get:
+      tags: [patches]
+      summary: Head revision of the graph
+      description: >-
+        The revision record of the latest commit, or the bare revision number
+        when the backend holds no record for it. Every committed patch in any
+        workspace advances it.
+      operationId: currentRevision
+      responses:
+        "200":
+          description: Head revision
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: integer
+                  - type: object
+                    properties:
+                      rev: { type: integer }
+                      patchId: { type: string }
+                      timestamp: { type: string }
+
   /v1/patch:
     post:
       tags: [patches]

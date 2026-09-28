@@ -521,6 +521,14 @@ List patches. **Query**: `limit`. **Response** — array of `PatchSummary`:
 
 Fetch a single patch.
 
+#### GET `/v1/revisions/current`
+
+Head revision of the graph. Every committed patch, in any workspace, advances
+it. **Response**: the head's revision record (`{ "rev": 217, "patchId": "…",
+"timestamp": "…", … }`) when the backend holds one, otherwise the bare number
+(`217`). `ix map` compares it with the revision its cached map was computed at
+and skips `POST /v1/map` when nothing has been committed since.
+
 #### POST `/v1/patch`
 
 Commit one patch. Client timeout **5 minutes**.
