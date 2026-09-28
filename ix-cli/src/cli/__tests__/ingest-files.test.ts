@@ -3,13 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { ingestFiles } from "../commands/ingest.js";
-import { ingestMtimeCachePath } from "../config.js";
+import { ingestMtimeCachePath, ingestRebuildPath } from "../config.js";
 
 /**
  * Integration tests that drive `ingestFiles` end to end against a fake backend.
@@ -102,6 +102,14 @@ class FakeBackend {
   bulk409AllLanded = false;
   /** Status for POST /v1/stitch. */
   stitchStatus = 200;
+  /**
+   * Answer `/v1/source-hashes` with the hashes of patches this fake accepted,
+   * as the real backend does. Off by default: with it off every lookup is
+   * empty, so the DB-reset guard sends each incremental run down the full
+   * path, which the tests written before it rely on.
+   */
+  rememberHashes = false;
+  private readonly hashes = new Map<string, { workspaceId: string | null; uri: string; hash: string }>();
 
   /** Forget every request so far, so a second run can be measured on its own. */
   resetRequests(): void {
@@ -110,6 +118,13 @@ class FakeBackend {
 
   get stitchCount(): number {
     return this.requests.filter((r) => r.path === "/v1/stitch").length;
+  }
+
+  /** Patches in commit requests the backend ACCEPTED. */
+  acceptedPatches(): number {
+    return this.requests
+      .filter(r => (r.path === "/v1/patches/bulk" || r.path === "/v1/patch") && r.code === 200)
+      .reduce((sum, r) => sum + r.patches, 0);
   }
 
   /** Bulk commits that the backend ACCEPTED, in order. */
@@ -207,10 +222,11 @@ class FakeBackend {
     };
 
     if (path === "/v1/patches/bulk" || path === "/v1/patch") {
-      let patches: Array<{ patchId?: string }> = [];
+      type SentPatch = { patchId?: string; source?: { uri?: string; sourceHash?: string; workspaceId?: string } };
+      let patches: SentPatch[] = [];
       try {
-        const parsed = JSON.parse(body) as { patches?: Array<{ patchId?: string }> };
-        patches = parsed.patches ?? [parsed as { patchId?: string }];
+        const parsed = JSON.parse(body) as { patches?: SentPatch[] };
+        patches = parsed.patches ?? [parsed as SentPatch];
       } catch {
         /* a body we cannot read is still a request */
       }
@@ -251,6 +267,14 @@ class FakeBackend {
       // and fires against a closed server.
       if (refused) return send(500, { error: "500: transaction begin timeout" });
       this.rev += patches.length || 1;
+      if (this.rememberHashes) {
+        for (const { source } of patches) {
+          if (source?.uri && source.sourceHash) {
+            this.hashes.set(`${source.workspaceId ?? ""}\0${source.uri}`,
+              { workspaceId: source.workspaceId ?? null, uri: source.uri, hash: source.sourceHash });
+          }
+        }
+      }
       // `status` included, because `PatchCommitResult` declares it required and
       // the ingest path branches on it. Serving 200s without it left
       // `result.status` undefined everywhere, so this fake could never produce
@@ -270,7 +294,13 @@ class FakeBackend {
     }
 
     if (path === "/v1/health") return send(200, { status: "ok", version: "1.0.28" });
-    if (path === "/v1/source-hashes") return send(200, []);
+    if (path === "/v1/source-hashes") {
+      if (!this.rememberHashes) return send(200, []);
+      let uris: string[] = [];
+      try { uris = (JSON.parse(body) as { uris?: string[] }).uris ?? []; } catch { /* none */ }
+      const wanted = new Set(uris);
+      return send(200, [...this.hashes.values()].filter((row) => wanted.has(row.uri)));
+    }
     if (path.startsWith("/v1/stitch/system/")) return send(200, { systemId: null });
     if (path === "/v1/stitch") {
       this.requests.push({ path, patches: 0 });
@@ -853,6 +883,43 @@ describe("ingestFiles against a fake backend", () => {
       writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
       await ingestFiles(join(repo, "root.ts"), { format: "text", suppressOutput: true, printSummary: false });
       expect(stored().extractor, "a single-file run must not vouch for the rest").toBe("tree-sitter/0.1");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("resumes an extractor re-ingest that was cut short instead of starting over", async () => {
+    // The re-ingest an extractor change forces takes about twice a first map,
+    // and an editor hook with a timeout can cut it short. The baseline is only
+    // written by a run that finishes, so without recorded progress every later
+    // run started over -- and could be cut short at the same point, forever.
+    fixture(30);
+    backend.rememberHashes = true;
+    const incremental = () =>
+      ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const stored = () =>
+      JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { extractor?: string };
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await incremental();
+      const current = stored().extractor;
+      writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+
+      // Cut short: three files' patches never land, so the run cannot finish.
+      backend.resetRequests();
+      backend.poison = ["m007.ts", "m015.ts", "m023.ts"];
+      await incremental().catch(() => undefined);
+      expect(stored().extractor, "an unfinished re-ingest must not vouch for the new extractor").toBe("tree-sitter/0.1");
+      expect(existsSync(ingestRebuildPath(repo)), "what landed is recorded").toBe(true);
+
+      backend.resetRequests();
+      backend.poison = [];
+      await incremental();
+      const notices = stderr.mock.calls.map(([chunk]) => String(chunk)).filter(c => c.includes("[extractor changed]"));
+      expect(notices.at(-1)).toContain("Resuming the re-ingest: 27 of 30 files already done.");
+      expect(backend.acceptedPatches(), "only the three that never landed are sent again").toBe(3);
+      expect(stored().extractor).toBe(current);
+      expect(existsSync(ingestRebuildPath(repo)), "a finished re-ingest leaves no progress behind").toBe(false);
     } finally {
       stderr.mockRestore();
     }

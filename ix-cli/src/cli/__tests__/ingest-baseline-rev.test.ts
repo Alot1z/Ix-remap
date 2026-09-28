@@ -5,8 +5,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { ingestMtimeCachePath } from "../config.js";
-import { extractorChanged, loadIngestBaseline, saveIngestBaseline } from "../ingest-baseline.js";
+import { clearIngestMtimeCache, ingestMtimeCachePath, ingestRebuildPath } from "../config.js";
+import {
+  clearRebuildProgress, extractorChanged, loadIngestBaseline, loadRebuildProgress, saveIngestBaseline, saveRebuildProgress,
+} from "../ingest-baseline.js";
 import { advanceRev } from "../commands/ingest.js";
 
 let home: string;
@@ -129,5 +131,37 @@ describe("ingest baseline extractor", () => {
 
     saveIngestBaseline(root, files, 1);
     expect(extractorChanged(loadIngestBaseline(root), "tree-sitter/9.9")).toBe(true);
+  });
+});
+
+describe("extractor re-ingest progress", () => {
+  const done = new Map<string, number>([["/p/a.ts", 1_000], ["/p/b.ts", 2_000]]);
+
+  it("round-trips for the same root and extractor only", () => {
+    const root = path.join(home, "p");
+    saveRebuildProgress(root, "tree-sitter/9.9", done);
+    expect(loadRebuildProgress(root, "tree-sitter/9.9")).toEqual(done);
+    expect(loadRebuildProgress(root, "tree-sitter/9.10"), "progress toward another extractor").toBeNull();
+    expect(loadRebuildProgress(path.join(home, "q"), "tree-sitter/9.9")).toBeNull();
+  });
+
+  it("reads a damaged file as no progress", () => {
+    const root = path.join(home, "p");
+    saveRebuildProgress(root, "tree-sitter/9.9", done);
+    fs.writeFileSync(ingestRebuildPath(root), "{\"root\":");
+    expect(loadRebuildProgress(root, "tree-sitter/9.9")).toBeNull();
+  });
+
+  it("is cleared on completion and with the mtime cache", () => {
+    const root = path.join(home, "p");
+    saveRebuildProgress(root, "tree-sitter/9.9", done);
+    clearRebuildProgress(root);
+    expect(fs.existsSync(ingestRebuildPath(root))).toBe(false);
+
+    // `ix reset` and workspace migration clear the mtime cache: the progress
+    // describes the same graph and must go with it.
+    saveRebuildProgress(root, "tree-sitter/9.9", done);
+    clearIngestMtimeCache(root);
+    expect(fs.existsSync(ingestRebuildPath(root))).toBe(false);
   });
 });

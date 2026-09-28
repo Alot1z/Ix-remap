@@ -18,6 +18,16 @@ export function ingestMtimeCachePath(projectRoot: string): string {
   return join(ixHome(), `ingest_mtimes_${key}.json`);
 }
 
+/**
+ * Path to the progress of an unfinished re-ingest for a new extractor (see
+ * `loadRebuildProgress`). Cleared with the mtime cache, since it describes the
+ * same graph.
+ */
+export function ingestRebuildPath(projectRoot: string): string {
+  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  return join(ixHome(), `ingest_rebuild_${key}.json`);
+}
+
 /** Path to the architecture-map completion marker for one project root. */
 export function mapBaselinePath(projectRoot: string): string {
   const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
@@ -89,6 +99,7 @@ export function clearMapBaseline(projectRoot: string): void {
  */
 export function clearIngestMtimeCache(projectRoot: string): void {
   try { rmSync(ingestMtimeCachePath(projectRoot), { force: true }); } catch { /* non-critical */ }
+  try { rmSync(ingestRebuildPath(projectRoot), { force: true }); } catch { /* non-critical */ }
   clearMapBaseline(projectRoot);
 }
 
