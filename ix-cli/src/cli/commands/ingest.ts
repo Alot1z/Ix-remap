@@ -12,7 +12,7 @@ import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
-import { getEndpoint, resolveWorkspaceRoot, clearStitchScopeCache } from '../config.js';
+import { getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
 import {
   clearRebuildProgress, extractorChanged, isRev, loadIngestBaseline, loadRebuildProgress,
   saveIngestBaseline, saveRebuildProgress,
@@ -1053,6 +1053,17 @@ export interface IngestFilesSummary {
    * substring-matching English, which `StitchRefusal`'s own doc forbids.
    */
   stitchSkippedRule?: StitchRefusal;
+  /**
+   * True only when this run cannot have changed the graph: nothing was
+   * forced (by `--force`, a schema mismatch or an extractor change), the
+   * workspace was not migrated, the DB-reset guard did not fire, no patch or
+   * deletion was sent, no stitch was sent, and nothing failed.
+   *
+   * `ix map` reads it to decide whether it may reuse its last `/v1/map`
+   * response. It errs towards false: a run that only might have written
+   * something must not claim the graph is where it was.
+   */
+  graphUnchanged: boolean;
 }
 
 /**
@@ -1476,6 +1487,7 @@ export async function ingestFiles(
     process.stderr.write(
       `Migrated workspace to a stable path-based id; re-ingesting this workspace once.\n`,
     );
+    clearMapResultCache(workspaceRoot);
   }
   const toWorkspaceRelative = (absPath: string): string => {
     // Force workspace-local POSIX separators so IDs are stable across OS.
@@ -1735,6 +1747,13 @@ export async function ingestFiles(
   let filesChanged = 0;
   let patchesApplied = 0;
   let idempotentPatches = 0;
+  // What `graphUnchanged` is computed from, beside the counters above. Each is
+  // a way this run can have written to the graph, or have found it not where
+  // the last run left it, without a patch being counted.
+  let dbResetDetected = false;
+  let extractorRebuild = false;
+  let deletionsFound = false;
+  let stitchSent = false;
   let filesSkipped = 0;
   /**
    * Files skipped because we ASSUMED THEY WERE UNCHANGED. (Ix#568)
@@ -1970,6 +1989,8 @@ export async function ingestFiles(
       // A resumed re-ingest is not forced: the files it already committed are
       // skipped by mtime below, and every other file is forced one by one.
       if (!resumedRebuild) opts.force = true;
+      extractorRebuild = true;
+      clearMapResultCache(projectRoot);
     }
     const previousMtimes = previousBaseline?.files ?? new Map<string, number>();
     const {
@@ -2017,6 +2038,9 @@ export async function ingestFiles(
         mtimeCache.clear();
         // What an unfinished re-ingest committed is gone with the rest.
         rebuildProgress?.clear();
+        // And so is the hierarchy a cached map response describes.
+        dbResetDetected = true;
+        clearMapResultCache(projectRoot);
         if (debug) process.stderr.write(`\n  DB reset detected — invalidating mtime cache\n`);
       }
     }
@@ -2062,6 +2086,7 @@ export async function ingestFiles(
       : [...previousMtimes.keys()].filter(filePath =>
           !currentMtimes.has(filePath) && !fs.existsSync(filePath)
         );
+    if (deletedPaths.length > 0) deletionsFound = true;
 
     // Phase: hash lookup — only needed when files changed or were deleted.
     let knownHashes: Map<string, string>;
@@ -3531,6 +3556,7 @@ export async function ingestFiles(
             const stitchStart = performance.now();
             let res;
             try {
+              stitchSent = true;
               res = await client.stitch({ workspaceId, provides, consumes: stitchConsumes, exports: stitchExports, symbolConsumes });
             } catch (err) {
               // Settle before rethrowing, so the shared catch below still sees
@@ -3628,6 +3654,18 @@ export async function ingestFiles(
     stitchErrors,
     stitchSkipped,
     stitchSkippedRule,
+    graphUnchanged:
+      opts.force !== true &&
+      !workspaceMigrated &&
+      !dbResetDetected &&
+      !extractorRebuild &&
+      filesChanged === 0 &&
+      patchesApplied === 0 &&
+      !deletionsFound &&
+      !stitchSent &&
+      parseErrors + crashedParses() === 0 &&
+      commitErrors === 0 &&
+      stitchErrors === 0,
   };
   // `everTripped()` alone, and it is not a weakening: `recordFailure` has one
   // call site, in the per-file catch immediately after `commitErrors++`, so a

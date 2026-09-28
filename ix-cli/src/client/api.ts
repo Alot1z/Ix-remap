@@ -235,6 +235,18 @@ export class IxClient {
     return this.get(`/v1/patches/${id}`);
   }
 
+  /**
+   * The backend's head revision: every committed patch, in any workspace,
+   * advances it. One indexed lookup on the backend, so it is cheap enough to
+   * ask on every `ix map`.
+   *
+   * The body is the head's revision record when the backend has one, and the
+   * bare revision number when it does not; both are returned as-is.
+   */
+  async currentRevision(): Promise<unknown> {
+    return this.get("/v1/revisions/current");
+  }
+
   async diff(
     fromRev: number,
     toRev: number,
