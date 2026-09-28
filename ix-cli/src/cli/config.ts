@@ -35,6 +35,16 @@ export function mapBaselinePath(projectRoot: string): string {
 }
 
 /**
+ * Path to the last `/v1/map` response for one project root, which a map that
+ * ingested nothing reuses instead of asking again (see `map-result-cache.ts`).
+ * Cleared with the map baseline, since both describe the same hierarchy.
+ */
+export function mapResultCachePath(projectRoot: string): string {
+  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  return join(ixHome(), `map_result_${key}.json`);
+}
+
+/**
  * Path to the cached answer to "is this workspace stitched into a System?".
  *
  * Kept beside the ingest mtime cache and keyed the same way. See
@@ -86,9 +96,19 @@ export function clearStitchScopeCache(workspaceId: string): void {
   try { rmSync(stitchScopeCachePath(workspaceId), { force: true }); } catch { /* non-critical */ }
 }
 
-/** Remove only the architecture-map completion marker. Best-effort. */
+/** Drop the cached `/v1/map` response, so the next map asks the backend. Best-effort. */
+export function clearMapResultCache(projectRoot: string): void {
+  try { rmSync(mapResultCachePath(projectRoot), { force: true }); } catch { /* non-critical */ }
+}
+
+/**
+ * Remove the architecture-map completion marker, and the cached map response
+ * with it: whatever made the marker wrong makes the cached hierarchy wrong too.
+ * Leaves the source ingest baseline alone. Best-effort.
+ */
 export function clearMapBaseline(projectRoot: string): void {
   try { rmSync(mapBaselinePath(projectRoot), { force: true }); } catch { /* non-critical */ }
+  clearMapResultCache(projectRoot);
 }
 
 /**

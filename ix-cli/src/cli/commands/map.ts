@@ -3,7 +3,7 @@
 import { type Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { clearMapBaseline, getEndpoint } from "../config.js";
+import { clearMapBaseline, clearMapResultCache, getEndpoint } from "../config.js";
 import { roundFloat, printJson } from "../format.js";
 import { llmLine, llmError, llmShortId } from "../llm.js";
 import { bootstrap, resolveWorkspaceId } from "../bootstrap.js";
@@ -15,7 +15,9 @@ import { acquireMapLock } from "../single-flight.js";
 import { canRenderProgress } from "../stderr.js";
 import { loadIngestBaseline } from "../ingest-baseline.js";
 import { saveMapBaseline } from "../map-baseline.js";
+import { loadCachedMap, resolveMapCacheSlot, saveCachedMap } from "../map-result-cache.js";
 import { resolveMapRoot } from "../map-root.js";
+import { readBackendHealth } from "./upgrade.js";
 
 // Hard wall-clock budget for a single `ix map`. Past this, the shared deadline
 // signal aborts every in-flight request and the command exits, so a single
@@ -124,6 +126,13 @@ export interface MapResult {
   preflight?: MapPreflight;
   persistence?: MapPersistence;
 }
+
+/**
+ * The fields of a `/v1/map` response that `ix map` reads -- all a reused
+ * response stores (see `map-result-cache.ts`), so the output of a map served
+ * from it cannot depend on anything it left out.
+ */
+export type MapView = Pick<MapResult, "file_count" | "region_count" | "levels" | "map_rev" | "regions" | "outcome">;
 
 /**
  * The backend's MapOutcome labels that mean "a map was produced" (MapTypes.scala).
@@ -517,17 +526,6 @@ Examples:
 
       const mapBarWidth = 25;
       const mapStart    = performance.now();
-      // Same gate as the ingest bar: --silent and the machine formats were the
-      // only ways to avoid this, and neither is available to something merely
-      // capturing normal output.
-      const mapInterval = (!machineFormat && !silent && canRenderProgress()) ? setInterval(() => {
-        const elapsed  = performance.now() - mapStart;
-        const pct      = 1 - Math.exp(-elapsed / 4000);
-        const filled   = Math.round(pct * mapBarWidth);
-        const bar      = chalk.cyan('█'.repeat(filled)) + chalk.dim('░'.repeat(mapBarWidth - filled));
-        const pctStr   = chalk.cyan(`${Math.min(Math.round(pct * 100), 99)}%`.padStart(4));
-        process.stderr.write(`\r  Computing map...  ${bar}  ${pctStr}`);
-      }, 80) : null;
 
       // Path-2 grouping (Ix#225 Half B): a co-ingest system is found by detectSystem
       // above; a SEPARATELY-ingested repo that the stitcher joined into a system has
@@ -541,17 +539,41 @@ Examples:
           if (looked.systemId) effectiveSystemId = looked.systemId;
         }
       }
+      const mapRequest = { full: opts.full, workspaceId: effectiveSystemId ? undefined : resolveWorkspaceId(cwd), systemId: effectiveSystemId };
 
-      let result: MapResult;
-      try {
-        result = await client.map({ full: opts.full, workspaceId: effectiveSystemId ? undefined : resolveWorkspaceId(cwd), systemId: effectiveSystemId }) as MapResult;
-      } catch (err: any) {
+      // Reuse the last response when this run's ingest wrote nothing and the
+      // backend's head revision has not moved since it was computed. Local
+      // only: a cloud ingest reports no summary, so it cannot vouch for that.
+      const cacheSlot = localIngest ? await resolveMapCacheSlot(client, mapRequest, () => readBackendHealth(client)) : undefined;
+      const cached = cacheSlot && localIngest?.graphUnchanged ? loadCachedMap(cwd, cacheSlot) : undefined;
+
+      let result: MapView;
+      if (cached) {
+        result = cached;
+      } else {
+        // Same gate as the ingest bar: --silent and the machine formats were the
+        // only ways to avoid this, and neither is available to something merely
+        // capturing normal output.
+        const mapInterval = (!machineFormat && !silent && canRenderProgress()) ? setInterval(() => {
+          const elapsed  = performance.now() - mapStart;
+          const pct      = 1 - Math.exp(-elapsed / 4000);
+          const filled   = Math.round(pct * mapBarWidth);
+          const bar      = chalk.cyan('█'.repeat(filled)) + chalk.dim('░'.repeat(mapBarWidth - filled));
+          const pctStr   = chalk.cyan(`${Math.min(Math.round(pct * 100), 99)}%`.padStart(4));
+          process.stderr.write(`\r  Computing map...  ${bar}  ${pctStr}`);
+        }, 80) : null;
+
+        try {
+          result = await client.map(mapRequest) as MapResult;
+        } catch (err: any) {
+          if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
+          clearMapResultCache(cwd);
+          emitError(formatFetchError(err));
+          process.exitCode = 1;
+          return;
+        }
         if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
-        emitError(formatFetchError(err));
-        process.exitCode = 1;
-        return;
       }
-      if (mapInterval) { clearInterval(mapInterval); process.stderr.write('\r' + ' '.repeat(60) + '\r'); }
       const mapMs = Math.round(performance.now() - mapStart);
 
       const emptyMapError = invalidateBaselineForIncompleteCompletedMap(result, localIngest, cwd);
@@ -560,7 +582,14 @@ Examples:
         process.exitCode = 1;
         return;
       }
-      persistCompletedMapBaseline(result, cwd);
+      // The cache holds the latest response the backend gave, or nothing: a
+      // response that is not kept removes the one before it, so a later hit
+      // can never be older than a miss in between.
+      if (persistCompletedMapBaseline(result, cwd) && cacheSlot) {
+        if (!cached) saveCachedMap(cwd, cacheSlot, result);
+      } else {
+        clearMapResultCache(cwd);
+      }
 
       // stderr, so it reaches a human on the text path and never contaminates
       // the JSON/llm payload on stdout. The exit code deliberately stays 0:
@@ -662,7 +691,7 @@ Examples:
 
 /** Flat one-record-per-line region listing with explicit parent= for the llm format. */
 export function renderMapLlm(
-  result: MapResult,
+  result: MapView,
   regions: MapRegion[],
   ingest?: Pick<IngestFilesSummary, "parseErrors" | "commitErrors" | "stitchSkipped" | "stitchSkippedRule">,
 ): void {
@@ -705,7 +734,7 @@ export function renderMapLlm(
   }
 }
 
-export function renderMapText(result: MapResult, cwd: string, opts: MapTextRenderOptions): void {
+export function renderMapText(result: MapView, cwd: string, opts: MapTextRenderOptions): void {
   const minConf = parseFloat(opts.minConfidence ?? "0");
   const levelFilter = opts.level ? parseInt(opts.level, 10) : null;
   const parsedMaxItems = parseInt(opts.maxItems ?? "10", 10);
