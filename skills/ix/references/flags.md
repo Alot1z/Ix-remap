@@ -40,7 +40,8 @@ surfaces (#575).
   rejected on its own; each combination errors with which flag to drop.
 - **`ix reset` is global.** `--code` narrows *what kind* of data goes, not
   which workspace — see the Gotchas section of [commands.md](commands.md)
-  before running it in a shared backend.
+  before running it in a shared backend. `--workspace` is the one that
+  narrows *which* workspace: only the registered one containing cwd.
 - **`--detailed` on `ix subsystems` requires `--list`**, and the reverse
   constraint bites harder: `--limit`, `--offset`, `--regions`, `--edge-cap` and
   `--member-file-cap` all *require* `--detailed`, so `ix subsystems --list
