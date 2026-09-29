@@ -719,6 +719,38 @@ async function retryOnConflict<T>(fn: () => Promise<T>, maxRetries: number): Pro
   }
 }
 
+/**
+ * Re-send a commit that lost the backend's base-rev race.
+ *
+ * `BaseRevMismatch` means the backend read the latest rev outside the
+ * transaction and another commit moved it before this one ran, so nothing was
+ * written. Patch ids are deterministic, so sending the same patches again is
+ * safe, and every round of a race has a winner: two `ix map` runs against one
+ * backend (two repos, two editors, a benchmark at concurrency 2) drain each
+ * other's contention within a few backed-off attempts. Without this, the loser
+ * counted the whole chunk as failed and left it for the next run -- 477 to
+ * 1,730 files of a 1,200-2,500-file repo missing from each of two concurrent
+ * maps, which then exited 1.
+ *
+ * Returns the last result; a caller that still sees `BaseRevMismatch` has
+ * exhausted `maxRetries` and falls back to counting the chunk as failed.
+ */
+export async function retryOnBaseRevRace<T extends { status?: string }>(
+  fn: () => Promise<T>,
+  maxRetries: number,
+  onRetry?: (attempt: number) => void,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const result = await fn();
+    if (result.status !== COMMIT_STATUS_BASE_REV_MISMATCH || attempt >= maxRetries) return result;
+    onRetry?.(attempt + 1);
+    // Jittered so two racing runs stop re-colliding in lockstep. The window is
+    // the other side's transaction, which for a bulk runs to seconds.
+    const delay = 50 * (1 << Math.min(attempt, 5)) + Math.random() * 100;
+    await new Promise<void>(r => setTimeout(r, delay));
+  }
+}
+
 // Every entry here means the same thing operationally: this batch was refused for
 // being too big to apply as one unit, so committing fewer patches per request can
 // still succeed. That is what makes bisecting the right recovery.
@@ -2150,6 +2182,13 @@ export async function ingestFiles(
     const COMMIT_HTTP_MAX_FILES  = parsePositiveIntEnv('IX_COMMIT_HTTP_MAX_FILES', 1000); // files per HTTP request to the backend
     const COMMIT_CONCURRENCY     = parsePositiveIntEnv('IX_COMMIT_CONCURRENCY', 8); // parallel HTTP save requests
     const COMMIT_CONFLICT_RETRIES = parsePositiveIntEnv('IX_COMMIT_CONFLICT_RETRIES', 6); // retry transient Arango lock conflicts
+    // Re-sends of a commit that lost the base-rev race to another writer; see retryOnBaseRevRace.
+    const COMMIT_BASE_REV_RETRIES = parsePositiveIntEnv('IX_COMMIT_BASE_REV_RETRIES', 8);
+    let baseRevRetries = 0;
+    const noteBaseRevRetry = (): void => {
+      baseRevRetries++;
+      if (debug) process.stderr.write(`\n  [base-rev race] another writer moved the rev; re-sending\n`);
+    };
     const YIELD_EVERY            = 100;              // yield event loop every N files during parse
 
     if (debug) {
@@ -2349,7 +2388,11 @@ export async function ingestFiles(
                   `commit ${item.fileNumber} of ${totalFiles} ${nodePath.basename(item.filePath)} (per-file)`
                 );
                 const commitStart = performance.now();
-                const result = await retryOnConflict(() => client.commitPatch(item.patch), COMMIT_CONFLICT_RETRIES);
+                const result = await retryOnBaseRevRace(
+                  () => retryOnConflict(() => client.commitPatch(item.patch), COMMIT_CONFLICT_RETRIES),
+                  COMMIT_BASE_REV_RETRIES,
+                  noteBaseRevRetry,
+                );
                 const chunkMs = Math.round(performance.now() - commitStart);
                 recordMs(chunkMs);
                 timings.fallbackCommitMs += chunkMs;
@@ -2500,9 +2543,13 @@ export async function ingestFiles(
           const rest = probeQueue.slice(chunk.length);
           const bulkStart = performance.now();
           try {
-            const result = await retryOnConflict(
-              () => client.commitPatchBulk(chunk.map(item => item.patch)),
-              COMMIT_CONFLICT_RETRIES,
+            const result = await retryOnBaseRevRace(
+              () => retryOnConflict(
+                () => client.commitPatchBulk(chunk.map(item => item.patch)),
+                COMMIT_CONFLICT_RETRIES,
+              ),
+              COMMIT_BASE_REV_RETRIES,
+              noteBaseRevRetry,
             );
             const ms = Math.round(performance.now() - bulkStart);
             recordDrainMs(ms);
@@ -2523,7 +2570,7 @@ export async function ingestFiles(
               commitErrors += chunk.length;
               if (debug) {
                 process.stderr.write(
-                  `\n  [cutoff] bulk lost the base-rev race; ${chunk.length} patches wrote nothing and will be re-sent next run\n`
+                  `\n  [cutoff] bulk lost the base-rev race ${COMMIT_BASE_REV_RETRIES + 1} times; ${chunk.length} patches wrote nothing and will be re-sent next run\n`
                 );
               }
               probeQueue = rest;
@@ -2687,9 +2734,13 @@ export async function ingestFiles(
                 `commit ${first.fileNumber}-${last.fileNumber} of ${totalFiles} ending ${nodePath.basename(last.filePath)}`
               );
               const commitStart = performance.now();
-              const result = await retryOnConflict(
-                () => client.commitPatchBulk(items.map(item => item.patch)),
-                COMMIT_CONFLICT_RETRIES,
+              const result = await retryOnBaseRevRace(
+                () => retryOnConflict(
+                  () => client.commitPatchBulk(items.map(item => item.patch)),
+                  COMMIT_CONFLICT_RETRIES,
+                ),
+                COMMIT_BASE_REV_RETRIES,
+                noteBaseRevRetry,
               );
               const chunkMs = Math.round(performance.now() - commitStart);
               commitMsPerChunk[ci] += chunkMs;
@@ -2708,7 +2759,7 @@ export async function ingestFiles(
                 commitErrors += items.length;
                 if (debug) {
                   process.stderr.write(
-                    `\n  [commit lost the base-rev race] ${items.length} patches wrote nothing; they will be re-sent next run\n`
+                    `\n  [commit lost the base-rev race ${COMMIT_BASE_REV_RETRIES + 1} times] ${items.length} patches wrote nothing; they will be re-sent next run\n`
                   );
                 }
                 return;
@@ -3372,6 +3423,9 @@ export async function ingestFiles(
     }
 
     const committed = performance.now();
+    if (debug && baseRevRetries > 0) {
+      process.stderr.write(`\n  [base-rev race] ${baseRevRetries} commit(s) re-sent after another writer moved the rev\n`);
+    }
 
     // Persist mtime cache so next run can skip unchanged files quickly.
     // Only save when no parse errors (avoid poisoning cache on partial failures).
@@ -3947,7 +4001,7 @@ async function ingestGitHub(opts: {
     intent: `GitHub ingestion: ${repo.owner}/${repo.repo}`,
   };
 
-  const result = await client.commitPatch(patch);
+  const result = await retryOnBaseRevRace(() => client.commitPatch(patch), 8);
   const elapsed = ((performance.now() - start) / 1000).toFixed(2);
 
   if (opts.format === 'json') {

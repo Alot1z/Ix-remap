@@ -73,6 +73,12 @@ class FakeBackend {
    */
   mismatchOnDrainBulk = false;
   /**
+   * Answer this many commits (bulk or single) `BaseRevMismatch` before taking
+   * any: what a second `ix map` committing to the same backend does to this
+   * one. A 200 that wrote nothing, like `mismatchOnDrainBulk`.
+   */
+  loseBaseRevRaces = 0;
+  /**
    * Refuse the opening bulk and every per-file send, but ACCEPT the drain.
    *
    * The only shape that reaches an accepted cutoff drain, and it took three
@@ -249,6 +255,10 @@ class FakeBackend {
       // set the status further down and measured nothing, because no bulk in
       // the test ever got there.
       const isDrainBulk = path === "/v1/patches/bulk" && this.singleCount > 0;
+      if (this.loseBaseRevRaces > 0) {
+        this.loseBaseRevRaces--;
+        return send(200, { rev: this.rev, applied: 0, status: "BaseRevMismatch" });
+      }
       if (this.mismatchOnDrainBulk && isDrainBulk) {
         // A 200 that wrote NOTHING: the backend read the latest rev outside the
         // transaction and it moved before the commit ran. `applied: 0` and the
@@ -922,6 +932,34 @@ describe("ingestFiles against a fake backend", () => {
       expect(existsSync(ingestRebuildPath(repo)), "a finished re-ingest leaves no progress behind").toBe(false);
     } finally {
       stderr.mockRestore();
+    }
+  });
+
+  it("re-sends commits that lost the base-rev race to another writer", async () => {
+    // Two `ix map` runs against one backend: each commit that lands moves the
+    // rev under the other's in-flight commit, which is answered 200
+    // BaseRevMismatch and writes nothing. Those used to be counted as failed
+    // and left for the next run -- a third of the repo missing and exit 1.
+    fixture(30);
+    backend.loseBaseRevRaces = 3;
+
+    const summary = await run();
+
+    expect(summary.commitErrors, "every lost race was re-sent and landed").toBe(0);
+    expect(summary.patchesApplied).toBe(30);
+    expect(backend.bulkCount, "the same bulk, sent until it won").toBe(4);
+    expect(backend.singleCount, "a lost race is not a reason to fan out").toBe(0);
+  });
+
+  it("still reports a race it keeps losing, after the retries", async () => {
+    fixture(12);
+    process.env.IX_COMMIT_BASE_REV_RETRIES = "2";
+    backend.loseBaseRevRaces = 1_000;
+    try {
+      const message = await runFatal().catch((err: unknown) => String(err));
+      expect(message).toMatch(/12 of 12|failed to commit/);
+    } finally {
+      delete process.env.IX_COMMIT_BASE_REV_RETRIES;
     }
   });
 
