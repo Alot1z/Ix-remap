@@ -6,7 +6,7 @@ import type { IxClient } from "../client/api.js";
 import { stderr } from "./stderr.js";
 import { applyRoleFilter } from "./role-filter.js";
 import { detectSystem } from "./system.js";
-import { resolveWorkspaceId } from "./bootstrap.js";
+import { requireReadWorkspaceId, resolveWorkspaceId } from "./bootstrap.js";
 import { readStitchScope, writeStitchScope } from "./config.js";
 import { reportAmbiguousTarget, reportResolutionFailure } from "./ui.js";
 import { relativePath } from "./format.js";
@@ -60,7 +60,21 @@ function activeScope(): { workspaceId?: string; systemId?: string } {
  * Best-effort + cached (one lookup per cwd); an older backend or a true singleton
  * leaves the scope at workspace level. Read commands `await` this before resolving.
  */
-export async function ensureReadScope(client: Pick<IxClient, "workspaceSystem">): Promise<void> {
+export async function ensureReadScope(
+  client: Pick<IxClient, "workspaceSystem">,
+  opts?: { allowUnmapped?: boolean },
+): Promise<void> {
+  await foldStitchedSystem(client);
+  // A read with neither a workspace nor a system would run unscoped, across
+  // every workspace on the backend: the same function once per checkout, from
+  // repositories the caller never asked about. Refused with the fix instead.
+  // `ix doctor` opts out -- reporting this state is its job, not failing on it.
+  if (!opts?.allowUnmapped && !_scopeCache?.workspaceId && !_scopeCache?.systemId) {
+    requireReadWorkspaceId(process.cwd());
+  }
+}
+
+async function foldStitchedSystem(client: Pick<IxClient, "workspaceSystem">): Promise<void> {
   const cwd = process.cwd();
   if (_scopeCache?.cwd === cwd && _scopeCache.stitchChecked) return;
   const localSystem = detectSystem(cwd)?.systemId;
@@ -92,8 +106,11 @@ export async function ensureReadScope(client: Pick<IxClient, "workspaceSystem">)
  * scope to: a co-ingest system (detectSystem) OR a Path-2 stitched system (backend
  * lookup), else undefined (workspace-scoped). Drop-in for `detectSystem(cwd)?.systemId`.
  */
-export async function resolveReadSystemId(client: Pick<IxClient, "workspaceSystem">): Promise<string | undefined> {
-  await ensureReadScope(client);
+export async function resolveReadSystemId(
+  client: Pick<IxClient, "workspaceSystem">,
+  opts?: { allowUnmapped?: boolean },
+): Promise<string | undefined> {
+  await ensureReadScope(client, opts);
   return activeReadScope().systemId;
 }
 

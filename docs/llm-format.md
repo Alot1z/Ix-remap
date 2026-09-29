@@ -60,6 +60,9 @@ which value it ignored, on stderr, when a person is there to read it.
   format as data lines; the process still exits non-zero. A graph target that
   does not exist is always `unresolved_target`. `locate` is the remaining
   exit-status exception tracked in #539.
+  A graph read from a directory no registered workspace covers is
+  `workspace_not_mapped`, with `dir=` and a `hint=` naming the command that
+  maps it.
   An ambiguous graph target is instead `ambiguous_target`, includes numbered
   candidates, and exits non-zero because the requested graph operation could
   not choose a target. (The

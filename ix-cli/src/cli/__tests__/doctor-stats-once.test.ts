@@ -263,7 +263,8 @@ describe("ix doctor", () => {
       const cwd = process.cwd().replace(/\\/g, "\\\\");
       expect(lines).toContain(
         'check name="Workspace for this directory" status=fail detail="no workspace registered for ' +
-          `${cwd} — reads here answer from workspace 'other-repo' instead. ` +
+          `${cwd} — graph reads here fail with workspace_not_mapped ` +
+          "(they no longer fall back to the default workspace 'other-repo'). " +
           'Run `ix map` in this directory."',
       );
     });

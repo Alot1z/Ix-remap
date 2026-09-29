@@ -160,7 +160,7 @@ export function registerDoctorCommand(program: Command): void {
         // count. What the unscoped call added was every *live* node belonging to
         // some other workspace on the same backend, which is how a freshly
         // reset workspace still looked like a 17k-node graph.
-        const systemId = await resolveReadSystemId(client);
+        const systemId = await resolveReadSystemId(client, { allowUnmapped: true });
         const workspace = systemId ? undefined : (matchedWorkspace ?? substitutedWorkspace);
         const stats = await client.stats({ workspaceId: workspace?.workspace_id, systemId });
         // Named, not deictic. "this workspace" is only true when cwd actually
@@ -219,8 +219,8 @@ export function registerDoctorCommand(program: Command): void {
               return {
                 ok: false,
                 detail:
-                  `no workspace registered for ${cwd} — reads here answer from ` +
-                  `workspace '${substitutedWorkspace.workspace_name}' instead. ` +
+                  `no workspace registered for ${cwd} — graph reads here fail with workspace_not_mapped ` +
+                  `(they no longer fall back to the default workspace '${substitutedWorkspace.workspace_name}'). ` +
                   "Run `ix map` in this directory.",
               };
             }
