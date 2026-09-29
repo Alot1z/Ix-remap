@@ -22,13 +22,14 @@ describe("renderPatchesLlm", () => {
 });
 
 describe("renderTextResultsLlm", () => {
-  it("emits match records with trimmed (quoted) snippet and language", () => {
+  it("emits match records with trimmed (quoted) snippet and no language field", () => {
     const results: TextResult[] = [
       { path: "src/a.ts", line_start: 42, line_end: 42, snippet: "  const x = 1  ", engine: "ripgrep", score: 1, language: "typescript" },
     ];
     expect(renderTextResultsLlm(sliceRanked(results, 20))).toEqual([
       "text shown=1 scanned=1",
-      'match path=src/a.ts line=42 lang=typescript snippet="const x = 1"',
+      // `lang=` repeated the path's extension on every row; json keeps it.
+      'match path=src/a.ts line=42 snippet="const x = 1"',
     ]);
   });
 });

@@ -588,7 +588,12 @@ export interface TextResult {
   symbol_hint?: string;
 }
 
-/** Render lexical search hits as llm `match` records (one per line). */
+/**
+ * Render lexical search hits as llm `match` records (one per line).
+ *
+ * No `lang=`: the extension on `path` already says it, and on a 20-row answer
+ * the field was ~80 tokens of nothing. `--format json` keeps `language`.
+ */
 export function renderTextResultsLlm(slice: Slice<TextResult>): string[] {
   const lines = [llmLine("text", [
     ["shown", slice.shown],
@@ -605,7 +610,6 @@ export function renderTextResultsLlm(slice: Slice<TextResult>): string[] {
     lines.push(llmLine("match", [
       ["path", relativePath(r.path) ?? r.path],
       ["line", r.line_start],
-      ["lang", r.language],
       ["symbol", r.symbol_hint],
       ["snippet", r.snippet.trim()],
     ]));
