@@ -36,13 +36,13 @@ describe("renderTextResultsLlm", () => {
 describe("renderSearchLlm", () => {
   it("emits a header, node rows, then diagnostic rows", () => {
     const lines = renderSearchLlm(
-      [{ name: "Foo", kind: "class", id: "abcdef1234567890", path: "src/a.ts", score: 5 }],
+      [{ name: "Foo", kind: "class", id: "abcdef1234567890", path: "src/a.ts", lines: "3-9", score: 5 }],
       10,
       [{ code: "unfiltered_search", message: "broad" }],
     );
     expect(lines).toEqual([
       "search count=1 candidates=10",
-      "node name=Foo kind=class id=abcdef12 path=src/a.ts score=5",
+      "node name=Foo kind=class path=src/a.ts lines=3-9 score=5",
       "diagnostic code=unfiltered_search message=broad",
     ]);
   });

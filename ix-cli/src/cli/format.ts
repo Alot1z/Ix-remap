@@ -2,7 +2,7 @@
 
 import chalk from "chalk";
 import { llmLine, llmShortId } from "./llm.js";
-import { projectRow } from "./output-shape.js";
+import { projectRow, requestedFields } from "./output-shape.js";
 
 export type ResultSource = "graph" | "text" | "graph+text" | "heuristic";
 
@@ -201,6 +201,29 @@ export function locationLabel(loc: { path?: string; lineStart?: number; lineEnd?
   if (!loc.path) return "";
   const span = lineSpan(loc);
   return span ? `${loc.path}:${span}` : loc.path;
+}
+
+/**
+ * The ids a list of rows should print: only where nothing else on the row
+ * tells it apart from another row in the same answer.
+ *
+ * Every search and edge row used to carry an 8-character id, and nothing an
+ * agent does next takes one — `read`, `callers` and `explain` are all called
+ * by name and narrowed with `--path`. Two rows with the same name, kind and
+ * path are the exception: nothing a caller can pass tells them apart except
+ * the id (every symbol command takes one), so those keep it. `lines` is not
+ * part of the key because no command takes a span to pick by. A caller who
+ * asks for ids with `--fields id` gets them on every row.
+ */
+export function disambiguatingIds<T>(
+  rows: T[],
+  key: (row: T) => string,
+  id: (row: T) => string | undefined,
+): Array<string | undefined> {
+  const wanted = requestedFields()?.includes("id") ?? false;
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(key(row), (counts.get(key(row)) ?? 0) + 1);
+  return rows.map((row) => (wanted || (counts.get(key(row)) ?? 0) > 1 ? llmShortId(id(row)) : undefined));
 }
 
 export function confidenceColor(score: number): (text: string) => string {
