@@ -3,6 +3,7 @@
 import chalk from "chalk";
 import { llmLine, llmShortId } from "./llm.js";
 import { projectRow, requestedFields } from "./output-shape.js";
+import type { EdgeSite } from "./edge-sites.js";
 
 export type ResultSource = "graph" | "text" | "graph+text" | "heuristic";
 
@@ -224,6 +225,11 @@ export function disambiguatingIds<T>(
   const counts = new Map<string, number>();
   for (const row of rows) counts.set(key(row), (counts.get(key(row)) ?? 0) + 1);
   return rows.map((row) => (wanted || (counts.get(key(row)) ?? 0) > 1 ? llmShortId(id(row)) : undefined));
+}
+
+/** `path:line`, the form an editor and every agent tool cites. */
+export function siteLabel(site: EdgeSite): string {
+  return `${site.path}:${site.line}`;
 }
 
 export function confidenceColor(score: number): (text: string) => string {
@@ -678,9 +684,15 @@ export function renderEdgeResultsLlm(
       name,
       kind: n.kind ?? undefined,
       id: n.id ?? undefined,
+      site: n.site as EdgeSite | undefined,
       ...rowLocation(n),
     };
   });
+  const ids = disambiguatingIds(
+    refs,
+    (r) => `${r.name}\u0000${r.kind ?? ""}\u0000${r.path ?? ""}`,
+    (r) => r.id,
+  );
   const unresolved = refs.filter((r) => !r.resolved).length;
   const lines = [llmLine(relation, [
     ["target", symbol],
@@ -702,14 +714,18 @@ export function renderEdgeResultsLlm(
   for (const d of diagnostics ?? []) {
     lines.push(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
   }
-  for (const ref of refs) {
+  refs.forEach((ref, i) => {
+    // An unresolved row has no name to go by, so its id is all there is.
     lines.push(ref.resolved
       ? llmLine("ref", projectRow([
-          ["name", ref.name], ["kind", ref.kind], ["id", llmShortId(ref.id)],
+          ["name", ref.name], ["kind", ref.kind], ["id", ids[i]],
           ["path", ref.path], ["lines", lineSpan(ref)],
+          ["site", ref.site ? siteLabel(ref.site) : undefined],
+          ["also", ref.site?.also?.join(",")],
+          ["snippet", ref.site?.snippet],
         ]))
       : llmLine("ref", projectRow([["kind", ref.kind], ["id", llmShortId(ref.id)], ["resolved", false]])));
-  }
+  });
   return lines;
 }
 
@@ -737,6 +753,7 @@ export function formatEdgeResults(
         kind: n.kind ?? undefined,
         id: resolved ? n.id : undefined,
         ...rowLocation(n),
+        ...(n.site ? { site: n.site } : {}),
       };
       if (!resolved) {
         ref.resolved = false;
@@ -809,6 +826,8 @@ export function formatEdgeResults(
         `  ${chalk.cyan((n.kind ?? "").padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.bold(name)}`
         + (where ? `  ${chalk.dim(where)}` : ""),
       );
+      const site = n.site as EdgeSite | undefined;
+      if (site) console.log(`      ${chalk.dim(`at ${siteLabel(site)}`)}  ${site.snippet}`);
     }
   }
   if (slice.truncated) console.log(chalk.dim(`  ${truncationHint(slice, relation)}`));

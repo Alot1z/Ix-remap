@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { dropNonNameMatches, emptySearchHint, renderSearchLlm } from "../commands/search.js";
+import { renderEdgeResultsLlm, sliceEdgeResults } from "../format.js";
 import { setOutputShape } from "../output-shape.js";
 
 afterEach(() => setOutputShape({}));
@@ -83,5 +84,18 @@ describe("an empty search", () => {
   it("never adds the hint to a search that found something", () => {
     const lines = renderSearchLlm([{ name: "a", kind: "function", path: "a.ts" }], 1, [], "try x");
     expect(lines.some((l) => l.startsWith("hint"))).toBe(false);
+  });
+});
+
+describe("edge rows", () => {
+  it("keep ids on rows that collide on name, kind and path", () => {
+    const node = (id: string, start: number) => ({
+      id, name: "dup", kind: "function", attrs: { line_start: start, line_end: start + 1 }, provenance: { sourceUri: "a.ts" },
+    });
+    const lines = renderEdgeResultsLlm(
+      sliceEdgeResults([node("aaaaaaaa11112222", 1), node("bbbbbbbb11112222", 5)], 10), "callers", "t", "graph",
+    );
+    expect(lines[1]).toContain("id=aaaaaaaa");
+    expect(lines[2]).toContain("id=bbbbbbbb");
   });
 });
