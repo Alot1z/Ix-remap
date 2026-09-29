@@ -172,7 +172,9 @@ describe("ix mcp structured output", () => {
     // Against the full catalog, which is what `connect` builds here. What a
     // session actually pays is the core set, and `mcp-toolset.test.ts` holds
     // that number.
-    expect(total).toBeLessThan(16_000);
+    // The full catalog's descriptions now say when to use each tool and when
+    // not to, which is what a caller of `--tools=all` is choosing between.
+    expect(total).toBeLessThan(17_000);
   });
 
   it("attaches structuredContent only where an outputSchema was declared", async () => {

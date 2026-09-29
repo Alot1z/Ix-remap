@@ -14,6 +14,7 @@ import { renderExplainLlm, renderExplainRawLlm } from "../explain/llm.js";
 import { printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
 import { renderSection, renderWarning, renderNote } from "../ui.js";
+import { forMcp, toolCall } from "../next-step.js";
 
 export function registerExplainCommand(program: Command): void {
   program
@@ -145,7 +146,7 @@ async function rawExplain(
               name: name || e.dst,
               kind: calleeNode.kind,
               resolved: false,
-              suggestedCommand: `ix text "${e.dst.slice(0, 8)}"`,
+              suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
             };
           }
           return {
@@ -154,14 +155,14 @@ async function rawExplain(
             id: e.dst,
             resolved: true,
             path: relativePath(calleeNode.provenance?.source_uri ?? calleeNode.provenance?.sourceUri),
-            suggestedCommand: `ix explain "${name}"`,
+            suggestedCommand: forMcp() ? toolCall("ix_explain", { symbol: name }) : `ix explain "${name}"`,
           };
         } catch {
           return {
             name: e.dst,
             resolved: false,
             diagnostic: "unresolved_call_target",
-            suggestedCommand: `ix text "${e.dst.slice(0, 8)}"`,
+            suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
           } as EntityRef;
         }
       })
@@ -171,7 +172,7 @@ async function rawExplain(
     if (unresolvedCount > 0) {
       diagnostics.push({
         code: "unresolved_call_target",
-        message: `${unresolvedCount} callee(s) could not be resolved to named entities. Use ix text to locate them.`,
+        message: `${unresolvedCount} callee(s) could not be resolved to named entities. Use ${forMcp() ? "ix_text" : "ix text"} to locate them.`,
       });
     }
   }
