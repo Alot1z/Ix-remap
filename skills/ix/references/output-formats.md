@@ -11,6 +11,24 @@ Query commands accept `--format text|json|llm`:
   specific field out of a response.
 - **`--format text`** — human-oriented tables and trees.
 
+### What an `llm` row already tells you
+
+Each row carries the location you would otherwise grep or re-read for:
+
+- `search` rows: `path=` and `lines=` (e.g. `lines=320-340`). An empty search
+  ends in a `hint` record — search matches one identifier, so search a single
+  word, or use `ix text` for a phrase.
+- `callers`, `callees`, `imports`, `imported-by` rows: `site=path:line` is the
+  call or import itself, with `snippet=` (the line) and `also=` (more sites in
+  the same scope); `path=`/`lines=` are where the other entity is defined.
+- `read`: every source line is `<line number><TAB><source>`, after a
+  `content lines=<n> numbered=true` record — cite and edit by those numbers.
+- `text`: `match path=... line=... snippet=...`.
+
+Ids appear only where two rows would otherwise read the same (same name, kind
+and path); pass one back as the symbol to pick that row. `--fields id` prints
+them everywhere.
+
 ### Setting it once
 
 Resolution is: the flag, then `IX_FORMAT`, then `format` in `~/.ix/config.yaml`
