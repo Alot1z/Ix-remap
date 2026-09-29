@@ -19,9 +19,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.ix-infra.com">Website</a> ·
-  <a href="./docs">Docs</a> ·
-  <a href="https://ix-infra.com/demo/">Live demo</a> ·
+  <a href="https://www.ix-infra.com/ix">Website</a> ·
+  <!-- <a href="./docs">Docs</a> ·
+  <a href="https://ix-infra.com/demo/">Live demo</a> · -->
   <a href="https://discord.gg/ncEYVHVqZ8">Discord</a> ·
   <a href="https://github.com/sponsors/ix-infrastructure">Sponsor</a>
 </p>
