@@ -22,6 +22,7 @@ ix config set format llm      # set a value
 | `IX_DEBUG=1` | Prints full stack traces on errors |
 | `IX_MCP_SUBPROCESS=1` | Runs each MCP tool call in its own `ix` process |
 | `IX_COMMIT_FAILURE_LIMIT=<n>` | Consecutive failed commits before `ix map` stops (default 5). `0` never stops |
+| `IX_COMMIT_BASE_REV_RETRIES=<n>` | Re-sends of a commit after another writer on the same backend moved the graph revision under it (default 8) |
 
 ### Bootstrap script variables
 

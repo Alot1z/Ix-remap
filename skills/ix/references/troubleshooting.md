@@ -49,6 +49,10 @@ again.
 - `IX_COMMIT_FAILURE_LIMIT=N` — consecutive failed commits before `ix map`
   stops sending more (default 5). `0` sends every patch regardless, which is
   the pre-#560 behaviour.
+- `IX_COMMIT_BASE_REV_RETRIES=N` — how many times a commit is re-sent after
+  another writer (a second `ix map` on the same backend) moved the graph
+  revision under it (default 8). Only a commit that loses every retry is
+  counted as failed and left for the next run.
 
 ## Harness presence (hermetic reproduction)
 
