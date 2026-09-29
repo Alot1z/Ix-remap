@@ -60,6 +60,10 @@ which value it ignored, on stderr, when a person is there to read it.
   format as data lines; the process still exits non-zero. A graph target that
   does not exist is always `unresolved_target`. `locate` is the remaining
   exit-status exception tracked in #539.
+  A file target's miss adds `reason=file_not_in_graph` (on disk, not ingested)
+  or `reason=file_not_found`, any miss may carry `suggestion` records with the
+  nearest names in the graph, and a miss on an empty or degraded graph carries
+  a `graph` record saying so.
   A graph read from a directory no registered workspace covers is
   `workspace_not_mapped`, with `dir=` and a `hint=` naming the command that
   maps it.
