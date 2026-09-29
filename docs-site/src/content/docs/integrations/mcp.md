@@ -43,22 +43,23 @@ codex mcp add ix-memory -- ix mcp
 
 ## Tools
 
-`ix mcp` advertises ten tools by default:
+`ix mcp` advertises five tools by default, one per question the graph answers better than Grep and Read:
 
 | Tool | Answers |
 |---|---|
-| `ix_health` | Is the backend reachable? |
-| `ix_locate` | Where is this symbol defined? |
-| `ix_search` | Which entities match this name? |
-| `ix_text` | Where does this text appear? |
-| `ix_explain` | What is this, and what does it touch? |
-| `ix_overview` | A structural summary of a target |
-| `ix_context` | A bounded context bundle for a target |
-| `ix_impact` | What breaks if this changes? |
+| `ix_context` | Where do I start on this target or issue (`issue=<text>`)? Ranked evidence with `path:lines` |
+| `ix_search` | Which definition does this name mean? |
 | `ix_neighbors` | Callers, callees, imports or importers, picked by `relation` |
-| `ix_read` | The source of a symbol or line range |
+| `ix_impact` | What does a change to this reach? |
+| `ix_read` | The source of a symbol by name, or a line range |
 
-`ix mcp --tools=all` advertises every tool instead.
+The server also sends `instructions` when a client connects, saying when to use Ix instead of Grep and which tool to
+reach for first. Clients that load tool schemas only on demand still show these to the model. Over MCP, hints and
+`next` records are written as tool calls with arguments, such as `ix_neighbors symbol=X relation=callers`, not as CLI
+flags.
+
+`ix mcp --tools=all` advertises every tool instead, including `ix_health`, `ix_text`, `ix_locate`, `ix_overview`
+and `ix_explain`, which were in the default set before.
 
 ## Repair a moved launcher
 
