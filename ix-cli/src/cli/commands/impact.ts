@@ -328,7 +328,18 @@ async function containerImpact(
     }
   });
 
-  const callerResults = await Promise.all(callerPromises);
+  // Bucket all dependents by hierarchy. First occurrence of each id wins, as
+  // the id list this replaced did; the nodes go in whole so their names and
+  // kinds need no second read.
+  const uniqueDependents = new Map<string, any>();
+  for (const n of [...directImporters, ...directDependents]) {
+    if (!uniqueDependents.has(n.id)) uniqueDependents.set(n.id, n);
+  }
+  // Independent of the member counts, so the two run together.
+  const [callerResults, propagationBuckets] = await Promise.all([
+    Promise.all(callerPromises),
+    uniqueDependents.size > 0 ? bucketByHierarchy(client, [...uniqueDependents.values()]) : Promise.resolve([]),
+  ]);
   for (const r of callerResults) {
     memberCallerCounts.push(r);
     totalMemberCallers += r.callerCount;
@@ -336,16 +347,6 @@ async function containerImpact(
 
   memberCallerCounts.sort((a, b) => b.callerCount - a.callerCount);
   const topMembers = memberCallerCounts.filter((m) => m.callerCount > 0).slice(0, limit);
-
-  // Bucket all dependents by hierarchy
-  const allDependentIds = [
-    ...directImporters.map((n: any) => n.id),
-    ...directDependents.map((n: any) => n.id),
-  ];
-  const uniqueDependentIds = [...new Set(allDependentIds)];
-  const propagationBuckets = uniqueDependentIds.length > 0
-    ? await bucketByHierarchy(client, uniqueDependentIds)
-    : [];
 
   const systemPathMapped = systemPath.map((n) => ({ name: n.name, kind: n.kind }));
 
@@ -478,9 +479,8 @@ async function leafImpact(
   }));
 
   // Bucket callers by hierarchy
-  const callerIds = callersResult.nodes.map((n: any) => n.id);
-  const propagationBuckets = callerIds.length > 0
-    ? await bucketByHierarchy(client, callerIds)
+  const propagationBuckets = callersResult.nodes.length > 0
+    ? await bucketByHierarchy(client, callersResult.nodes)
     : [];
 
   const systemPathMapped = systemPath.map((n) => ({ name: n.name, kind: n.kind }));
