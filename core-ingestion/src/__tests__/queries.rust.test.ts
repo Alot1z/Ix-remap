@@ -166,6 +166,7 @@ fn make() {
       srcName: 'make',
       dstName: 'foo',
       predicate: 'CALLS',
+      bareCall: true,
     });
   });
 
