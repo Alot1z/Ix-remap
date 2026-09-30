@@ -9,8 +9,7 @@ Compass is Ix's visualizer. It renders the graph of the current workspace in you
 ix view
 ```
 
-This starts Compass on port 8080 and opens it. Try the [live demo](https://ix-infra.com/demo/) to see it without
-installing anything.
+This starts Compass on port 8080 and opens it.
 
 ## Commands
 
