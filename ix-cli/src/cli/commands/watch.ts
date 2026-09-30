@@ -315,7 +315,13 @@ export function registerWatchCommand(program: Command): void {
       if (migrated) {
         console.error(chalk.dim("[watch] Workspace migrated to a stable id; re-ingesting once before watching..."));
         prepareMigratedWorkspaceRefresh(root);
-        await refresh();
+        // A failed first refresh used to escape and end the watch before it
+        // began; the next change retries it like any other refresh.
+        try {
+          await refresh();
+        } catch (err) {
+          console.error(`${chalk.red("[watch]")} refresh error: ${(err as Error).message}`);
+        }
       }
 
       const relative = path.relative(root, watchPath) || ".";
@@ -332,6 +338,14 @@ export function registerWatchCommand(program: Command): void {
           const fullPath = path.resolve(watchPath, filename);
           if (shouldWatch(root, fullPath)) batch.notify(fullPath);
         });
+        // An FSWatcher reports a later failure (the watched directory removed,
+        // inotify exhausted) as an 'error' event; with no listener that is an
+        // uncaught exception and the watch dies. Poll instead.
+        watcher.on("error", (err) => {
+          watcher.close();
+          console.error(`${chalk.red("[watch]")} file watcher failed (${describeWatchError(err)}); falling back to polling (2s interval).`);
+          pollMode(watchPath, root, scheduler);
+        });
 
         // Keep process alive
         process.on("SIGINT", () => {
@@ -342,8 +356,8 @@ export function registerWatchCommand(program: Command): void {
         });
       } catch (err: any) {
         // Fallback to polling if fs.watch with recursive isn't supported
-        if (err.code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM") {
-          console.log(chalk.dim("[watch] Falling back to polling mode (2s interval)..."));
+        if (canPollInstead(err)) {
+          console.log(chalk.dim(`[watch] Falling back to polling mode (2s interval): ${describeWatchError(err)}`));
           pollMode(watchPath, root, scheduler);
         } else {
           throw err;
@@ -353,7 +367,26 @@ export function registerWatchCommand(program: Command): void {
 }
 
 /**
- * Fallback polling mode for platforms where recursive fs.watch isn't available.
+ * Whether an fs.watch failure can be worked around by polling: recursive
+ * watching unsupported, or the OS out of watches or descriptors (ENOSPC is
+ * Linux's inotify limit, EMFILE/ENFILE open files). Anything else is a real
+ * error, e.g. a permission problem, and stays one.
+ */
+export function canPollInstead(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" || code === "ENOSPC" || code === "EMFILE" || code === "ENFILE";
+}
+
+function describeWatchError(err: unknown): string {
+  const e = err as NodeJS.ErrnoException | undefined;
+  return e?.code === "ENOSPC"
+    ? "ENOSPC: the system's inotify watch limit is reached (raise fs.inotify.max_user_watches)"
+    : e?.code ?? e?.message ?? String(err);
+}
+
+/**
+ * Fallback polling mode for platforms where recursive fs.watch isn't available,
+ * or where it failed.
  */
 function pollMode(
   watchPath: string,
