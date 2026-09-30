@@ -6,13 +6,31 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
-import { formatEdgeResults, printJson, relativePath, sliceEdgeResults } from "../format.js";
+import { formatEdgeResults, printJson, relativePath, sliceEdgeResults, type Diagnostic } from "../format.js";
+import { checkGraphHealth, graphHealthProse, isUnhealthy, type GraphHealth } from "../graph-health.js";
 import { parsePickOption } from "../options.js";
-import { resolveFileOrReport, printResolved } from "../resolve.js";
+import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import { llmLine } from "../llm.js";
+import { renderWarning } from "../ui.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * The graph's health, as edge-result diagnostics. On a hollowed graph "no
+ * callers" is a count of lost edges, not an answer. llm and json carry a
+ * `graph_degraded` diagnostic; text shows it as the reason for an empty result
+ * (formatEdgeResults) or, over rows, as a banner (`bannerOverRows`).
+ */
+async function healthDiagnostics(health: Promise<GraphHealth>): Promise<{ diagnostics?: Diagnostic[]; fix?: string }> {
+  const h = await health;
+  if (!isUnhealthy(h)) return {};
+  return { diagnostics: [{ code: "graph_degraded", message: graphHealthProse(h) }], fix: h.fix };
+}
+
+function bannerOverRows(health: { diagnostics?: Diagnostic[] }, format: string, rows: number): void {
+  if (format === "text" && rows > 0 && health.diagnostics) renderWarning(health.diagnostics[0].message);
+}
 
 export function registerCallersCommand(program: Command): void {
   program
@@ -31,11 +49,17 @@ export function registerCallersCommand(program: Command): void {
       const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
       if (!target) return;
       if (opts.format === "text") printResolved(target);
+      const healthCheck = checkGraphHealth(client, activeReadScope());
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
         direction: "in",
         predicates: ["CALLS", "REFERENCES"],
       });
+      const health = await healthDiagnostics(healthCheck);
+      bannerOverRows(health, opts.format, result.nodes.length);
+      // `ix ingest --force` does not bring a hollowed graph's edges back; the
+      // health check names what does.
+      const remedy = health.fix ?? "ix ingest --force --recursive .";
 
       if (result.nodes.length === 0) {
         // Fallback to text search
@@ -78,6 +102,9 @@ export function registerCallersCommand(program: Command): void {
                 ["code", "text_fallback_used"],
                 ["message", "No graph-backed CALLS/REFERENCES edges; showing text matches."],
               ]));
+              for (const d of health.diagnostics ?? []) {
+                console.log(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
+              }
               for (const r of textResults) {
                 console.log(llmLine("ref", [["path", r.path], ["line", r.line], ["snippet", r.attrs?.snippet ?? ""]]));
               }
@@ -94,12 +121,13 @@ export function registerCallersCommand(program: Command): void {
                 },
                 diagnostics: [{
                   code: "text_fallback_used",
-                  message: "No graph-backed CALLS/REFERENCES edges found. If files were ingested before extraction was added, run: ix ingest --force --recursive .",
-                }],
+                  message: `No graph-backed CALLS/REFERENCES edges found. If files were ingested before extraction was added, run: ${remedy}`,
+                }, ...(health.diagnostics ?? [])],
               });
             } else {
+              bannerOverRows(health, opts.format, textResults.length);
               stderr(chalk.dim("No graph-backed CALLS/REFERENCES edges found. Showing text-based candidate usages."));
-              stderr(chalk.dim("Tip: if files were ingested before CALLS extraction, run: ix ingest --force --recursive .\n"));
+              stderr(chalk.dim(`Tip: if files were ingested before CALLS extraction, run: ${remedy}\n`));
               for (const r of textResults) {
                 const snippet = r.attrs?.snippet ?? "";
                 console.log(`  ${chalk.dim(r.name)}  ${snippet}`);
@@ -113,9 +141,9 @@ export function registerCallersCommand(program: Command): void {
         } catch { /* ripgrep not available or no matches */ }
 
         // Both graph and text empty
-        formatEdgeResults(sliceEdgeResults([], limit), "callers", target.name, opts.format, target, "graph");
+        formatEdgeResults(sliceEdgeResults([], limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
       } else {
-        formatEdgeResults(sliceEdgeResults(result.nodes, limit), "callers", target.name, opts.format, target, "graph");
+        formatEdgeResults(sliceEdgeResults(result.nodes, limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
       }
     });
 
@@ -135,11 +163,14 @@ export function registerCallersCommand(program: Command): void {
       const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
       if (!target) return;
       if (opts.format === "text") printResolved(target);
+      const healthCheck = checkGraphHealth(client, activeReadScope());
       // Use expand by entity ID to avoid aggregating results across all same-named entities
       const result = await client.expand(target.id, {
         direction: "out",
         predicates: ["CALLS", "REFERENCES"],
       });
-      formatEdgeResults(sliceEdgeResults(result.nodes, calleeLimit), "callees", target.name, opts.format, target, "graph");
+      const health = await healthDiagnostics(healthCheck);
+      bannerOverRows(health, opts.format, result.nodes.length);
+      formatEdgeResults(sliceEdgeResults(result.nodes, calleeLimit), "callees", target.name, opts.format, target, "graph", health.diagnostics);
     });
 }
