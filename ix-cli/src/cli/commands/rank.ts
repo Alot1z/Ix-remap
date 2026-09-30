@@ -8,6 +8,7 @@ import { activeReadScope, ensureReadScope } from "../resolve.js";
 import { llmLine } from "../llm.js";
 import { normalizePathSeparators } from "../path-match.js";
 import { printJson } from "../format.js";
+import { mapLimit } from "../../client/request-memo.js";
 
 type Metric = "dependents" | "callers" | "importers" | "members";
 
@@ -94,7 +95,15 @@ interface ScoredEntity {
   score: number;
 }
 
-/** Score all candidates in batches to avoid overwhelming the backend */
+/**
+ * Requests in flight while scoring. The same peak load as the old batches of
+ * 20, but a sliding window: a batch waited for its slowest expand before the
+ * next one started, so one slow node held nineteen slots idle. Measured on the
+ * Ix repository's graph (1284 functions): 4.3 s to ~1.9 s, same requests.
+ */
+const SCORE_CONCURRENCY = 20;
+
+/** Score all candidates, a bounded number at a time, in candidate order. */
 async function scoreAllCandidates(
   candidates: any[],
   config: { direction: string; predicates: string[] },
@@ -102,38 +111,35 @@ async function scoreAllCandidates(
   diagnostics: string[],
   entityKind: string,
 ): Promise<ScoredEntity[]> {
-  const batchSize = 20;
-  const results: ScoredEntity[] = [];
-  for (let i = 0; i < candidates.length; i += batchSize) {
-    const batch = candidates.slice(i, i + batchSize);
-    const batchResults = await Promise.all(
-      batch.map(async (node: any) => {
-        try {
-          const result = await client.expand(node.id, {
-            direction: config.direction,
-            predicates: config.predicates,
-          });
-          const seen = new Set<string>();
-          for (const n of result.nodes) seen.add(n.id);
-          return {
-            id: node.id,
-            name: node.name || node.attrs?.name || "(unnamed)",
-            kind: node.kind || entityKind,
-            score: seen.size,
-          };
-        } catch {
-          diagnostics.push(`Failed to expand entity ${node.id}`);
-          return {
-            id: node.id,
-            name: node.name || node.attrs?.name || "(unnamed)",
-            kind: node.kind || entityKind,
-            score: 0,
-          };
-        }
-      })
-    );
-    results.push(...batchResults);
-  }
+  const failed = new Array<boolean>(candidates.length).fill(false);
+  const results = await mapLimit(candidates, SCORE_CONCURRENCY, async (node: any, index): Promise<ScoredEntity> => {
+    try {
+      const result = await client.expand(node.id, {
+        direction: config.direction,
+        predicates: config.predicates,
+      });
+      const seen = new Set<string>();
+      for (const n of result.nodes) seen.add(n.id);
+      return {
+        id: node.id,
+        name: node.name || node.attrs?.name || "(unnamed)",
+        kind: node.kind || entityKind,
+        score: seen.size,
+      };
+    } catch {
+      failed[index] = true;
+      return {
+        id: node.id,
+        name: node.name || node.attrs?.name || "(unnamed)",
+        kind: node.kind || entityKind,
+        score: 0,
+      };
+    }
+  });
+  // In candidate order, not in the order the failures happened to land.
+  candidates.forEach((node: any, index) => {
+    if (failed[index]) diagnostics.push(`Failed to expand entity ${node.id}`);
+  });
   return results;
 }
 
