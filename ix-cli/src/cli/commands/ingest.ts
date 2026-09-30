@@ -3992,8 +3992,19 @@ export async function loadExistingHashes(
 }
 
 // ---------------------------------------------------------------------------
-// GitHub ingestion (unchanged)
+// GitHub ingestion
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether a GitHub ingest's commit landed. `retryOnBaseRevRace` returns the
+ * last result, and a `BaseRevMismatch` after the retries means the backend
+ * wrote nothing -- which `ix ingest --github` reported as a summary and exit 0.
+ */
+export function githubCommitFailure(result: { status?: string }): string | undefined {
+  if (result.status !== COMMIT_STATUS_BASE_REV_MISMATCH) return undefined;
+  return "The backend kept rejecting the commit because another write moved the graph revision under it " +
+    "(BaseRevMismatch), so nothing was ingested. Run the command again once other ingests have finished.";
+}
 
 async function ingestGitHub(opts: {
   github?: string; token?: string; since?: string;
@@ -4041,6 +4052,16 @@ async function ingestGitHub(opts: {
 
   const result = await retryOnBaseRevRace(() => client.commitPatch(patch), 8);
   const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+  const failure = githubCommitFailure(result);
+  if (failure) {
+    process.exitCode = 1;
+    if (opts.format === 'json') {
+      printJson({ error: 'base_rev_mismatch', message: failure, source: `${repo.owner}/${repo.repo}`, status: result.status });
+    } else {
+      process.stderr.write(chalk.red('Error: ') + failure + '\n');
+    }
+    return;
+  }
 
   if (opts.format === 'json') {
     printJson({
