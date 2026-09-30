@@ -12,6 +12,7 @@ import { ixHome } from "./ix-home.js";
 import { stderr } from "./stderr.js";
 import { workspaceIdForPath } from "./system.js";
 import { readBackendHealth } from "./commands/upgrade.js";
+import { isLocalEndpoint } from "./backend-version.js";
 
 export interface BootstrapResult {
   createdConfig: boolean;
@@ -152,6 +153,23 @@ export function resolveWorkspaceId(cwd = process.cwd()): string | undefined {
 }
 
 /**
+ * Whether an unreachable `endpoint` is the backend `ix docker start` brings up.
+ *
+ * That command always starts the standalone compose on localhost:8090. For any
+ * other endpoint -- a remote, a second local backend on another port -- it
+ * starts containers the command then never talks to (and may collide with
+ * someone else's on 8090), while the real endpoint stays down.
+ */
+export function canAutoStartBackend(endpoint: string): boolean {
+  if (!isLocalEndpoint(endpoint)) return false;
+  try {
+    return new URL(endpoint).port === "8090";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Ensure the backend is reachable. If not, auto-start via ix docker start.
  */
 export async function ensureBackendAvailable(): Promise<void> {
@@ -163,8 +181,14 @@ export async function ensureBackendAvailable(): Promise<void> {
     // ingest path, so without this it would never record at all.
     await readBackendHealth(client);
   } catch {
+    if (!canAutoStartBackend(endpoint)) {
+      throw new Error(`Ix backend at ${endpoint} is not reachable.`);
+    }
     try {
-      execFileSync("ix", ["docker", "start"], { stdio: "inherit", timeout: 120000 });
+      // This CLI's own entry point under this node, not `ix` off PATH: on
+      // Windows `ix` is `ix.cmd`, which execFile cannot launch without a shell,
+      // and PATH may name a different install.
+      execFileSync(process.execPath, [process.argv[1], "docker", "start"], { stdio: "inherit", timeout: 120000 });
     } catch {
       throw new Error("Failed to start Ix backend. Run: ix docker start");
     }
