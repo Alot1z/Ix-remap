@@ -235,9 +235,16 @@ export class SourceFiles {
     try {
       const abs = absoluteFromSourceUri(relPath, this.root);
       if (isReadablePath(abs, this.root)) {
-        const stat = fs.statSync(abs);
-        if (stat.isFile() && stat.size <= MAX_FILE_BYTES) {
-          lines = fs.readFileSync(abs, "utf-8").split("\n");
+        // One descriptor for the checks and the read, so the file measured is
+        // the file read (CodeQL js/file-system-race).
+        const fd = fs.openSync(abs, "r");
+        try {
+          const stat = fs.fstatSync(fd);
+          if (stat.isFile() && stat.size <= MAX_FILE_BYTES) {
+            lines = fs.readFileSync(fd, "utf-8").split("\n");
+          }
+        } finally {
+          fs.closeSync(fd);
         }
       }
     } catch {
