@@ -61,10 +61,17 @@ const CODE_FILE = new RegExp(`\\.(?:${CODE_EXTENSIONS.join("|")})$`);
 /**
  * Not code a fix edits: tests, test data, samples, docs, vendored or built
  * output. The pilot's list, plus what `isTestPath` already knows.
+ *
+ * The second line is a project's website, playground, test configuration,
+ * benchmarks, stories and end-to-end suites. Svelte's `site/` alone was 40
+ * of the wrong files in Ix's top-10 rankings over two samples of issues; none
+ * of these directories holds any of the 932 files the 382 SWE-PolyBench
+ * Verified fixes change.
  */
 const NOISE = new RegExp(
   "(^|/)(__tests__|tests?|spec|specs|fixtures?|__fixtures__|test-fixtures|samples|examples?|vendor|"
-  + "third_party|node_modules|dist|build|coverage|docs?|changelog_unreleased)/"
+  + "third_party|node_modules|dist|build|coverage|docs?|changelog_unreleased|"
+  + "site|website|docs-site|playground|tests?[_-]config|benchmarks|\\.?storybook|e2e|cypress|integration-tests)/"
   + "|\\.(test|spec)\\.[^/]+$|\\.min\\.js$|(^|/)test_[^/]+\\.py$|_test\\.(py|go)$",
 );
 
@@ -107,9 +114,17 @@ export function extractCandidates(text: string): IssueCandidates {
   const inTicks = [...prose.matchAll(BACKTICK)].flatMap((m) => [...m[1].matchAll(WORD)].map((w) => w[0]));
   const multi = [...inTicks, ...[...prose.matchAll(IDENT)].map((m) => m[0])].filter((t) => IDENT_FULL.test(t));
   const single = inTicks.filter((t) => !IDENT_FULL.test(t) && t.length >= 4);
+  // Only MAX_STARTS names become starts, so order decides: a short common
+  // word (`repeat`, `ignore`) mentioned first took a slot a specific one
+  // (`Stylesheet`) mentioned later needed. Common words still resolve, last.
+  const ordered = [
+    ...multi,
+    ...single.filter((t) => !isGenericIdentifier(t)),
+    ...single.filter((t) => isGenericIdentifier(t)),
+  ];
   const seen = new Set(paths);
   const identifiers: string[] = [];
-  for (const token of [...multi, ...single]) {
+  for (const token of ordered) {
     if (seen.has(token)) continue;
     seen.add(token);
     identifiers.push(token);

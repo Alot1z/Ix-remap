@@ -71,6 +71,13 @@ describe("extractCandidates", () => {
     }
   });
 
+  it("tries a specific single word before a common one the issue mentions first", () => {
+    // Three names become starts. `repeat` came first in the issue and took a
+    // slot `Stylesheet` needed.
+    const { identifiers } = extractCandidates("`repeat` then `ignore` breaks `Stylesheet` and `Selector`");
+    expect(identifiers).toEqual(["Stylesheet", "Selector", "repeat", "ignore"]);
+  });
+
   it("drops short backticked words and keeps a name once", () => {
     const { identifiers } = extractCandidates("`id` and `run` then `listByKind` and listByKind again");
     expect(identifiers).toEqual(["listByKind"]);
@@ -81,11 +88,19 @@ describe("isSourcePath", () => {
   it("accepts code and refuses tests, fixtures, docs, build output, vendored and non-code files", () => {
     expect(isSourcePath("src/cli/commands/rank.ts")).toBe(true);
     expect(isSourcePath("keras/src/saving/saving_api.py")).toBe(true);
+    // Only the directory: a file named for one is code.
+    for (const code of ["src/website.ts", "lib/playground.js", "src/sites/a.ts", "src/benchmark/timer.ts"]) {
+      expect(isSourcePath(code), code).toBe(true);
+    }
     for (const noise of [
       "src/css/preflight.css", "CHANGELOG.md", "docs/api.ts", "package.json",
       "src/__tests__/rank.test.ts", "tests/test_saving.py", "src/saving_test.py",
       "test-fixtures/typescript/sample.ts", "__fixtures__/a.js", "examples/demo.js",
       "vendor/lib.js", "dist/index.js", "build/out.js", "lib/jquery.min.js",
+      // A project's website, playground, test config, benchmarks, stories, e2e.
+      "site/src/routes/index.svelte", "website/static/worker.js", "packages/docs-site/a.ts",
+      "website/playground/markdown.js", "tests_config/run_spec.js", "test-config/setup.js",
+      "benchmarks/run.py", ".storybook/main.js", "packages/app/e2e/login.ts", "cypress/support/a.js",
     ]) {
       expect(isSourcePath(noise), noise).toBe(false);
     }
