@@ -171,7 +171,10 @@ export function resolveWorkspaceId(cwd = process.cwd()): string | undefined {
 export function requireReadWorkspaceId(cwd = process.cwd()): string {
   const id = resolveWorkspaceId(cwd);
   if (id) return id;
-  throw new WorkspaceNotMappedError(cwd, workspaceNotMappedHint(cwd, gitRootFor(cwd)));
+  // git prints its top-level with forward slashes on Windows; the hint is
+  // for a person to read and paste, so it gets the platform's own form.
+  const gitRoot = gitRootFor(cwd);
+  throw new WorkspaceNotMappedError(cwd, workspaceNotMappedHint(cwd, gitRoot && resolve(gitRoot)));
 }
 
 /**

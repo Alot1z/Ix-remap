@@ -604,6 +604,7 @@ Wipe graph data.
 | `--yes` / `-y` | — | off | Skip confirmation prompt |
 | `--code` | — | off | Reset only code graph (files, functions, classes, regions); preserve goals, plans, tasks, bugs, and decisions |
 | `--ingest` | — | off | Re-run ix map after wiping (rebuilds the code graph) |
+| `--workspace` | — | off | Reset only the registered workspace containing cwd (`/v1/reset/workspace`); every other workspace is left alone. The fix for a hollowed graph, with `--ingest` |
 
 ### `ix savings`
 

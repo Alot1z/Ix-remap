@@ -38,7 +38,9 @@ function register(workspaces: Array<Partial<WorkspaceConfig> & { root_path: stri
 }
 
 beforeEach(() => {
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ix-unmapped-")));
+  // `.native`: on Windows the temp dir is an 8.3 short path (RUNNER~1) and
+  // git reports the long one, so the comparisons below need the long form.
+  home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "ix-unmapped-")));
   process.env.IX_HOME = path.join(home, ".ix");
   other = path.join(home, "other-repo");
   unmapped = path.join(home, "somewhere-else");
@@ -124,7 +126,7 @@ describe("resolveWorkspaceRoot", () => {
     // files: an answer from an unrelated repository.
     execFileSync("git", ["init", "-q", unmapped]);
     register([{ root_path: other, default: true }]);
-    expect(fs.realpathSync(resolveWorkspaceRoot(undefined, unmapped))).toBe(unmapped);
+    expect(fs.realpathSync.native(resolveWorkspaceRoot(undefined, unmapped))).toBe(unmapped);
   });
 
   it("keeps the default workspace for a directory with no local context", () => {
