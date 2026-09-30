@@ -266,6 +266,30 @@ export interface Bm25Hit {
   score: number;
 }
 
+/** One file as BM25 reads it: how often each counted word occurs, and its length in words. */
+export interface Bm25Doc {
+  tf: Map<string, number>;
+  length: number;
+}
+
+/**
+ * A file's text as BM25 reads it, or undefined when it is not scored (too
+ * large, or unreadable). `wanted` limits the words counted -- see `bm25Rank`;
+ * without it every word is, which is what the on-disk index stores.
+ */
+export function bm25Doc(path: string, text: string | undefined, wanted?: ReadonlySet<string>): Bm25Doc | undefined {
+  if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) return undefined;
+  const tf = new Map<string, number>();
+  const tokens = bm25Tokens(`${path.replace(/\//g, " ")} ${text}`);
+  for (const t of tokens) if (!wanted || wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
+  return { tf, length: tokens.length };
+}
+
+/** The query's distinct BM25 words, in the order it first uses them. */
+export function bm25QueryTerms(query: string): string[] {
+  return [...new Set(bm25Tokens(query))];
+}
+
 /**
  * Okapi BM25 (k1 1.2, b 0.75) of each file against `query`, best first, files
  * that share no word with it left out. A file's path is part of its text, so
@@ -281,17 +305,27 @@ export function bm25Rank(
   // Only the query's words are counted: BM25 needs no other term frequency,
   // and a map of every word of every file is most of the memory and a third
   // of the time on a large repository. A document's length is still every word.
-  const terms = [...new Set(bm25Tokens(query))];
+  const terms = bm25QueryTerms(query);
   const wanted = new Set(terms);
-  const docs = new Map<string, { tf: Map<string, number>; length: number }>();
+  const docs = new Map<string, Bm25Doc>();
   for (const path of files) {
-    const text = repo.read(path);
-    if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) continue;
-    const tf = new Map<string, number>();
-    const tokens = bm25Tokens(`${path.replace(/\//g, " ")} ${text}`);
-    for (const t of tokens) if (wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
-    docs.set(path, { tf, length: tokens.length });
+    const doc = bm25Doc(path, repo.read(path), wanted);
+    if (doc) docs.set(path, doc);
   }
+  return bm25Score(docs, terms, k1, b);
+}
+
+/**
+ * BM25 of already-tokenized files. Split out of `bm25Rank` so the on-disk
+ * index (`bm25-cache.ts`) scores through the very same arithmetic: the same
+ * documents in, the same scores out, to the last bit.
+ */
+export function bm25Score(
+  docs: ReadonlyMap<string, Bm25Doc>,
+  terms: string[],
+  k1 = 1.2,
+  b = 0.75,
+): Bm25Hit[] {
   if (docs.size === 0) return [];
   const n = docs.size;
   let total = 0;
@@ -332,10 +366,16 @@ export interface IssuePlan {
  */
 export async function planIssue(
   text: string,
-  deps: { repo?: RepoAccess; search: PickDeps["search"] },
+  deps: {
+    repo?: RepoAccess;
+    search: PickDeps["search"];
+    /** BM25 over the source files; `bm25Rank` unless the caller has an index. */
+    rank?: (repo: RepoAccess, files: string[], query: string) => Bm25Hit[];
+  },
 ): Promise<IssuePlan> {
   const files = deps.repo?.files() ?? [];
-  const bm25 = deps.repo ? bm25Rank(deps.repo, files.filter(isSourcePath), text) : [];
+  const rank = deps.rank ?? bm25Rank;
+  const bm25 = deps.repo ? rank(deps.repo, files.filter(isSourcePath), text) : [];
   const scores = new Map(bm25.map((h) => [h.path, h.score]));
   const { starts, unresolved } = await pickStartingPoints(text, {
     files, search: deps.search, fileScore: (p) => scores.get(p) ?? 0,

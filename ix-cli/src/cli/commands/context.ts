@@ -35,6 +35,7 @@ import {
   type SymbolHit,
 } from "../explain/issue.js";
 import { collectRelatedFiles, MAX_RELATED, type RelatedRef } from "../explain/related-files.js";
+import { cachedBm25Ranker } from "../explain/bm25-cache.js";
 import { collectTextReferences, gitRepoAccess, type TextSource } from "../explain/text-references.js";
 import { coChangedFiles, gitRunner, recentCommits, type CommitRef } from "../explain/history.js";
 import { llmLine, llmShortId, printLlmLines } from "../llm.js";
@@ -1650,8 +1651,10 @@ async function buildIssueBundle(
   const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
   await ensureReadScope(client);
   const scope = activeReadScope();
+  const root = resolveWorkspaceRoot();
   const plan = await planIssue(text, {
-    repo: gitRepoAccess(resolveWorkspaceRoot()),
+    repo: gitRepoAccess(root),
+    rank: cachedBm25Ranker(root),
     search: async (name) =>
       (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
   });
