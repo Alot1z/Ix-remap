@@ -192,8 +192,15 @@ export function saveConfig(config: IxConfig): void {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         existing = parsed as Record<string, unknown>;
       }
-    } catch {
-      existing = {};
+    } catch (err) {
+      // Refuse rather than start from `{}`: that rewrote the file with only
+      // this call's fields, silently dropping every other workspace, a custom
+      // endpoint and extension state such as Pro's credentials -- all over
+      // one typo in a hand edit.
+      throw new Error(
+        `${configPath} is not valid YAML, so Ix will not overwrite it. ` +
+        `Fix or remove the file and run the command again. (${err instanceof Error ? err.message.split("\n")[0] : String(err)})`,
+      );
     }
   }
   // Drop OSS-owned keys from the disk snapshot — the in-memory `config`

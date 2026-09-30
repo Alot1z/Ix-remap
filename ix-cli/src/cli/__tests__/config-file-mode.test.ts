@@ -116,3 +116,22 @@ describe("saveConfig persistence", () => {
     });
   });
 });
+
+describe("saveConfig with an unparseable config", () => {
+  it("refuses to overwrite it, so the workspaces and credentials in it survive", () => {
+    fs.mkdirSync(cfgDir(), { recursive: true });
+    const broken = [
+      "endpoint: http://localhost:9090",
+      "workspaces:",
+      "  - workspace_id: ws-a",
+      "    root_path: /src/a",
+      "instances: { cloud: { token: secret }", // unclosed flow mapping
+      "",
+    ].join("\n");
+    fs.writeFileSync(cfgPath(), broken);
+
+    expect(() => saveConfig({ endpoint: "http://localhost:8090", format: "text" })).toThrow(/not valid YAML/);
+    expect(fs.readFileSync(cfgPath(), "utf8")).toBe(broken);
+    expect(fs.readdirSync(cfgDir())).toEqual(["config.yaml"]);
+  });
+});
