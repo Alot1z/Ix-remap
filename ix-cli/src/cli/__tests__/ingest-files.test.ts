@@ -984,6 +984,12 @@ describe("ingestFiles against a fake backend", () => {
     expect(baselineFiles().sort(), "the TypeScript files keep their entries").toEqual([...everything].sort());
   });
 
+  it("names a missing path rather than failing with a bare ENOENT", async () => {
+    await expect(
+      ingestFiles(join(repo, "no-such-dir"), { format: "text", suppressOutput: true, printSummary: false }),
+    ).rejects.toThrow(/^Path not found: /);
+  });
+
   it("sends workspace-relative uris when the path it is given is a symlink", async () => {
     // Discovery canonicalises every file with realpath; the root has to be
     // canonical too, or every source_uri comes out as `../<real dir>/src/x.ts`

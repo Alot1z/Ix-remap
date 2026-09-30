@@ -1522,6 +1522,12 @@ export async function ingestFiles(
   const resolvedPath = canonicalWorkspacePath(nodePath.isAbsolute(path)
     ? path
     : nodePath.resolve(resolveWorkspaceRoot(opts.root), path));
+  // Here, not in the discovery phase below: the statSync that picks the
+  // workspace root runs first, and threw a bare ENOENT before the friendly
+  // message there could be reached.
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Path not found: ${resolvedPath}`);
+  }
 
   // Workspace identity for client-agnostic backend.
   //
@@ -1978,9 +1984,6 @@ export async function ingestFiles(
     // Phase: discover files
     const langFilter = opts.lang ? parseLangs(opts.lang) : null;
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
     const stat = fs.statSync(resolvedPath);
     const excludePatterns = collectExcludePatterns(resolvedPath, opts.exclude ?? []);
     const excludeMatcher = createIgnoreMatcher(excludePatterns);
