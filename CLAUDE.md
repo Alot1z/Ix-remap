@@ -21,7 +21,8 @@ backend is NOT in this repo — it is the released Docker image running at
 # CLI dev (from ix-cli/)
 npm run build         # build-core-ingestion + tsc
 npm run typecheck     # tsc --noEmit
-npm test              # build + vitest + parser smoke
+npm test              # core-ingestion build + vitest + parser smoke; does NOT rebuild
+                      # ix-cli/dist -- run `npm run build` before using dist/cli/main.js
 npm run dev           # tsx src/cli/main.ts
 
 # Skill + tooling (from repo root)
