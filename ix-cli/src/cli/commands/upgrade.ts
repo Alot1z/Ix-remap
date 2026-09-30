@@ -1282,6 +1282,9 @@ function requestedFormat(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
+/** Per-request bound for the background check on ordinary commands. */
+const BACKGROUND_CHECK_TIMEOUT_MS = 5_000;
+
 export async function checkForUpdate(): Promise<void> {
   const current = getCurrentVersion();
   const cache = readCache();
@@ -1299,12 +1302,23 @@ export async function checkForUpdate(): Promise<void> {
     return;
   }
 
-  Promise.all([
-    fetchLatestRelease(GITHUB_REPO),
-    fetchLatestRelease(COMPASS_DIST_REPO),
-    fetchLatestRelease(MEMORY_LAYER_DIST_REPO),
+  // Returned so a caller (or a test) can wait for it; main.ts does not. The
+  // fetches are short: nothing awaits them, but an open request still keeps
+  // the process alive after the command's output, and 30 s of that on every
+  // command behind a stalling proxy is a hang.
+  return Promise.all([
+    fetchLatestRelease(GITHUB_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
+    fetchLatestRelease(COMPASS_DIST_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
+    fetchLatestRelease(MEMORY_LAYER_DIST_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
   ]).then(([latest, compassLatest, backendLatest]) => {
-    if (!latest) return;
+    if (!latest) {
+      // Record the attempt anyway, keeping whatever was known. Without it a
+      // failed check (GitHub blocked, rate-limited, offline) was retried by
+      // every command: three more requests against a 60/hour unauthenticated
+      // limit each time, which kept a rate-limited user rate-limited.
+      writeCache(cache?.latest ?? current, cache?.compassLatest, cache?.backendLatest);
+      return;
+    }
     writeCache(latest, compassLatest ?? undefined, backendLatest ?? undefined);
     const hasCliUpdate = isNewer(latest, current);
     const hasCompassUpdate = shouldOfferCompassUpgrade(compassLatest ?? undefined);
