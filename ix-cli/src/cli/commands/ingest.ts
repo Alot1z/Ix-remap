@@ -12,7 +12,7 @@ import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
-import { getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
+import { canonicalWorkspacePath, getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
 import {
   clearRebuildProgress, extractorChanged, isRev, loadIngestBaseline, loadRebuildProgress,
   saveIngestBaseline, saveRebuildProgress,
@@ -1514,9 +1514,14 @@ export async function ingestFiles(
   const moduleLoadMs = Math.round(performance.now() - trueStart);
 
 
-  const resolvedPath = nodePath.isAbsolute(path)
+  // Canonical (realpath), because discovery canonicalises every file it finds:
+  // a root spelled through a symlink, macOS's /tmp or a Windows 8.3 name made
+  // every source_uri `../<real dir>/...` instead of workspace-relative. `ix
+  // map` hands in a canonical root already; `ix ingest <path>` did not. A path
+  // that does not exist stays as given, for the not-found error below.
+  const resolvedPath = canonicalWorkspacePath(nodePath.isAbsolute(path)
     ? path
-    : nodePath.resolve(resolveWorkspaceRoot(opts.root), path);
+    : nodePath.resolve(resolveWorkspaceRoot(opts.root), path));
 
   // Workspace identity for client-agnostic backend.
   //

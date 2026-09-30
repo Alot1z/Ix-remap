@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -46,6 +46,8 @@ import { ingestMtimeCachePath, ingestRebuildPath } from "../config.js";
 /** A backend that answers the endpoints an ingest touches, and records them. */
 class FakeBackend {
   readonly requests: Array<{ path: string; patches: number; code?: number }> = [];
+  /** `source.uri` of every patch sent in a commit request, accepted or not. */
+  readonly sourceUris: string[] = [];
   /** Paths this fake does not implement. Asserted empty after every test. */
   readonly unknownPaths: string[] = [];
 
@@ -239,6 +241,7 @@ class FakeBackend {
         /* a body we cannot read is still a request */
       }
       this.requests.push({ path, patches: patches.length });
+      for (const { source } of patches) if (source?.uri) this.sourceUris.push(source.uri);
       if (this.abortAfterCommits !== undefined && this.commitCount >= this.abortAfterCommits) {
         this.aborter.abort();
       }
@@ -979,6 +982,22 @@ describe("ingestFiles against a fake backend", () => {
     expect(summary.filesDiscovered, "only the Python file is in scope").toBe(1);
     expect(backend.acceptedPatches()).toBe(1);
     expect(baselineFiles().sort(), "the TypeScript files keep their entries").toEqual([...everything].sort());
+  });
+
+  it("sends workspace-relative uris when the path it is given is a symlink", async () => {
+    // Discovery canonicalises every file with realpath; the root has to be
+    // canonical too, or every source_uri comes out as `../<real dir>/src/x.ts`
+    // (macOS /tmp -> /private/tmp, Windows 8.3 names, any symlinked checkout).
+    fixture(2);
+    const link = `${repo}-link`;
+    symlinkSync(repo, link, "dir");
+    try {
+      await ingestFiles(link, { format: "text", force: true, suppressOutput: true, printSummary: false });
+    } finally {
+      rmSync(link, { force: true });
+    }
+    expect(backend.sourceUris.length).toBeGreaterThan(0);
+    expect([...new Set(backend.sourceUris)].sort()).toEqual(["src/m000.ts", "src/m001.ts"]);
   });
 
   it("re-sends commits that lost the base-rev race to another writer", async () => {
