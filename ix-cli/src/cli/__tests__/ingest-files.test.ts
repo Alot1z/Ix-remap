@@ -454,9 +454,12 @@ describe("ingestFiles against a fake backend", () => {
     // on disk. Assigning the created path first means the variable always
     // names whatever was created, resolved or not.
     home = mkdtempSync(join(tmpdir(), "ix-ingest-home-"));
-    home = realpathSync(home);
+    // `.native`, as discovery canonicalises: on Windows the temp dir is an 8.3
+    // name (RUNNER~1) that plain realpathSync keeps and `.native` expands, so
+    // paths built from `repo` would not match the ones ingest records.
+    home = realpathSync.native(home);
     repo = mkdtempSync(join(tmpdir(), "ix-ingest-repo-"));
-    repo = realpathSync(repo);
+    repo = realpathSync.native(repo);
     const endpoint = await backend.start();
 
     // HOME *and* USERPROFILE: `os.homedir()` reads the latter on Windows, so
