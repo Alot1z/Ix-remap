@@ -168,9 +168,12 @@ const MINIFIED_AVG_LINE_THRESHOLD = 2_000;
 const SLOW_WORK_LOG_MS = 5_000;
 const SLOW_WORK_REPEAT_MS = 10_000;
 
-function parsePositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+export function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
   if (!raw) return fallback;
+  // Matched, not parsed, as in single-flight's lockMaxMs: `parseInt` reads any
+  // numeric prefix, so `1e3` meant 1 and `2k` meant 2.
+  if (!/^\d+$/.test(raw)) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

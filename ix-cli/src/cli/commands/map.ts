@@ -25,11 +25,22 @@ import { readBackendHealth } from "./upgrade.js";
 // via IX_MAP_DEADLINE_MS; 0 disables the budget.
 const DEFAULT_MAP_DEADLINE_MS = 15 * 60 * 1000;
 
-function mapDeadlineSignal(): AbortSignal | undefined {
-  const raw = process.env.IX_MAP_DEADLINE_MS;
-  const budget = raw !== undefined ? Number.parseInt(raw, 10) : DEFAULT_MAP_DEADLINE_MS;
+/** The map budget in ms, or undefined when disabled. */
+export function mapDeadlineMs(raw = process.env.IX_MAP_DEADLINE_MS): number | undefined {
+  if (raw === undefined) return DEFAULT_MAP_DEADLINE_MS;
+  const trimmed = raw.trim();
+  // Matched, not parsed: `parseInt("15m")` is 15, a 15 ms budget that aborted
+  // every request of every map. A value that is not a plain number of ms keeps
+  // the default; empty and 0 keep disabling it, as they did.
+  if (trimmed !== "" && !/^\d+$/.test(trimmed)) return DEFAULT_MAP_DEADLINE_MS;
+  const budget = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(budget) || budget <= 0) return undefined; // disabled
-  return AbortSignal.timeout(budget);
+  return budget;
+}
+
+function mapDeadlineSignal(): AbortSignal | undefined {
+  const budget = mapDeadlineMs();
+  return budget === undefined ? undefined : AbortSignal.timeout(budget);
 }
 
 // Whether an automatically-triggered map should be skipped. Background refresh
