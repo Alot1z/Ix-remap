@@ -262,18 +262,76 @@ function resolveIssuePath(
   return undefined;
 }
 
+const BM25_WORD = /[A-Za-z_][A-Za-z0-9_]*/g;
+const BM25_PART = /[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g;
+const PLAIN_WORD = /^[a-z0-9]+$/;
+
 /**
- * Words for BM25: identifiers split at camelCase and underscores, lowercased,
- * parts of two letters or fewer dropped. `listByKind` is `list kind`, so an
- * issue that says "list by kind" matches the code that spells it as one word.
+ * Calls `emit` with each BM25 word of `text`, in order: an identifier's parts,
+ * split at camelCase and underscores and lowercased, then -- for a name of two
+ * parts or more -- the whole name, lowercased and without underscores. Parts
+ * and names of two letters or fewer are dropped.
+ *
+ * The parts let "list by kind" in an issue match `listByKind`; the whole name
+ * lets `borderStylesReset` in an issue match the file that defines it far
+ * above the hundred files that say "border" and "reset". The whole name is
+ * spelled the same for `save_model` and `saveModel`.
  */
+function eachBm25Token(text: string, emit: (token: string) => void): void {
+  for (const m of text.matchAll(BM25_WORD)) {
+    const word = m[0];
+    if (PLAIN_WORD.test(word)) {
+      // Most words: one lowercase part, nothing to split.
+      if (word.length > 2) emit(word);
+      continue;
+    }
+    const parts = word.match(BM25_PART) ?? [];
+    for (const part of parts) if (part.length > 2) emit(part.toLowerCase());
+    if (parts.length > 1) {
+      const whole = word.replace(/_/g, "").toLowerCase();
+      if (whole.length > 2) emit(whole);
+    }
+  }
+}
+
+/** The BM25 words of `text`, as {@link eachBm25Token} yields them. */
 export function bm25Tokens(text: string): string[] {
   const out: string[] = [];
-  for (const word of text.match(/[A-Za-z][A-Za-z0-9]*/g) ?? []) {
-    const parts = word.match(/[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g) ?? [word];
-    for (const part of parts) if (part.length > 2) out.push(part.toLowerCase());
-  }
+  eachBm25Token(text, (t) => out.push(t));
   return out;
+}
+
+/**
+ * Words an issue is written in that say nothing about where the code is:
+ * English function words and the vocabulary of bug reports. Dropped from the
+ * query only. Code comments are English too, so without this "should",
+ * "would" and "expected" pull the most-commented files up.
+ */
+const BM25_STOPWORDS = new Set((
+  "the and for are but not you all any can had her was one our out has him his how its may new now old see "
+  + "two way who did get let say she too use about above after again also been before being below between both "
+  + "could does doing down during each few from further have having here into just more most much must only other "
+  + "over own same should some such than that their them then there these they this those through under until very "
+  + "want what when where which while whom why will with would your yours "
+  + "bug bugs issue issues expected behavior behaviour actual reproduce reproduction steps version versions "
+  + "current currently describe description problem thanks thank please like think seems seem happen happens "
+  + "work works working instead because since using used example following sure able still even though"
+).split(" "));
+
+/**
+ * How much more a query word counts when it is part of a code name the issue
+ * mentions (`extractCandidates`) than when it is only in the prose.
+ */
+export const BM25_IDENTIFIER_WEIGHT = 2;
+
+/** Each query word, with its weight: 1 for prose, more for a word of a named identifier. */
+function bm25Query(query: string): Map<string, number> {
+  const weights = new Map<string, number>();
+  for (const t of bm25Tokens(query)) if (!BM25_STOPWORDS.has(t)) weights.set(t, 1);
+  for (const id of extractCandidates(query).identifiers) {
+    for (const t of bm25Tokens(id)) if (weights.has(t)) weights.set(t, BM25_IDENTIFIER_WEIGHT);
+  }
+  return weights;
 }
 
 export interface Bm25Hit {
@@ -285,6 +343,12 @@ export interface Bm25Hit {
  * Okapi BM25 (k1 1.2, b 0.75) of each file against `query`, best first, files
  * that share no word with it left out. A file's path is part of its text, so
  * `auth/login.ts` matches an issue about logging in before it is opened.
+ *
+ * The query is the issue's words less {@link BM25_STOPWORDS}, and a word of a
+ * code name the issue mentions counts {@link BM25_IDENTIFIER_WEIGHT} times.
+ * Measured in `scripts/ranking-eval` on 104 SWE-PolyBench dev issues: each
+ * of whole names, stopwords and the name weight raised recall; a separate
+ * path field, other k1 and b, and a lower size cap did not.
  */
 export function bm25Rank(
   repo: Pick<RepoAccess, "read">,
@@ -296,16 +360,21 @@ export function bm25Rank(
   // Only the query's words are counted: BM25 needs no other term frequency,
   // and a map of every word of every file is most of the memory and a third
   // of the time on a large repository. A document's length is still every word.
-  const terms = [...new Set(bm25Tokens(query))];
-  const wanted = new Set(terms);
+  const weights = bm25Query(query);
+  const terms = [...weights.keys()];
   const docs = new Map<string, { tf: Map<string, number>; length: number }>();
   for (const path of files) {
     const text = repo.read(path);
     if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) continue;
     const tf = new Map<string, number>();
-    const tokens = bm25Tokens(`${path.replace(/\//g, " ")} ${text}`);
-    for (const t of tokens) if (wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
-    docs.set(path, { tf, length: tokens.length });
+    let length = 0;
+    const count = (t: string) => {
+      length++;
+      if (weights.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
+    };
+    eachBm25Token(path.replace(/\//g, " "), count);
+    eachBm25Token(text, count);
+    docs.set(path, { tf, length });
   }
   if (docs.size === 0) return [];
   const n = docs.size;
@@ -324,7 +393,7 @@ export function bm25Rank(
       if (!f) continue;
       const d = df.get(t)!;
       const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5));
-      score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * doc.length / avg));
+      score += weights.get(t)! * idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * doc.length) / avg)));
     }
     if (score > 0) out.push({ path, score });
   }

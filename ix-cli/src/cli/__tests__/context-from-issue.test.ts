@@ -239,20 +239,59 @@ describe("readIssueText", () => {
 });
 
 describe("BM25", () => {
-  it("splits camelCase and snake_case and drops short parts", () => {
-    expect(bm25Tokens("listByKind save_model_v2 a IO HTTPServer"))
-      .toEqual(["list", "kind", "save", "model", "http", "server"]);
+  it("splits camelCase and snake_case, keeps a multi-part name whole too, and drops short parts", () => {
+    expect(bm25Tokens("listByKind save_model_v2 a IO HTTPServer plain"))
+      .toEqual(["list", "kind", "listbykind", "save", "model", "savemodelv2", "http", "server", "httpserver", "plain"]);
   });
 
-  it("ranks the file that shares the issue's rare words first, and skips files over 200KB", () => {
+  it("spells a whole name the same in camelCase and snake_case", () => {
+    expect(bm25Tokens("saveModel")).toContain("savemodel");
+    expect(bm25Tokens("save_model")).toContain("savemodel");
+    expect(bm25Tokens("__init__ _private")).toEqual(["init", "private"]);
+  });
+
+  it("ranks the file that defines a name the issue gives above files that only share its parts", () => {
+    // Split into parts alone, `borderStylesReset` is "border styles reset",
+    // which borders.js says more often: the old tokenizer ranked it first.
     const repo = memoryRepo({
-      "src/auth/login.ts": "export function checkPassword(password: string) { return password.length > 0; }",
-      "src/util/strings.ts": "export function trim(s: string) { return s.trim(); }",
-      "src/big.ts": "password ".repeat(30_000),
+      "src/preflight.js": "export function borderStylesReset() { return {}; }\nexport const other = 1;",
+      "src/borders.js": "// border styles reset\nexport function reset(border, styles) { return border; }",
+      "src/theme.js": "export const theme = { border: 1, styles: 2, reset: 3 };",
+      "src/a.js": "export const a = 1;",
+      "src/b.js": "export const b = 1;",
     });
-    const ranked = bm25Rank(repo, repo.files(), "Login crashes when the password is empty");
-    expect(ranked[0].path).toBe("src/auth/login.ts");
-    expect(ranked.map((r) => r.path)).not.toContain("src/big.ts");
+    const ranked = bm25Rank(repo, repo.files(), "`borderStylesReset` drops the border styles on reset");
+    expect(ranked[0].path).toBe("src/preflight.js");
+  });
+
+  it("ignores the prose words an issue is written in", () => {
+    // Without stopwords the chatty file wins on "should", "would", "expected"
+    // and "behavior", which say nothing about where the fix is.
+    const chatty = "// This should work. It would be expected behavior when we should do this.\n";
+    const repo = memoryRepo({
+      "src/comments.ts": chatty.repeat(5),
+      "src/tooltip.ts": "export function placeTooltip() {}",
+      "src/a.ts": "export const a = 1;",
+      "src/b.ts": "export const b = 1;",
+    });
+    const ranked = bm25Rank(repo, repo.files(),
+      "The tooltip should open where I would have expected; the behavior should be the same as before.");
+    expect(ranked[0].path).toBe("src/tooltip.ts");
+    expect(ranked.map((r) => r.path)).not.toContain("src/comments.ts");
+  });
+
+  it("weights the words of a code name the issue mentions above the same words in prose", () => {
+    // "store" and "cache" each match one file once, and the files are alike:
+    // unweighted, the tie goes to the path, cache.ts.
+    const repo = memoryRepo({
+      "src/cache.ts": "export const cache = 1;",
+      "src/store.ts": "export const store = 1;",
+      "src/a.ts": "export const a = 1;",
+      "src/b.ts": "export const b = 1;",
+    });
+    const ranked = bm25Rank(repo, repo.files(), "Calling `store_state` fails: the cache is wrong.");
+    expect(ranked.map((r) => r.path)).toEqual(["src/store.ts", "src/cache.ts"]);
+    expect(ranked[0].score).toBeCloseTo(2 * ranked[1].score, 5);
   });
 });
 
