@@ -41,6 +41,14 @@ describe("closingStatus", () => {
     expect(closingStatus(false, ["CLI 0.9.2 → 0.10.0"]).upToDate).toBe(true);
     expect(closingStatus(undefined, ["CLI 0.9.2 → 0.10.0"]).upToDate).toBe(true);
   });
+
+  it("does not sign off an install run as up to date when a step failed", () => {
+    const status = closingStatus(false, ["backend 1.0.16 → 1.0.17"], ["backend image pull", "compass download"]);
+    expect(status.upToDate).toBe(false);
+    expect(status).toMatchObject({ failed: true, summary: "backend image pull, compass download" });
+    // And under --check, a failure still outranks the outstanding list.
+    expect(closingStatus(true, ["CLI 0.9.2 → 0.10.0"], ["@ix/pro refresh"])).toMatchObject({ failed: true });
+  });
 });
 
 describe("ix upgrade --check output", () => {
