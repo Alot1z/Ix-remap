@@ -9,12 +9,23 @@ import { IxClient } from "../client/api.js";
 import { ixHome } from "./ix-home.js";
 
 /**
+ * The key of a project root's per-root state files. Canonical first: `ix
+ * ingest <path>` resolves its root with `canonicalWorkspacePath`, and a caller
+ * that spelled the same root differently -- a symlink, macOS's /tmp, a Windows
+ * 8.3 name like RUNNER~1 -- found no baseline under its own spelling and
+ * re-ingested everything, every time.
+ */
+function rootKey(projectRoot: string): string {
+  return createHash("sha256").update(canonicalWorkspacePath(projectRoot)).digest("hex").slice(0, 12);
+}
+
+/**
  * Path to the per-project ingest mtime cache (the "skip unchanged files on re-map"
  * pre-filter). Keyed on a hash of the project root. Single source of truth shared by
  * ingest (load/save), reset, and watch (clear) — all three MUST agree on this path.
  */
 export function ingestMtimeCachePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `ingest_mtimes_${key}.json`);
 }
 
@@ -24,13 +35,13 @@ export function ingestMtimeCachePath(projectRoot: string): string {
  * same graph.
  */
 export function ingestRebuildPath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `ingest_rebuild_${key}.json`);
 }
 
 /** Path to the architecture-map completion marker for one project root. */
 export function mapBaselinePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `map_baseline_${key}.json`);
 }
 
@@ -40,7 +51,7 @@ export function mapBaselinePath(projectRoot: string): string {
  * Cleared with the map baseline, since both describe the same hierarchy.
  */
 export function mapResultCachePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `map_result_${key}.json`);
 }
 
@@ -200,6 +211,7 @@ export function saveConfig(config: IxConfig): void {
       throw new Error(
         `${configPath} is not valid YAML, so Ix will not overwrite it. ` +
         `Fix or remove the file and run the command again. (${err instanceof Error ? err.message.split("\n")[0] : String(err)})`,
+        { cause: err },
       );
     }
   }
