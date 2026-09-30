@@ -115,6 +115,8 @@ class FakeBackend {
    * path, which the tests written before it rely on.
    */
   rememberHashes = false;
+  /** Answer `/v1/source-hashes` with a 500, as a backend under load does. */
+  failSourceHashes = false;
   private readonly hashes = new Map<string, { workspaceId: string | null; uri: string; hash: string }>();
 
   /** Forget every request so far, so a second run can be measured on its own. */
@@ -305,6 +307,7 @@ class FakeBackend {
 
     if (path === "/v1/health") return send(200, { status: "ok", version: "1.0.28" });
     if (path === "/v1/source-hashes") {
+      if (this.failSourceHashes) return send(500, { error: "500: transaction begin timeout" });
       if (!this.rememberHashes) return send(200, []);
       let uris: string[] = [];
       try { uris = (JSON.parse(body) as { uris?: string[] }).uris ?? []; } catch { /* none */ }
@@ -933,6 +936,31 @@ describe("ingestFiles against a fake backend", () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it("keeps a deletion it could not clean up in the baseline, so the next run retries it", async () => {
+    // A failed hash lookup with deletions pending drops them for this run. The
+    // baseline it then wrote came from the files still on disk, so it no
+    // longer named the deleted file: no later run could find it deleted, and
+    // its nodes stayed in the graph for good.
+    fixture(3);
+    backend.rememberHashes = true;
+    const incremental = () =>
+      ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const baselineFiles = () =>
+      Object.keys((JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { files: Record<string, number> }).files);
+    const deleted = join(repo, "src", "m001.ts");
+
+    await incremental();
+    expect(baselineFiles()).toContain(deleted);
+
+    rmSync(deleted);
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    backend.failSourceHashes = true;
+    await incremental();
+
+    expect(baselineFiles(), "the skipped deletion is still pending").toContain(deleted);
+    expect(baselineFiles()).toEqual(expect.arrayContaining([join(repo, "src", "m000.ts"), join(repo, "src", "m002.ts")]));
   });
 
   it("re-sends commits that lost the base-rev race to another writer", async () => {

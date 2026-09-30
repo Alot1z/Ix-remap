@@ -912,6 +912,25 @@ const REBUILD_PROGRESS_SAVE_MS = 2_000;
 // Mtime cache — skip readFileSync+sha256 for unchanged files
 // ---------------------------------------------------------------------------
 
+/**
+ * The mtimes to record, plus the deleted files whose cleanup this run had to
+ * skip, at their previous mtimes. Keeping them in the baseline is what makes
+ * the next run find them deleted and retry.
+ */
+export function withDeferredDeletions(
+  currentMtimes: Map<string, number>,
+  previousMtimes: Map<string, number>,
+  deferred: readonly string[],
+): Map<string, number> {
+  if (deferred.length === 0) return currentMtimes;
+  const out = new Map(currentMtimes);
+  for (const filePath of deferred) {
+    const mtime = previousMtimes.get(filePath);
+    if (mtime !== undefined && !out.has(filePath)) out.set(filePath, mtime);
+  }
+  return out;
+}
+
 export function persistIngestBaselineIfClean(
   projectRoot: string,
   mtimes: Map<string, number>,
@@ -2129,8 +2148,12 @@ export async function ingestFiles(
     // fails closed when deletions are pending — but only the *deletions* need
     // that guarantee. Letting the throw escape aborted the entire map over one
     // transient blip, taking the ordinary ingest of every changed file with it.
-    // So catch it here: drop the deletions for this run (they stay in the
-    // baseline and are retried next time) and let the rest proceed.
+    // So catch it here: drop the deletions for this run and let the rest
+    // proceed. `deferredDeletions` carries them into the baseline this run
+    // writes -- without it they vanished: `currentMtimes` never held a deleted
+    // file, so the next run's baseline did not name them, they were never
+    // found deleted again, and their nodes stayed in the graph for good.
+    const deferredDeletions: string[] = [];
     if (hashLookupPaths.length > 0) {
       try {
         knownHashes = await loadExistingHashes(
@@ -2143,6 +2166,7 @@ export async function ingestFiles(
         );
       } catch (err) {
         if (debug) process.stderr.write(`\n  [deletion cleanup skipped] hash lookup failed: ${err}\n`);
+        deferredDeletions.push(...deletedPaths);
         deletedPaths.length = 0;
         knownHashes = new Map();
       }
@@ -3436,7 +3460,7 @@ export async function ingestFiles(
     // missing from the graph until a --force.
     const baselinePersisted = persistIngestBaselineIfClean(
       projectRoot,
-      currentMtimes,
+      withDeferredDeletions(currentMtimes, previousMtimes, deferredDeletions),
       latestRev,
       // Lost parses count as parse errors HERE, whatever they are called
       // elsewhere. A run whose worker pool died resolves every later file as
