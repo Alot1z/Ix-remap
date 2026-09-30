@@ -11,6 +11,7 @@ import {
   bm25QueryTerms,
   bm25Rank,
   bm25Score,
+  bm25Tokens,
   MAX_BM25_BYTES,
   type Bm25Doc,
   type Bm25Hit,
@@ -38,8 +39,22 @@ import type { RepoAccess } from "./text-references.js";
  */
 const INDEX_VERSION = 1;
 
+/**
+ * What the tokenizer does to a probe that exercises its rules: case, camel
+ * and snake splitting, digits, punctuation, stopwords and short words. Part of
+ * the index key, so a change to `bm25Tokens` that shows here invalidates every
+ * stored index even if nobody bumps INDEX_VERSION -- an upgrade must never
+ * score new queries against an old tokenizer's postings.
+ */
+const TOKENIZER_PROBE =
+  "The saveModel() of get_openai_callback fails: JsonWriter.toJsonTree in src/a-b/C.ts line 42, a to is HTTPServer2";
+export const TOKENIZER_FINGERPRINT = createHash("sha256")
+  .update(JSON.stringify(bm25Tokens(TOKENIZER_PROBE))).digest("hex").slice(0, 16);
+
 interface Bm25Index {
   v: number;
+  /** `TOKENIZER_FINGERPRINT` when built. */
+  tok: string;
   root: string;
   head: string;
   maxBytes: number;
@@ -154,7 +169,7 @@ function buildIndex(
   root: string,
 ): { docs: Map<string, Bm25Doc>; built: Bm25Index } {
   const built: Bm25Index = {
-    v: INDEX_VERSION, root, head: state.head, maxBytes: MAX_BM25_BYTES,
+    v: INDEX_VERSION, tok: TOKENIZER_FINGERPRINT, root, head: state.head, maxBytes: MAX_BM25_BYTES,
     paths: [], lengths: [], skipped: [],
     // No prototype: `constructor` and `tostring` are words too.
     postings: Object.create(null) as Record<string, number[]>,
@@ -186,7 +201,7 @@ function buildIndex(
 function loadIndex(path: string, root: string, head: string): Bm25Index | undefined {
   try {
     const data = JSON.parse(readFileSync(path, "utf-8")) as Partial<Bm25Index>;
-    if (data.v !== INDEX_VERSION || data.root !== root || data.head !== head || data.maxBytes !== MAX_BM25_BYTES) return undefined;
+    if (data.v !== INDEX_VERSION || data.tok !== TOKENIZER_FINGERPRINT || data.root !== root || data.head !== head || data.maxBytes !== MAX_BM25_BYTES) return undefined;
     if (!Array.isArray(data.paths) || !Array.isArray(data.lengths) || !Array.isArray(data.skipped)) return undefined;
     if (data.paths.length !== data.lengths.length || !data.postings || typeof data.postings !== "object") return undefined;
     return data as Bm25Index;

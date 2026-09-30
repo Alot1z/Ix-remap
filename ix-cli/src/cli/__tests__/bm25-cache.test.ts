@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { bm25IndexPath, cachedBm25Ranker, readGitState } from "../explain/bm25-cache.js";
+import { bm25IndexPath, cachedBm25Ranker, readGitState, TOKENIZER_FINGERPRINT } from "../explain/bm25-cache.js";
 import { bm25Rank, isSourcePath, MAX_BM25_BYTES } from "../explain/issue.js";
 import { gitRepoAccess, type RepoAccess } from "../explain/text-references.js";
 
@@ -119,6 +119,22 @@ describe("cachedBm25Ranker", () => {
 
     expect(cachedBm25Ranker(dir)(moved, files, QUERIES[2])).toEqual(bm25Rank(moved, files, QUERIES[2]));
     expect(JSON.parse(readFileSync(bm25IndexPath(dir), "utf-8")).head).not.toBe(before);
+  });
+
+  it("rebuilds an index a different tokenizer built", async () => {
+    const repo = gitRepoAccess(dir)!;
+    const files = sourceFiles(repo);
+    cachedBm25Ranker(dir)(repo, files, QUERIES[0]);
+    const path = bm25IndexPath(dir);
+    const stored = JSON.parse(readFileSync(path, "utf-8"));
+    expect(stored.tok).toBe(TOKENIZER_FINGERPRINT);
+    // As an older build would have left it: same HEAD, other tokens.
+    writeFileSync(path, JSON.stringify({ ...stored, tok: "an-older-tokenizer", postings: {} }));
+
+    const watched = counting(repo);
+    expect(cachedBm25Ranker(dir)(watched, files, QUERIES[0])).toEqual(bm25Rank(repo, files, QUERIES[0]));
+    expect(watched.reads.length).toBeGreaterThan(0);
+    expect(JSON.parse(readFileSync(path, "utf-8")).tok).toBe(TOKENIZER_FINGERPRINT);
   });
 
   it("keeps skipping a file too large to score without reading it again", async () => {
