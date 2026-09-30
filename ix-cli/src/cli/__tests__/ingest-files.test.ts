@@ -963,6 +963,24 @@ describe("ingestFiles against a fake backend", () => {
     expect(baselineFiles()).toEqual(expect.arrayContaining([join(repo, "src", "m000.ts"), join(repo, "src", "m002.ts")]));
   });
 
+  it("ingests only the languages --lang names, and keeps the rest of the baseline", async () => {
+    fixture(3);
+    writeFileSync(join(repo, "src", "tool.py"), "def tool():\n    return 1\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    const baselineFiles = () =>
+      Object.keys((JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { files: Record<string, number> }).files);
+
+    await ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const everything = baselineFiles();
+    expect(everything).toHaveLength(4);
+
+    backend.resetRequests();
+    const summary = await ingestFiles(repo, { format: "text", force: true, lang: "py", suppressOutput: true, printSummary: false });
+    expect(summary.filesDiscovered, "only the Python file is in scope").toBe(1);
+    expect(backend.acceptedPatches()).toBe(1);
+    expect(baselineFiles().sort(), "the TypeScript files keep their entries").toEqual([...everything].sort());
+  });
+
   it("re-sends commits that lost the base-rev race to another writer", async () => {
     // Two `ix map` runs against one backend: each commit that lands moves the
     // rev under the other's in-flight commit, which is answered 200

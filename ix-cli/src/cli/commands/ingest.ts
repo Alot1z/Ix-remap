@@ -913,18 +913,19 @@ const REBUILD_PROGRESS_SAVE_MS = 2_000;
 // ---------------------------------------------------------------------------
 
 /**
- * The mtimes to record, plus the deleted files whose cleanup this run had to
- * skip, at their previous mtimes. Keeping them in the baseline is what makes
- * the next run find them deleted and retry.
+ * The mtimes to record, plus `carried` -- files this run did not process -- at
+ * their previous mtimes: deleted files whose cleanup had to be skipped (kept so
+ * the next run finds them deleted and retries) and files a `--lang` run left
+ * out (kept so it does not reset their state).
  */
-export function withDeferredDeletions(
+export function carryForwardMtimes(
   currentMtimes: Map<string, number>,
   previousMtimes: Map<string, number>,
-  deferred: readonly string[],
+  carried: readonly string[],
 ): Map<string, number> {
-  if (deferred.length === 0) return currentMtimes;
+  if (carried.length === 0) return currentMtimes;
   const out = new Map(currentMtimes);
-  for (const filePath of deferred) {
+  for (const filePath of carried) {
     const mtime = previousMtimes.get(filePath);
     if (mtime !== undefined && !out.has(filePath)) out.set(filePath, mtime);
   }
@@ -1496,7 +1497,7 @@ export async function ingestFiles(
   const trueStart = performance.now();
 
   const [
-    { parseFile, resolveEdges, isGrammarSupported },
+    { parseFile, resolveEdges },
     {
       buildPatchWithResolution,
       buildDeletionPatch,
@@ -1968,12 +1969,6 @@ export async function ingestFiles(
   try {
     // Phase: discover files
     const langFilter = opts.lang ? parseLangs(opts.lang) : null;
-    const supportsFile = (fileName: string): boolean => {
-      if (!isGrammarSupported(fileName)) return false;
-      if (!langFilter) return true;
-      const lang = languageFromPath(fileName);
-      return lang !== null && langFilter.has(lang);
-    };
 
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`Path not found: ${resolvedPath}`);
@@ -1991,7 +1986,15 @@ export async function ingestFiles(
             ?? Array.from(walkFiles(resolvedPath, opts.recursive ?? true, exclude))),
       stat.isFile() ? undefined : resolvedPath,
     );
-    const filePaths: string[] = discovery.files;
+    // `--lang` narrows discovery to the named languages. The files it leaves
+    // out keep their baseline entries (`langExcluded`, below): this run says
+    // nothing about them, so it must neither drop nor refresh them.
+    const inLangFilter = (fp: string): boolean => {
+      const lang = languageFromPath(fp);
+      return lang !== null && langFilter!.has(lang);
+    };
+    const filePaths: string[] = langFilter ? discovery.files.filter(inLangFilter) : discovery.files;
+    const langExcluded: string[] = langFilter ? discovery.files.filter(fp => !inLangFilter(fp)) : [];
     outsideRoot = discovery.outsideRoot;
     const resolveOpts = {
       ...crossRepoResolveOpts,
@@ -3460,7 +3463,7 @@ export async function ingestFiles(
     // missing from the graph until a --force.
     const baselinePersisted = persistIngestBaselineIfClean(
       projectRoot,
-      withDeferredDeletions(currentMtimes, previousMtimes, deferredDeletions),
+      carryForwardMtimes(currentMtimes, previousMtimes, [...deferredDeletions, ...langExcluded]),
       latestRev,
       // Lost parses count as parse errors HERE, whatever they are called
       // elsewhere. A run whose worker pool died resolves every later file as
