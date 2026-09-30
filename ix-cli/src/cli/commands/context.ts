@@ -12,6 +12,7 @@ import {
 } from "../context-bundle-schema.js";
 
 import { IxClient } from "../../client/api.js";
+import { QUERY_CLIENT_OPTIONS } from "../../client/request-memo.js";
 import type {
   ConflictReport,
   DecisionReport,
@@ -431,7 +432,7 @@ export function registerContextCommand(program: Command): void {
         return;
       }
 
-      const client = new IxClient(getEndpoint());
+      const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
 
       const resolved = await resolveFileOrReport(client, target, {
         kind: opts.kind,
@@ -542,7 +543,7 @@ async function buildFreshBundle(
   budgets: BudgetSnapshot,
   format: string,
 ): Promise<ContextBundle | undefined> {
-  const client = new IxClient(getEndpoint());
+  const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
   const resolved = await resolveFileOrReport(client, target, {
     kind: opts.kind,
     path: opts.path,
@@ -1646,7 +1647,7 @@ async function buildIssueBundle(
     return undefined;
   }
 
-  const client = new IxClient(getEndpoint());
+  const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
   await ensureReadScope(client);
   const scope = activeReadScope();
   const plan = await planIssue(text, {

@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { renderSection, renderKeyValue, renderNote, renderResolvedHeader, colorizeKind } from "../ui.js";
 import { IxClient } from "../../client/api.js";
+import { QUERY_CLIENT_OPTIONS } from "../../client/request-memo.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
@@ -33,7 +34,7 @@ export function registerImpactCommand(program: Command): void {
         symbol: string,
         opts: { kind?: string; path?: string; pick?: number; depth: string; limit: string; format: string }
       ) => {
-        const client = new IxClient(getEndpoint());
+        const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
         const limit = parseInt(opts.limit, 10);
         const depth = Math.min(Math.max(parseInt(opts.depth, 10) || 1, 1), 3);
 

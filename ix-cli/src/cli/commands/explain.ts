@@ -2,6 +2,7 @@
 
 import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
+import { QUERY_CLIENT_OPTIONS } from "../../client/request-memo.js";
 import { getEndpoint } from "../config.js";
 import { formatExplain, relativePath, printJson, type ExplainResult, type EntityRef, type Diagnostic } from "../format.js";
 import { resolveFileOrReport, isRawId } from "../resolve.js";
@@ -26,7 +27,7 @@ export function registerExplainCommand(program: Command): void {
     .option("--raw", "Show raw metadata dump (legacy format)")
     .addHelpText("after", "\nExamples:\n  ix explain IngestionService\n  ix explain expand --path memory-layer\n  ix explain verify_token --kind function --format json\n  ix explain IxClient --raw")
     .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; format: string; raw?: boolean }) => {
-      const client = new IxClient(getEndpoint());
+      const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
       if (!target) return;
