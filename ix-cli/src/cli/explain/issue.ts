@@ -346,9 +346,10 @@ export interface Bm25Hit {
  *
  * The query is the issue's words less {@link BM25_STOPWORDS}, and a word of a
  * code name the issue mentions counts {@link BM25_IDENTIFIER_WEIGHT} times.
- * Measured in `scripts/ranking-eval` on 104 SWE-PolyBench dev issues: each
- * of whole names, stopwords and the name weight raised recall; a separate
- * path field, other k1 and b, and a lower size cap did not.
+ * Measured in `scripts/ranking-eval` on 104 SWE-PolyBench dev issues, the
+ * three together took BM25's recall at 5/10/20 from 0.50/0.64/0.72 to
+ * 0.59/0.74/0.84, and leaving any one out lowered it; a separate path field,
+ * other k1 and b, and a lower size cap did not help.
  */
 export function bm25Rank(
   repo: Pick<RepoAccess, "read">,
