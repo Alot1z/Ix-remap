@@ -535,7 +535,9 @@ Examples:
       if (!effectiveSystemId) {
         const ws = resolveWorkspaceId(cwd);
         if (ws) {
-          const looked = await client.workspaceSystem(ws);
+          // Best-effort, as before workspaceSystem started reporting failures:
+          // an unanswered lookup leaves the map at workspace scope.
+          const looked = await client.workspaceSystem(ws).catch(() => ({ systemId: null }));
           if (looked.systemId) effectiveSystemId = looked.systemId;
         }
       }
