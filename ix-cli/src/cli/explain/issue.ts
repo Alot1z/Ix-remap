@@ -350,6 +350,89 @@ export async function planIssue(
   };
 }
 
+
+/**
+ * Whether an identifier the issue names is too common to point anywhere: a
+ * short all-lowercase word such as `debug`, `bind`, `config` or `render`
+ * resolves to *a* definition, rarely the one the fix touches. Specific names
+ * carry an inner capital (`toJsonTree`, `JsonWriter`), an underscore
+ * (`get_openai_callback`), or length.
+ *
+ * Fixed before it was scored on held-out samples: on SWE-PolyBench issues the
+ * starts it keeps were in the gold patch 20 times in 32, the ones it drops 2
+ * in 7.
+ */
+export function isGenericIdentifier(token: string): boolean {
+  return !(/[a-z][A-Z]/.test(token) || /^[A-Z][a-z]+[A-Z]/.test(token) || token.includes("_") || token.length >= 8);
+}
+
+/** How far a plan's starting points can be trusted, and which ones. */
+export interface IssueConfidence {
+  confident: boolean;
+  /** The starts worth pointing an agent at: named paths and specific identifiers. */
+  starts: StartingPoint[];
+  /** Why not, when not confident. */
+  reason?: string;
+}
+
+/**
+ * A plan is confident when the issue named a path, or a specific identifier,
+ * that resolved. A BM25 fallback never is: across four samples of
+ * SWE-PolyBench issues its start was in the gold patch once in 55.
+ */
+export function issueConfidence(plan: Pick<IssuePlan, "starts" | "fallback">): IssueConfidence {
+  if (plan.fallback) {
+    return { confident: false, starts: [], reason: "no code name in the issue resolved to a definition" };
+  }
+  const starts = plan.starts.filter((s) => s.via === "path in issue"
+    || (s.via === "identifier in issue" && !isGenericIdentifier(s.token)));
+  if (starts.length === 0) {
+    const names = plan.starts.map((s) => s.token);
+    return {
+      confident: false,
+      starts,
+      reason: names.length > 0
+        ? `only common words resolved (${names.join(", ")}), which name many definitions`
+        : "nothing in the issue resolved to a definition",
+    };
+  }
+  return { confident: true, starts };
+}
+
+/** Files after the starting points in a lean view. */
+export const LEAN_RANKED = 4;
+
+/** `ix context --from-issue --lean`: where to start, and nothing else. */
+export interface LeanIssueView {
+  confidence: "high" | "low";
+  reason?: string;
+  startingPoints: StartingPoint[];
+  /** The next files by BM25 against the issue, starting files excluded. */
+  alsoRanked: RankedFile[];
+  unresolved: string[];
+}
+
+/**
+ * The lean view of a plan. A full bundle costs about 1.5k tokens, and an
+ * agent re-reads it on every turn; on SWE-PolyBench it added a median 14%
+ * tokens even where its start was right, and saved no turns. What the agent
+ * uses is the pointer, so that is all this keeps: the trusted starting points
+ * and a few ranked files -- Ix's starts, then BM25, the ordering that beat
+ * both alone on held-out issues. When nothing is trusted it says so, rather
+ * than pointing the agent at a guess.
+ */
+export function leanIssueView(plan: IssuePlan, ranked = LEAN_RANKED): LeanIssueView {
+  const c = issueConfidence(plan);
+  if (!c.confident) {
+    return { confidence: "low", reason: c.reason, startingPoints: [], alsoRanked: [], unresolved: plan.unresolved };
+  }
+  const startPaths = new Set(c.starts.map((s) => s.path));
+  const alsoRanked = rankIssueFiles({ starts: [], bm25: plan.bm25, near: new Map() }, ranked + startPaths.size)
+    .filter((f) => !startPaths.has(f.path))
+    .slice(0, ranked);
+  return { confidence: "high", startingPoints: c.starts, alsoRanked, unresolved: plan.unresolved };
+}
+
 /** BM25 files tried, best first, for one the graph has a node for. */
 export const CENTRE_FALLBACK_TRIES = 10;
 
