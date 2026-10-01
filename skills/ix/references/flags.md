@@ -390,12 +390,12 @@ No flags.
 
 #### `ix hook claude-post-edit`
 
-Claude Code PostToolUse hook for `Edit|MultiEdit|Write`: reads the hook JSON on stdin and prints `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}` naming the changed symbols' callers, importers that use them, and tests that reach them -- or prints nothing. Always exits 0; any failure (backend down, unmapped workspace, file not in the graph, non-code file, `IX_HOOK_TIMEOUT_MS`, default 3000, exceeded) prints nothing. `IX_HOOK_DEBUG=1` says why on stderr.
+Claude Code PostToolUse hook, matcher `Edit|MultiEdit|Write|Bash`. Reads the hook JSON on stdin and the working tree's `git diff -U0 HEAD`, so an edit made through a Bash script counts as much as one made with Edit or Write; each hunk's old side locates the edited symbols in HEAD's text, which is what the graph indexed. Prints `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}` naming the changed symbols' callers, importers that use them, and tests that reach them -- each symbol once per session (state per `session_id` in `IX_HOOK_STATE_DIR`, default `<tmp>/ix-hook`). A call whose diff is empty or unchanged since the last report answers from one git call, without loading the CLI. Always exits 0; any failure (backend down, unmapped workspace, file not in the graph, non-code or untracked file, `IX_HOOK_TIMEOUT_MS`, default 3000, exceeded) prints nothing. Outside a git repository it falls back to the Edit/Write tool's own patch. `IX_HOOK_DEBUG=1` says why on stderr.
 
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--graph-root` | `<dir>` | — | Mapped workspace to query (default: the one containing the edited file) |
-| `--worktree` | `<dir>` | — | Root the edited `file_path` is under; mapped to the same relative path in `--graph-root` |
+| `--worktree` | `<dir>` | — | Checkout the agent edits (default: the git root of the hook's `cwd`); its paths map to the same relative paths in `--graph-root` |
 | `--budget` | `<tokens>` | `300` | Token budget for the context it adds (~4 chars a token) |
 
 ### `ix impact <target>`

@@ -58,17 +58,20 @@ The graph's spans are re-anchored to the file on disk first, so a file edited
 since the last map is still read correctly. Output is held to `--budget` tokens
 (default 300); lists are cut, never their totals.
 
-The same answer is pushed to Claude Code after every edit by
-`ix hook claude-post-edit` (PostToolUse, matcher `Edit|MultiEdit|Write`):
+The same answer is pushed to Claude Code after edits by
+`ix hook claude-post-edit` (PostToolUse). It reads the working tree's diff
+against HEAD rather than the tool's arguments, so match Bash too -- agents
+often edit through scripts:
 
 ```json
-{"hooks":{"PostToolUse":[{"matcher":"Edit|MultiEdit|Write",
+{"hooks":{"PostToolUse":[{"matcher":"Edit|MultiEdit|Write|Bash",
   "hooks":[{"type":"command","command":"ix hook claude-post-edit"}]}]}}
 ```
 
-It prints nothing and exits 0 whenever it cannot help. When the agent edits a
-different checkout from the mapped one, pass `--graph-root <mapped>` and
-`--worktree <agent checkout>`.
+Each edited symbol is reported once per session; a call that changed nothing
+new prints nothing and costs one git call. It prints nothing and exits 0
+whenever it cannot help. When the agent edits a different checkout from the
+mapped one, pass `--graph-root <mapped>` and `--worktree <agent checkout>`.
 
 ## History, Diffs & Contradictions
 
@@ -204,7 +207,7 @@ ix inventory --kind function --path auth.py
   degraded graph.
 
 - **The OSS↔Pro command boundary is derived at runtime, not declared.**
-  `main.ts` snapshots `ossCmdNames` immediately after `registerOssCommands()`;
+  `cli.ts` (which `main.ts` loads) snapshots `ossCmdNames` immediately after `registerOssCommands()`;
   the Pro probe (`tryLoadProCommands`) then diffs whatever commands exist
   against that set to decide which count as "Pro". Consequences:
   - Adding a `register*Command` call in `oss.ts` silently reclassifies that

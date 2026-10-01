@@ -328,6 +328,12 @@ export interface AroundRequest {
   /** Reads the dependents' files for their sites. */
   files: SourceFiles;
   caps?: Partial<AroundCaps>;
+  /**
+   * Ids of definitions not to report: the post-edit hook's "already told this
+   * session". Applied after innermost selection, so a class whose method was
+   * reported earlier does not take that method's place.
+   */
+  exclude?: Set<string>;
 }
 
 type AroundClient = Pick<IxClient, "search" | "expand" | "workspaceSystem" | "currentRevision" | "stats"> & { endpoint?: string };
@@ -435,11 +441,15 @@ export async function gatherAround(client: AroundClient, req: AroundRequest): Pr
   let chosen: PlacedDef[];
   const preloaded = new Map<string, any[]>();
   if (req.ranges && req.ranges.length > 0) {
-    chosen = selectEdited(anchorPlaced, req.ranges, caps.symbols);
+    chosen = selectEdited(anchorPlaced, req.ranges, Number.MAX_SAFE_INTEGER)
+      .filter((d) => !req.exclude?.has(d.id))
+      .slice(0, caps.symbols);
   } else {
     // The whole file: its outermost definitions, the most-called first, so a
     // capped answer keeps the ones with dependents.
-    const candidates = outermostDefs(anchorPlaced).slice(0, WHOLE_FILE_CANDIDATES);
+    const candidates = outermostDefs(anchorPlaced)
+      .filter((d) => !req.exclude?.has(d.id))
+      .slice(0, WHOLE_FILE_CANDIDATES);
     const counts = await Promise.all(candidates.map(async (d) => {
       const r = await client.expand(d.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] });
       preloaded.set(d.id, r.nodes.filter((n: any) => n.id !== d.id));

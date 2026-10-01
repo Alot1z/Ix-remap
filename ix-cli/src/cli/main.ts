@@ -1,140 +1,22 @@
 #!/usr/bin/env node
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { Command } from "commander";
-import { registerOssCommands, registerProStubs } from "./register/oss.js";
-import { tryLoadProCommands } from "./register/pro-loader.js";
-import { isRepairInvocation } from "./register/pro-failure.js";
-import { buildHelpText } from "./help-text.js";
-import { checkForUpdate, updateCheckEnabled } from "./commands/upgrade.js";
-import { stderrIsTerminal } from "./stderr.js";
-import { detectRequestedFormat, renderCliError, setErrorFormat } from "./errors.js";
-import { getEndpoint } from "./config.js";
-
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-
-// Runtime Node version guard. Runs before any command work so users on an
-// unsupported Node get an actionable message instead of a cryptic "fetch
-// failed" deep inside undici.
-const MIN_NODE_MAJOR = 22;
-{
-  const current = process.versions.node;
-  const major = parseInt(current.split(".")[0] ?? "0", 10);
-  if (!Number.isFinite(major) || major < MIN_NODE_MAJOR) {
-    process.stderr.write(
-      `Ix requires Node.js ${MIN_NODE_MAJOR} or newer. You are running v${current}.\n` +
-      `Install a supported version from https://nodejs.org/ and re-run.\n`
-    );
-    process.exit(1);
-  }
+/**
+ * The `ix` executable.
+ *
+ * Everything but one invocation goes straight to the CLI (`cli.ts`). The
+ * exception is `ix hook claude-post-edit`, which an agent harness runs after
+ * every hooked tool call -- every Bash command included -- and which almost
+ * always has nothing to say. Loading the CLI's command tree costs ~140 ms
+ * before a single line of it runs; the hook's "nothing changed" answer costs a
+ * git call. So the hook is dispatched here, before that tree is loaded, and
+ * loads the graph code itself only when there is an edit to report.
+ * `--help` still goes through the CLI, where the command is documented.
+ */
+const args = process.argv.slice(2);
+if (args[0] === "hook" && args[1] === "claude-post-edit" && !args.some((a) => a === "-h" || a === "--help")) {
+  const { parseHookArgs, runHookProcess } = await import("./hook/entry.js");
+  await runHookProcess(parseHookArgs(args.slice(2)));
+} else {
+  await import("./cli.js");
 }
-
-let cliVersion = "0.0.0";
-try {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"));
-  cliVersion = pkg.version || "0.0.0";
-} catch {}
-
-// Set IX_DEBUG=1 to append stack traces to any rendered error.
-const debug = process.env.IX_DEBUG === "1";
-
-// Before anything can throw. The handlers below are installed for
-// `unhandledRejection` and `uncaughtException`, which can fire before
-// commander has parsed a thing, so the error boundary gets the format from
-// argv rather than from a parsed command.
-setErrorFormat(detectRequestedFormat(process.argv.slice(2)));
-
-// Resolving the endpoint reads config off disk, which can itself fail. An
-// error renderer must never throw, so failure here just drops the endpoint
-// from the message rather than replacing one crash with another.
-function safeEndpoint(): string | undefined {
-  try {
-    return getEndpoint();
-  } catch {
-    return undefined;
-  }
-}
-
-// Last line of defence. Without these, any rejection escaping a command — most
-// commonly the backend not running — reaches Node's default handler and prints
-// an undici stack trace that exposes internal paths and tells the user nothing.
-process.on("unhandledRejection", (err: unknown) => {
-  renderCliError(err, debug, safeEndpoint());
-});
-process.on("uncaughtException", (err: unknown) => {
-  renderCliError(err, debug, safeEndpoint());
-});
-
-const program = new Command();
-program
-  .name("ix")
-  .version(cliVersion);
-
-// Start with OSS-only help; updated after Pro probe.
-program.helpInformation = () => buildHelpText();
-
-registerOssCommands(program);
-
-(async () => {
-  const ossCmdNames = new Set(program.commands.map((c: Command) => c.name()));
-
-  // An installed-but-broken Pro throws here rather than reporting absence, so
-  // commands never run without its credential guard. Note this call sits
-  // OUTSIDE the parseAsync try/catch below — render the failure here rather
-  // than letting it reach the unhandledRejection handler by accident.
-  let proLoaded = false;
-  // `ix hook` runs inside an agent harness after every edit and must exit 0
-  // with nothing on stdout whenever it cannot help. A broken Pro install would
-  // otherwise make it exit 1 before its action runs, and it needs nothing Pro
-  // registers.
-  const isHook = process.argv[2] === "hook";
-  try {
-    if (!isHook) proLoaded = await tryLoadProCommands(program);
-  } catch (err) {
-    if (!isRepairInvocation(process.argv)) {
-      renderCliError(err, debug, safeEndpoint()); // exits 1
-    }
-    // Repair invocation: continue OSS-only. proLoaded stays false, so the Pro
-    // stubs register below and would misreport a broken Pro as absent — the
-    // warning here is what distinguishes the two, and no command in the set
-    // above reaches a stub.
-    console.error(
-      "[!!] Ix Pro is installed but failed to initialize; continuing with OSS " +
-      "commands only so this one can repair the install.",
-    );
-  }
-  if (proLoaded) {
-    // Collect commands that Pro added (weren't in OSS set)
-    const proCommands = program.commands
-      .filter((c: Command) => !ossCmdNames.has(c.name()))
-      .map((c: Command) => ({ name: c.name(), desc: c.description() }));
-
-    program.helpInformation = () => buildHelpText(proCommands);
-  } else {
-    registerProStubs(program);
-  }
-
-  // Check for updates (non-blocking, cached 1hr). Only when a person is
-  // watching stderr — see updateCheckEnabled for why, and for the
-  // IX_NO_UPDATE_CHECK opt-out.
-  const args = process.argv.slice(2);
-  if (updateCheckEnabled(args, process.env, stderrIsTerminal())) {
-    // Deliberately not awaited — but it must still be caught here. The catch
-    // inside checkForUpdate only guards its inner fetch chain; the function's
-    // own promise covers the synchronous cached-read path, and a corrupt
-    // ~/.ix/.version-check.json makes that throw. Uncaught, the new
-    // unhandledRejection handler then aborts a command that already succeeded.
-    checkForUpdate().catch(() => {});
-  }
-
-  // parseAsync (not parse) so rejections from async action handlers surface
-  // here instead of floating off as unhandled rejections.
-  try {
-    await program.parseAsync();
-  } catch (err) {
-    renderCliError(err, debug, safeEndpoint());
-  }
-})();

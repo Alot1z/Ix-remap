@@ -45,7 +45,7 @@ ix map --silent                             # refresh the graph after code chang
   `ix reset --workspace` (the registered workspace containing cwd, nothing
   else). After a global reset, re-map each workspace.
 - **The OSS↔Pro command boundary is derived at runtime, not declared.**
-  `main.ts` snapshots `ossCmdNames` right after `registerOssCommands()`; the
+  `cli.ts` snapshots `ossCmdNames` right after `registerOssCommands()`; the
   Pro probe diffs against it. Adding a command to `oss.ts` silently makes it
   OSS; removing one makes Pro own it. `registerProCommands` is async and MUST
   be awaited.

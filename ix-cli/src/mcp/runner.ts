@@ -350,7 +350,7 @@ function releaseLocksOf(run: ActiveRun): void {
 /**
  * Replace the CLI's fatal error handlers for the lifetime of the server.
  *
- * `main.ts` installs `unhandledRejection`/`uncaughtException` handlers whose
+ * `cli.ts` installs `unhandledRejection`/`uncaughtException` handlers whose
  * every path ends in `process.exit(1)`. That is right for one command in one
  * process and fatal for a server: a stray rejection from any command's
  * fire-and-forget work would either exit outright, or — once the in-process
