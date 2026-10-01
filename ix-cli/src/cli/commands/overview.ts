@@ -11,6 +11,7 @@ import { relativePath, printJson } from "../format.js";
 import { llmLine, type LlmValue } from "../llm.js";
 import { parsePickOption } from "../options.js";
 import { renderSection, renderKeyValue, renderNote, renderBreadcrumb } from "../ui.js";
+import { forMcp } from "../next-step.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
 const STRUCTURAL_CONTAINER_KINDS = new Set(["class", "object", "trait", "interface"]);
@@ -167,7 +168,7 @@ async function overviewContainer(
 
   const hasMap = hasMapData(systemPath);
   if (!hasMap) {
-    diagnostics.push("No system map. Run `ix map` to see hierarchy.");
+    diagnostics.push(`No system map. Run ${forMcp() ? "ix_map" : "`ix map`"} to see hierarchy.`);
   }
 
   // Append container symbol to system path for non-file, non-region containers
@@ -247,7 +248,7 @@ async function overviewLeaf(
 
   const hasMap = hasMapData(systemPath);
   if (!hasMap) {
-    diagnostics.push("No system map. Run `ix map` to see hierarchy.");
+    diagnostics.push(`No system map. Run ${forMcp() ? "ix_map" : "`ix map`"} to see hierarchy.`);
   }
 
   // Append target to system path if not already there

@@ -55,7 +55,9 @@ describe("ix read line cap", () => {
     expect(logs[0]).toContain("truncated=true");
     expect(logs[0]).toContain("total_lines=1734");
     expect(logs[0]).toContain("next=src/big.ts:401-800");
-    expect(logs[1]).toBe("content lines=400");
+    expect(logs[1]).toBe("content lines=400 numbered=true");
+    expect(logs[2]).toMatch(/^1\t/);
+    expect(logs[401]).toMatch(/^400\t/);
   });
 
   it("--all restores the whole file", async () => {

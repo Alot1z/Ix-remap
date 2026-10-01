@@ -243,6 +243,41 @@ describe('call resolution respects lexical scope (JS/TS)', () => {
   });
 });
 
+describe('bare calls never resolve to a class member (Python, Rust, PHP)', () => {
+  it('Python: describe() does not link to another file\'s Foo.describe method', () => {
+    const method = parse('pkg/fixtures.py', 'class Foo:\n    def describe(self):\n        return 1\n');
+    const caller = parse('pkg/test_x.py', 'def test_x():\n    describe("x")\n');
+    expect(callsTo(resolveEdges([caller, method]), method.filePath)).toEqual([]);
+  });
+
+  it('Python: a member call still reaches the method, and a bare call a module-scope function', () => {
+    const lib = parse('pkg/lib.py', 'class Foo:\n    def describe(self):\n        return 1\n\ndef helper_fn():\n    return 2\n');
+    const caller = parse('pkg/main.py', 'def run(obj):\n    obj.describe()\n    return helper_fn()\n');
+    const edges = callsTo(resolveEdges([caller, lib]), lib.filePath);
+    expect(edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ dstName: 'describe', dstQualifiedKey: 'Foo.describe' }),
+      expect.objectContaining({ dstName: 'helper_fn', dstQualifiedKey: 'helper_fn' }),
+    ]));
+    expect(edges).toHaveLength(2);
+  });
+
+  it('Rust: describe() does not link to an impl method; a free function still resolves', () => {
+    const lib = parse('src/lib.rs', 'struct Foo;\nimpl Foo {\n  fn describe(&self) -> i32 { 1 }\n}\npub fn helper_fn() -> i32 { 2 }\n');
+    const caller = parse('src/main.rs', 'fn t() {\n  describe();\n  helper_fn();\n}\n');
+    expect(callsTo(resolveEdges([caller, lib]), lib.filePath)).toEqual([
+      expect.objectContaining({ dstName: 'helper_fn', dstQualifiedKey: 'helper_fn' }),
+    ]);
+  });
+
+  it('PHP: describe() does not link to a class method; a function still resolves', () => {
+    const lib = parse('src/Lib.php', '<?php\nclass Foo {\n  public function describe() { return 1; }\n}\nfunction helper_fn() { return 2; }\n');
+    const caller = parse('src/main.php', '<?php\nfunction t() {\n  describe();\n  helper_fn();\n}\n');
+    expect(callsTo(resolveEdges([caller, lib]), lib.filePath)).toEqual([
+      expect.objectContaining({ dstName: 'helper_fn', dstQualifiedKey: 'helper_fn' }),
+    ]);
+  });
+});
+
 describe('dynamic and helper-literal imports (JS/TS)', () => {
   const LOADER_PATH = 'ix-cli/src/cli/commands/ingestion-loader.ts';
   const LOADER_SOURCE = [

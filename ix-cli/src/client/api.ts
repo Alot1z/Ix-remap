@@ -360,9 +360,18 @@ export class IxClient {
 
   // Path-2 grouping (Ix#225 Half B): the system_id a workspace currently belongs
   // to (null if a singleton). Lets `ix map <repo>` scope to its stitched system.
+  //
+  // Only a 404 (an older backend without the endpoint) means "no system". Any
+  // other failure -- backend down, timeout, 5xx, a non-JSON body -- is not an
+  // answer and is thrown: `ensureReadScope` persists what this returns with no
+  // TTL, so turning an outage into `null` pinned every later read in a stitched
+  // workspace to the single repo until the next map.
   async workspaceSystem(workspaceId: string): Promise<{ systemId: string | null }> {
     try { return await this.get(`/v1/stitch/system/${workspaceId}`); }
-    catch { return { systemId: null }; } // older backend without the endpoint
+    catch (err) {
+      if (err instanceof Error && err.message.startsWith("404:")) return { systemId: null };
+      throw err;
+    }
   }
 
   async map(opts?: { full?: boolean; workspaceId?: string; systemId?: string }): Promise<any> {
@@ -669,12 +678,15 @@ export class IxClient {
     return resp.json();
   }
 
-  async stats(opts?: { workspaceId?: string; systemId?: string }): Promise<any> {
+  async stats(opts?: { workspaceId?: string; systemId?: string; timeoutMs?: number }): Promise<any> {
     const params = new URLSearchParams();
     if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
     if (opts?.systemId)    params.set("system_id",    opts.systemId);
     const qs = params.toString();
-    return this.get(`/v1/stats${qs ? `?${qs}` : ""}`);
+    // `timeoutMs` bounds a probe (the graph-health check) that must never hold
+    // up the answer it rides along with; the request is aborted, not abandoned,
+    // so a slow backend does not keep a finished CLI process alive either.
+    return this.get(`/v1/stats${qs ? `?${qs}` : ""}`, opts?.timeoutMs);
   }
 
   async health(): Promise<HealthResponse> {
@@ -704,10 +716,10 @@ export class IxClient {
       }));
   }
 
-  private async get<T>(path: string): Promise<T> {
+  private async get<T>(path: string, timeoutMs = 2 * 60 * 1000): Promise<T> {
     return this.read<T>("GET", path, "", () =>
       fetch(`${this.endpoint}${path}`, {
-        signal: this.signalFor(2 * 60 * 1000),
+        signal: this.signalFor(timeoutMs),
       }));
   }
 

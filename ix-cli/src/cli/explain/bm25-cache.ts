@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { ixHome } from "../ix-home.js";
 import {
   bm25Doc,
-  bm25QueryTerms,
+  bm25QueryWeights,
   bm25Rank,
   bm25Score,
   bm25Tokens,
@@ -114,16 +114,17 @@ export function cachedBm25Ranker(
     const state = readState();
     if (!state) return bm25Rank(repo, files, query);
     const indexPath = opts.indexPath ?? bm25IndexPath(root);
-    const terms = bm25QueryTerms(query);
+    const weights = bm25QueryWeights(query);
+    const terms = [...weights.keys()];
     const index = loadIndex(indexPath, root, state.head);
-    if (index) return bm25Score(docsFromIndex(index, repo, files, terms, state.dirty), terms);
+    if (index) return bm25Score(docsFromIndex(index, repo, files, terms, state.dirty), weights);
 
     const { docs, built } = buildIndex(repo, files, terms, state, root);
     // Only if nothing moved while the files were being read: a file edited in
     // that window would otherwise be stored as HEAD's text.
     const after = readState();
     if (after && after.head === state.head && sameSet(after.dirty, state.dirty)) saveIndex(indexPath, built);
-    return bm25Score(docs, terms);
+    return bm25Score(docs, weights);
   };
 }
 

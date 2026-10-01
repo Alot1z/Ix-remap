@@ -2,14 +2,15 @@
 
 import type { Command } from "commander";
 import chalk from "chalk";
-import { renderSection, renderKeyValue, renderNote, renderResolvedHeader, colorizeKind } from "../ui.js";
+import { renderSection, renderKeyValue, renderNote, renderResolvedHeader, renderWarning, colorizeKind } from "../ui.js";
 import { IxClient } from "../../client/api.js";
 import { QUERY_CLIENT_OPTIONS } from "../../client/request-memo.js";
 import { getEndpoint } from "../config.js";
-import { resolveFileOrReport, printResolved } from "../resolve.js";
+import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.js";
+import { checkGraphHealth, graphHealthJson, graphHealthLlmFields, graphHealthProse, isUnhealthy } from "../graph-health.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
-import { lineSpan, printJson, rowLocation, stripNulls } from "../format.js";
+import { lineSpan, printJson, relativePath, rowLocation, stripNulls } from "../format.js";
 import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
@@ -44,13 +45,36 @@ export function registerImpactCommand(program: Command): void {
 
         if (opts.format === "text") printResolved(target);
 
+        // A hollowed graph reports "low risk, no dependents" for anything:
+        // the answer is only as good as the edges it counts. Said first, in
+        // every format, before the counts it undermines.
+        const health = await checkGraphHealth(client, activeReadScope());
+        const graph = isUnhealthy(health) ? graphHealthJson(health) : undefined;
+        if (graph && opts.format === "llm") console.log(llmLine("graph", graphHealthLlmFields(health)));
+        if (graph && opts.format === "text") renderWarning(graphHealthProse(health));
+
         if (CONTAINER_KINDS.has(target.kind)) {
-          await containerImpact(client, target, limit, depth, opts.format);
+          await containerImpact(client, target, limit, depth, opts.format, graph);
         } else {
-          await leafImpact(client, target, depth, opts.format);
+          await leafImpact(client, target, depth, opts.format, graph);
         }
       }
     );
+}
+
+/**
+ * The risk a hollowed graph would report is drawn from edges it has lost, so
+ * "low risk" there means "no edges left", not "safe to change". Withheld as
+ * `unknown` -- a level the type does not hold on purpose, as `ix explain`
+ * does for importance: nothing downstream may mistake it for a real `low`.
+ */
+export function withheldOnDegraded(risk: RiskSemantics, graph: Record<string, unknown> | undefined): RiskSemantics {
+  if (!graph) return risk;
+  return {
+    ...risk,
+    riskLevel: "unknown" as unknown as RiskSemantics["riskLevel"],
+    riskSummary: "Unknown: this workspace's graph is missing its call and import edges, so what a change reaches cannot be counted.",
+  };
 }
 
 // ── Risk level coloring ──────────────────────────────────────────────────────
@@ -263,10 +287,11 @@ export function impactTailLlm(
 
 async function containerImpact(
   client: IxClient,
-  target: { id: string; kind: string; name: string; resolutionMode: string },
+  target: { id: string; kind: string; name: string; resolutionMode: string; path?: string },
   limit: number,
   depth: number,
-  format: string
+  format: string,
+  graph?: Record<string, unknown>,
 ): Promise<void> {
   const isJson = format === "json";
   const diagnostics: string[] = [];
@@ -354,6 +379,7 @@ async function containerImpact(
   const riskFacts: ImpactFacts = {
     name: target.name,
     kind: target.kind,
+    targetPath: target.path ? (relativePath(target.path) ?? target.path) : undefined,
     container: undefined,
     systemPath: systemPathMapped,
     members: members.length,
@@ -368,12 +394,13 @@ async function containerImpact(
       count: b.members.length,
     })),
   };
-  const risk = inferRiskSemantics(riskFacts);
+  const risk = withheldOnDegraded(inferRiskSemantics(riskFacts), graph);
 
   if (isJson) {
     printJson(
       stripNulls({
         resolvedTarget: { kind: target.kind, name: target.name },
+        graph,
         depth,
         systemPath: systemPathMapped.length > 0 ? systemPathMapped : undefined,
         riskSummary: risk.riskSummary,
@@ -454,9 +481,10 @@ async function containerImpact(
 
 async function leafImpact(
   client: IxClient,
-  target: { id: string; kind: string; name: string; resolutionMode: string },
+  target: { id: string; kind: string; name: string; resolutionMode: string; path?: string },
   depth: number,
-  format: string
+  format: string,
+  graph?: Record<string, unknown>,
 ): Promise<void> {
   const isJson = format === "json";
   const [callersResult, calleesResult, systemPath, decisionsResult, tasksResult, bugsResult] = await Promise.all([
@@ -493,6 +521,7 @@ async function leafImpact(
   const riskFacts: ImpactFacts = {
     name: target.name,
     kind: target.kind,
+    targetPath: target.path ? (relativePath(target.path) ?? target.path) : undefined,
     container: undefined,
     systemPath: systemPathMapped,
     members: 0,
@@ -508,12 +537,13 @@ async function leafImpact(
     })),
     topCallerNames: callerNames.slice(0, 3),
   };
-  const risk = inferRiskSemantics(riskFacts);
+  const risk = withheldOnDegraded(inferRiskSemantics(riskFacts), graph);
 
   if (isJson) {
     printJson(
       stripNulls({
         resolvedTarget: { kind: target.kind, name: target.name },
+        graph,
         depth,
         systemPath: systemPathMapped.length > 0 ? systemPathMapped : undefined,
         riskSummary: risk.riskSummary,

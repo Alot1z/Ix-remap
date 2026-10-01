@@ -15,7 +15,9 @@ describe("renderEdgeResultsLlm", () => {
     ];
     const lines = renderEdgeResultsLlm(sliceEdgeResults(nodes, 50), "callers", "verify_token", "graph");
     expect(lines[0]).toBe("callers target=verify_token shown=2 total=2 resolved=1 unresolved=1");
-    expect(lines[1]).toBe("ref name=handleLogin kind=method id=abcdef12 path=src/a.ts");
+    // A resolved row is identified by name + path; the id stays only on the
+    // unresolved one, where it is the only identity there is.
+    expect(lines[1]).toBe("ref name=handleLogin kind=method path=src/a.ts");
     expect(lines[2]).toBe("ref kind=method id=deadbeef resolved=false");
   });
 

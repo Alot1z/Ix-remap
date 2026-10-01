@@ -73,7 +73,8 @@ describe("edge results", () => {
   it("put a span on every row that has one", () => {
     const lines = renderEdgeResultsLlm(sliceEdgeResults([node()], 50), "callers", "relativePath", "graph");
     expect(lines[1]).toBe(
-      "ref name=registerCallersCommand kind=function id=aaaaaaaa path=ix-cli/src/cli/commands/callers.ts lines=17-145",
+      // No id: name + path already identify the row (see disambiguatingIds).
+      "ref name=registerCallersCommand kind=function path=ix-cli/src/cli/commands/callers.ts lines=17-145",
     );
   });
 

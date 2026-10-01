@@ -61,10 +61,17 @@ const CODE_FILE = new RegExp(`\\.(?:${CODE_EXTENSIONS.join("|")})$`);
 /**
  * Not code a fix edits: tests, test data, samples, docs, vendored or built
  * output. The pilot's list, plus what `isTestPath` already knows.
+ *
+ * The second line is a project's website, playground, test configuration,
+ * benchmarks, stories and end-to-end suites. Svelte's `site/` alone was 40
+ * of the wrong files in Ix's top-10 rankings over two samples of issues; none
+ * of these directories holds any of the 932 files the 382 SWE-PolyBench
+ * Verified fixes change.
  */
 const NOISE = new RegExp(
   "(^|/)(__tests__|tests?|spec|specs|fixtures?|__fixtures__|test-fixtures|samples|examples?|vendor|"
-  + "third_party|node_modules|dist|build|coverage|docs?|changelog_unreleased)/"
+  + "third_party|node_modules|dist|build|coverage|docs?|changelog_unreleased|"
+  + "site|website|docs-site|playground|tests?[_-]config|benchmarks|\\.?storybook|e2e|cypress|integration-tests)/"
   + "|\\.(test|spec)\\.[^/]+$|\\.min\\.js$|(^|/)test_[^/]+\\.py$|_test\\.(py|go)$",
 );
 
@@ -107,9 +114,17 @@ export function extractCandidates(text: string): IssueCandidates {
   const inTicks = [...prose.matchAll(BACKTICK)].flatMap((m) => [...m[1].matchAll(WORD)].map((w) => w[0]));
   const multi = [...inTicks, ...[...prose.matchAll(IDENT)].map((m) => m[0])].filter((t) => IDENT_FULL.test(t));
   const single = inTicks.filter((t) => !IDENT_FULL.test(t) && t.length >= 4);
+  // Only MAX_STARTS names become starts, so order decides: a short common
+  // word (`repeat`, `ignore`) mentioned first took a slot a specific one
+  // (`Stylesheet`) mentioned later needed. Common words still resolve, last.
+  const ordered = [
+    ...multi,
+    ...single.filter((t) => !isGenericIdentifier(t)),
+    ...single.filter((t) => isGenericIdentifier(t)),
+  ];
   const seen = new Set(paths);
   const identifiers: string[] = [];
-  for (const token of [...multi, ...single]) {
+  for (const token of ordered) {
     if (seen.has(token)) continue;
     seen.add(token);
     identifiers.push(token);
@@ -247,18 +262,76 @@ function resolveIssuePath(
   return undefined;
 }
 
+const BM25_WORD = /[A-Za-z_][A-Za-z0-9_]*/g;
+const BM25_PART = /[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g;
+const PLAIN_WORD = /^[a-z0-9]+$/;
+
 /**
- * Words for BM25: identifiers split at camelCase and underscores, lowercased,
- * parts of two letters or fewer dropped. `listByKind` is `list kind`, so an
- * issue that says "list by kind" matches the code that spells it as one word.
+ * Calls `emit` with each BM25 word of `text`, in order: an identifier's parts,
+ * split at camelCase and underscores and lowercased, then -- for a name of two
+ * parts or more -- the whole name, lowercased and without underscores. Parts
+ * and names of two letters or fewer are dropped.
+ *
+ * The parts let "list by kind" in an issue match `listByKind`; the whole name
+ * lets `borderStylesReset` in an issue match the file that defines it far
+ * above the hundred files that say "border" and "reset". The whole name is
+ * spelled the same for `save_model` and `saveModel`.
  */
+function eachBm25Token(text: string, emit: (token: string) => void): void {
+  for (const m of text.matchAll(BM25_WORD)) {
+    const word = m[0];
+    if (PLAIN_WORD.test(word)) {
+      // Most words: one lowercase part, nothing to split.
+      if (word.length > 2) emit(word);
+      continue;
+    }
+    const parts = word.match(BM25_PART) ?? [];
+    for (const part of parts) if (part.length > 2) emit(part.toLowerCase());
+    if (parts.length > 1) {
+      const whole = word.replace(/_/g, "").toLowerCase();
+      if (whole.length > 2) emit(whole);
+    }
+  }
+}
+
+/** The BM25 words of `text`, as {@link eachBm25Token} yields them. */
 export function bm25Tokens(text: string): string[] {
   const out: string[] = [];
-  for (const word of text.match(/[A-Za-z][A-Za-z0-9]*/g) ?? []) {
-    const parts = word.match(/[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g) ?? [word];
-    for (const part of parts) if (part.length > 2) out.push(part.toLowerCase());
-  }
+  eachBm25Token(text, (t) => out.push(t));
   return out;
+}
+
+/**
+ * Words an issue is written in that say nothing about where the code is:
+ * English function words and the vocabulary of bug reports. Dropped from the
+ * query only. Code comments are English too, so without this "should",
+ * "would" and "expected" pull the most-commented files up.
+ */
+const BM25_STOPWORDS = new Set((
+  "the and for are but not you all any can had her was one our out has him his how its may new now old see "
+  + "two way who did get let say she too use about above after again also been before being below between both "
+  + "could does doing down during each few from further have having here into just more most much must only other "
+  + "over own same should some such than that their them then there these they this those through under until very "
+  + "want what when where which while whom why will with would your yours "
+  + "bug bugs issue issues expected behavior behaviour actual reproduce reproduction steps version versions "
+  + "current currently describe description problem thanks thank please like think seems seem happen happens "
+  + "work works working instead because since using used example following sure able still even though"
+).split(" "));
+
+/**
+ * How much more a query word counts when it is part of a code name the issue
+ * mentions (`extractCandidates`) than when it is only in the prose.
+ */
+export const BM25_IDENTIFIER_WEIGHT = 2;
+
+/** Each query word, with its weight: 1 for prose, more for a word of a named identifier. */
+export function bm25QueryWeights(query: string): Map<string, number> {
+  const weights = new Map<string, number>();
+  for (const t of bm25Tokens(query)) if (!BM25_STOPWORDS.has(t)) weights.set(t, 1);
+  for (const id of extractCandidates(query).identifiers) {
+    for (const t of bm25Tokens(id)) if (weights.has(t)) weights.set(t, BM25_IDENTIFIER_WEIGHT);
+  }
+  return weights;
 }
 
 export interface Bm25Hit {
@@ -280,20 +353,33 @@ export interface Bm25Doc {
 export function bm25Doc(path: string, text: string | undefined, wanted?: ReadonlySet<string>): Bm25Doc | undefined {
   if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) return undefined;
   const tf = new Map<string, number>();
-  const tokens = bm25Tokens(`${path.replace(/\//g, " ")} ${text}`);
-  for (const t of tokens) if (!wanted || wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
-  return { tf, length: tokens.length };
+  let length = 0;
+  // Counted as the words stream past: no array per file.
+  const count = (t: string) => {
+    length++;
+    if (!wanted || wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
+  };
+  eachBm25Token(path.replace(/\//g, " "), count);
+  eachBm25Token(text, count);
+  return { tf, length };
 }
 
-/** The query's distinct BM25 words, in the order it first uses them. */
+/** The query's scored words (stopwords dropped), in the order it first uses them. */
 export function bm25QueryTerms(query: string): string[] {
-  return [...new Set(bm25Tokens(query))];
+  return [...bm25QueryWeights(query).keys()];
 }
 
 /**
  * Okapi BM25 (k1 1.2, b 0.75) of each file against `query`, best first, files
  * that share no word with it left out. A file's path is part of its text, so
  * `auth/login.ts` matches an issue about logging in before it is opened.
+ *
+ * The query is the issue's words less {@link BM25_STOPWORDS}, and a word of a
+ * code name the issue mentions counts {@link BM25_IDENTIFIER_WEIGHT} times.
+ * Measured in `scripts/ranking-eval` on 104 SWE-PolyBench dev issues, the
+ * three together took BM25's recall at 5/10/20 from 0.50/0.64/0.72 to
+ * 0.59/0.74/0.84, and leaving any one out lowered it; a separate path field,
+ * other k1 and b, and a lower size cap did not help.
  */
 export function bm25Rank(
   repo: Pick<RepoAccess, "read">,
@@ -305,14 +391,14 @@ export function bm25Rank(
   // Only the query's words are counted: BM25 needs no other term frequency,
   // and a map of every word of every file is most of the memory and a third
   // of the time on a large repository. A document's length is still every word.
-  const terms = bm25QueryTerms(query);
-  const wanted = new Set(terms);
+  const weights = bm25QueryWeights(query);
+  const wanted = new Set(weights.keys());
   const docs = new Map<string, Bm25Doc>();
   for (const path of files) {
     const doc = bm25Doc(path, repo.read(path), wanted);
     if (doc) docs.set(path, doc);
   }
-  return bm25Score(docs, terms, k1, b);
+  return bm25Score(docs, weights, k1, b);
 }
 
 /**
@@ -322,7 +408,7 @@ export function bm25Rank(
  */
 export function bm25Score(
   docs: ReadonlyMap<string, Bm25Doc>,
-  terms: string[],
+  weights: ReadonlyMap<string, number>,
   k1 = 1.2,
   b = 0.75,
 ): Bm25Hit[] {
@@ -338,12 +424,12 @@ export function bm25Score(
   const out: Bm25Hit[] = [];
   for (const [path, doc] of docs) {
     let score = 0;
-    for (const t of terms) {
+    for (const [t, weight] of weights) {
       const f = doc.tf.get(t);
       if (!f) continue;
       const d = df.get(t)!;
       const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5));
-      score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * doc.length / avg));
+      score += weight * idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * doc.length) / avg)));
     }
     if (score > 0) out.push({ path, score });
   }
@@ -388,6 +474,89 @@ export async function planIssue(
     fallback: true,
     bm25,
   };
+}
+
+
+/**
+ * Whether an identifier the issue names is too common to point anywhere: a
+ * short all-lowercase word such as `debug`, `bind`, `config` or `render`
+ * resolves to *a* definition, rarely the one the fix touches. Specific names
+ * carry an inner capital (`toJsonTree`, `JsonWriter`), an underscore
+ * (`get_openai_callback`), or length.
+ *
+ * Fixed before it was scored on held-out samples: on SWE-PolyBench issues the
+ * starts it keeps were in the gold patch 20 times in 32, the ones it drops 2
+ * in 7.
+ */
+export function isGenericIdentifier(token: string): boolean {
+  return !(/[a-z][A-Z]/.test(token) || /^[A-Z][a-z]+[A-Z]/.test(token) || token.includes("_") || token.length >= 8);
+}
+
+/** How far a plan's starting points can be trusted, and which ones. */
+export interface IssueConfidence {
+  confident: boolean;
+  /** The starts worth pointing an agent at: named paths and specific identifiers. */
+  starts: StartingPoint[];
+  /** Why not, when not confident. */
+  reason?: string;
+}
+
+/**
+ * A plan is confident when the issue named a path, or a specific identifier,
+ * that resolved. A BM25 fallback never is: across four samples of
+ * SWE-PolyBench issues its start was in the gold patch once in 55.
+ */
+export function issueConfidence(plan: Pick<IssuePlan, "starts" | "fallback">): IssueConfidence {
+  if (plan.fallback) {
+    return { confident: false, starts: [], reason: "no code name in the issue resolved to a definition" };
+  }
+  const starts = plan.starts.filter((s) => s.via === "path in issue"
+    || (s.via === "identifier in issue" && !isGenericIdentifier(s.token)));
+  if (starts.length === 0) {
+    const names = plan.starts.map((s) => s.token);
+    return {
+      confident: false,
+      starts,
+      reason: names.length > 0
+        ? `only common words resolved (${names.join(", ")}), which name many definitions`
+        : "nothing in the issue resolved to a definition",
+    };
+  }
+  return { confident: true, starts };
+}
+
+/** Files after the starting points in a lean view. */
+export const LEAN_RANKED = 4;
+
+/** `ix context --from-issue --lean`: where to start, and nothing else. */
+export interface LeanIssueView {
+  confidence: "high" | "low";
+  reason?: string;
+  startingPoints: StartingPoint[];
+  /** The next files by BM25 against the issue, starting files excluded. */
+  alsoRanked: RankedFile[];
+  unresolved: string[];
+}
+
+/**
+ * The lean view of a plan. A full bundle costs about 1.5k tokens, and an
+ * agent re-reads it on every turn; on SWE-PolyBench it added a median 14%
+ * tokens even where its start was right, and saved no turns. What the agent
+ * uses is the pointer, so that is all this keeps: the trusted starting points
+ * and a few ranked files -- Ix's starts, then BM25, the ordering that beat
+ * both alone on held-out issues. When nothing is trusted it says so, rather
+ * than pointing the agent at a guess.
+ */
+export function leanIssueView(plan: IssuePlan, ranked = LEAN_RANKED): LeanIssueView {
+  const c = issueConfidence(plan);
+  if (!c.confident) {
+    return { confidence: "low", reason: c.reason, startingPoints: [], alsoRanked: [], unresolved: plan.unresolved };
+  }
+  const startPaths = new Set(c.starts.map((s) => s.path));
+  const alsoRanked = rankIssueFiles({ starts: [], bm25: plan.bm25, near: new Map() }, ranked + startPaths.size)
+    .filter((f) => !startPaths.has(f.path))
+    .slice(0, ranked);
+  return { confidence: "high", startingPoints: c.starts, alsoRanked, unresolved: plan.unresolved };
 }
 
 /** BM25 files tried, best first, for one the graph has a node for. */

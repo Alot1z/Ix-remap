@@ -122,7 +122,7 @@ describe("diff.ts textual diff model", () => {
   });
 
   it("uses git show to retrieve historical file content", () => {
-    expect(diffContent).toMatch(/`\$\{hash\}:\$\{relPath\}`/);
+    expect(diffContent).toMatch(/`\$\{hash\}:\$\{name\}`/);
     expect(diffContent).toContain('"show"');
   });
 

@@ -9,12 +9,23 @@ import { IxClient } from "../client/api.js";
 import { ixHome } from "./ix-home.js";
 
 /**
+ * The key of a project root's per-root state files. Canonical first: `ix
+ * ingest <path>` resolves its root with `canonicalWorkspacePath`, and a caller
+ * that spelled the same root differently -- a symlink, macOS's /tmp, a Windows
+ * 8.3 name like RUNNER~1 -- found no baseline under its own spelling and
+ * re-ingested everything, every time.
+ */
+function rootKey(projectRoot: string): string {
+  return createHash("sha256").update(canonicalWorkspacePath(projectRoot)).digest("hex").slice(0, 12);
+}
+
+/**
  * Path to the per-project ingest mtime cache (the "skip unchanged files on re-map"
  * pre-filter). Keyed on a hash of the project root. Single source of truth shared by
  * ingest (load/save), reset, and watch (clear) — all three MUST agree on this path.
  */
 export function ingestMtimeCachePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `ingest_mtimes_${key}.json`);
 }
 
@@ -24,13 +35,13 @@ export function ingestMtimeCachePath(projectRoot: string): string {
  * same graph.
  */
 export function ingestRebuildPath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `ingest_rebuild_${key}.json`);
 }
 
 /** Path to the architecture-map completion marker for one project root. */
 export function mapBaselinePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `map_baseline_${key}.json`);
 }
 
@@ -40,7 +51,7 @@ export function mapBaselinePath(projectRoot: string): string {
  * Cleared with the map baseline, since both describe the same hierarchy.
  */
 export function mapResultCachePath(projectRoot: string): string {
-  const key = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  const key = rootKey(projectRoot);
   return join(ixHome(), `map_result_${key}.json`);
 }
 
@@ -192,8 +203,16 @@ export function saveConfig(config: IxConfig): void {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         existing = parsed as Record<string, unknown>;
       }
-    } catch {
-      existing = {};
+    } catch (err) {
+      // Refuse rather than start from `{}`: that rewrote the file with only
+      // this call's fields, silently dropping every other workspace, a custom
+      // endpoint and extension state such as Pro's credentials -- all over
+      // one typo in a hand edit.
+      throw new Error(
+        `${configPath} is not valid YAML, so Ix will not overwrite it. ` +
+        `Fix or remove the file and run the command again. (${err instanceof Error ? err.message.split("\n")[0] : String(err)})`,
+        { cause: err },
+      );
     }
   }
   // Drop OSS-owned keys from the disk snapshot — the in-memory `config`
@@ -362,12 +381,17 @@ export function resolveWorkspaceRoot(explicitRoot?: string, cwd = process.cwd())
     const named = loadWorkspaces().find(w => w.workspace_name === cfg.workspace);
     if (named) return named.root_path;
   }
-  // 4. Configured default workspace
-  const defaultWs = getDefaultWorkspace();
-  if (defaultWs) return defaultWs.root_path;
-  // 5. Git root
+  // 4. Git root: the repository the caller is standing in. Ahead of the
+  //    default workspace for the reason `resolveMapRoot` gives: `default: true`
+  //    marks whichever repo was mapped first, so ranking it above a local
+  //    repository made `ix text` in an unmapped checkout search an unrelated
+  //    one. (Graph reads from such a directory refuse outright; see
+  //    `requireReadWorkspaceId`.)
   const gitRoot = gitRootFor(cwd);
   if (gitRoot) return gitRoot;
+  // 5. Configured default workspace, for a cwd with no local context at all
+  const defaultWs = getDefaultWorkspace();
+  if (defaultWs) return defaultWs.root_path;
   // 6. cwd fallback
   return cwd;
 }

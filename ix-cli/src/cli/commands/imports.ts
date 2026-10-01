@@ -6,6 +6,7 @@ import { getEndpoint } from "../config.js";
 import { formatEdgeResults, sliceEdgeResults } from "../format.js";
 import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { parsePickOption } from "../options.js";
+import { edgeTargetFor, withEdgeSites } from "../edge-sites.js";
 
 export function registerImportsCommand(program: Command): void {
   program
@@ -25,7 +26,9 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] });
-      formatEdgeResults(sliceEdgeResults(result.nodes, limit), "imports", target.name, opts.format, target, "graph");
+      const slice = sliceEdgeResults(result.nodes, limit);
+      const site = await edgeTargetFor(client, target, "imports");
+      formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "imports", site) }, "imports", target.name, opts.format, target, "graph");
     });
 
   program
@@ -45,6 +48,8 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] });
-      formatEdgeResults(sliceEdgeResults(result.nodes, limit), "imported-by", target.name, opts.format, target, "graph");
+      const slice = sliceEdgeResults(result.nodes, limit);
+      const site = await edgeTargetFor(client, target, "imported-by");
+      formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "imported-by", site) }, "imported-by", target.name, opts.format, target, "graph");
     });
 }

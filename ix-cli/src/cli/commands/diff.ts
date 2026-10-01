@@ -9,7 +9,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 
-import { getEndpoint } from "../config.js";
+import { absoluteFromSourceUri, getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { resolveFileOrReport, printResolved, type ResolvedEntity } from "../resolve.js";
 import { formatDiff, relativePath, printJson } from "../format.js";
 import { llmLine } from "../llm.js";
@@ -151,9 +151,18 @@ function compactDiffResult(result: any): any {
 
 // ── File content loading ────────────────────────────────────────────
 
+// A source_uri is workspace-relative. These used to resolve it against the
+// current directory and run git there, so `ix diff --content` from anywhere but
+// the workspace root found no file, and `git show <hash>:<uri>` -- which reads
+// the path from the REPOSITORY top level -- missed even from the root when the
+// workspace is a subdirectory of its repo. Everything below resolves the uri
+// against the workspace root and runs git there, naming the file `./<uri>` so
+// git reads it relative to that directory. (The root, not the file's own
+// directory: a deleted file's directory may be gone, and its history is not.)
+
 /** Load full file content from current disk. */
-export function loadFileFromDisk(uri: string): string | null {
-  const filePath = path.resolve(uri);
+export function loadFileFromDisk(uri: string, root?: string): string | null {
+  const filePath = absoluteFromSourceUri(uri, root);
   try {
     if (!fs.existsSync(filePath)) return null;
     return fs.readFileSync(filePath, "utf-8");
@@ -166,17 +175,19 @@ export function loadFileFromDisk(uri: string): string | null {
  * Load full file content at a specific timestamp via git.
  * Returns null if git fails or file doesn't exist at that point.
  */
-export async function loadFileAtTimestamp(uri: string, timestamp: string): Promise<string | null> {
-  const relPath = uri;
+export async function loadFileAtTimestamp(uri: string, timestamp: string, root?: string): Promise<string | null> {
+  const cwd = resolveWorkspaceRoot(root);
+  const rel = path.relative(cwd, absoluteFromSourceUri(uri, cwd)).split(path.sep).join("/");
+  const name = `./${rel}`;
   try {
     const { stdout: commitHash } = await execFileAsync("git", [
-      "log", "-1", "--format=%H", `--before=${timestamp}`, "--", relPath,
-    ], { timeout: 10_000 });
+      "log", "-1", "--format=%H", `--before=${timestamp}`, "--", name,
+    ], { cwd, timeout: 10_000 });
     const hash = commitHash.trim();
     if (!hash) return null;
     const { stdout: fileContent } = await execFileAsync("git", [
-      "show", `${hash}:${relPath}`,
-    ], { timeout: 10_000 });
+      "show", `${hash}:${name}`,
+    ], { cwd, timeout: 10_000 });
     return fileContent;
   } catch {
     return null;
@@ -331,7 +342,7 @@ function readSourceSpan(node: any): string | null {
   const lineEnd = attrs.line_end ?? attrs.lineEnd;
   if (lineStart == null || lineEnd == null) return null;
 
-  const filePath = path.resolve(uri);
+  const filePath = absoluteFromSourceUri(uri);
   try {
     if (!fs.existsSync(filePath)) return null;
     const content = fs.readFileSync(filePath, "utf-8");
@@ -362,17 +373,9 @@ export async function readSourceSpanAtTimestamp(node: any): Promise<string | nul
   const timestamp = node.updatedAt ?? node.createdAt;
   if (!timestamp) return readSourceSpan(node);
 
-  const relPath = uri;
   try {
-    const { stdout: commitHash } = await execFileAsync("git", [
-      "log", "-1", "--format=%H", `--before=${timestamp}`, "--", relPath,
-    ], { timeout: 10_000 });
-    const hash = commitHash.trim();
-    if (!hash) return readSourceSpan(node);
-
-    const { stdout: fileContent } = await execFileAsync("git", [
-      "show", `${hash}:${relPath}`,
-    ], { timeout: 10_000 });
+    const fileContent = await loadFileAtTimestamp(uri, timestamp);
+    if (fileContent === null) return readSourceSpan(node);
 
     const lines = fileContent.split("\n");
     const start = Math.max(0, Number(lineStart) - 1);

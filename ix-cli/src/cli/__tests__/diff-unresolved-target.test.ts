@@ -12,6 +12,15 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Graph reads refuse a directory no workspace covers (workspace_not_mapped),
+// and this suite runs from a checkout that is not registered anywhere. It is
+// about resolution, not scoping, so the directory counts as mapped here.
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => "ws-test",
+}));
+
+
 vi.mock("../../client/api.js", () => ({
   IxClient: class {
     async workspaceSystem() { return { systemId: null }; }
@@ -61,9 +70,11 @@ describe("ix diff — unresolved target", () => {
   it("emits the shared slug and message as json for a file-like target", async () => {
     const result = await run(["diff", "3", "5", "DefinitelyMissing.ts", "--format", "json"]);
 
+    // Same slug; a file target's message says which kind of miss it is.
     expect(JSON.parse(result.stdout)).toEqual({
       error: "unresolved_target",
-      message: 'No entity found matching "DefinitelyMissing.ts".',
+      message: 'No file "DefinitelyMissing.ts" in the graph, and none at that path on disk.',
+      reason: "file_not_found",
     });
   });
 

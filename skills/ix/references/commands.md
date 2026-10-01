@@ -176,9 +176,10 @@ ix inventory --kind function --path auth.py
   the cwd only decides which mtime cache gets cleared. Running
   `ix reset -y --code` in one repo also destroys the graphs of every other
   mapped workspace (e.g. packwise) and empties the `--all` combined view;
-  re-run `ix map` per workspace to rebuild. A workspace-scoped endpoint
-  (`/v1/reset/workspace`, via `deleteWorkspace`) exists server-side, but the
-  CLI does not expose it.
+  re-run `ix map` per workspace to rebuild. The workspace-scoped reset is
+  `ix reset --workspace` (`/v1/reset/workspace` for the registered workspace
+  containing cwd, nothing else); with `--ingest` it is the repair for a
+  degraded graph.
 
 - **The OSS↔Pro command boundary is derived at runtime, not declared.**
   `main.ts` snapshots `ossCmdNames` immediately after `registerOssCommands()`;

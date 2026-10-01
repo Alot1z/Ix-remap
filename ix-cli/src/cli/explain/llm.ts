@@ -6,6 +6,7 @@ import type { EntityFacts, EntityLocation } from "./facts.js";
 import type { RoleInference } from "./role-inference.js";
 import type { ImportanceInference } from "./importance.js";
 import type { ExplanationOutput } from "./render.js";
+import { isUnhealthy, graphHealthLlmFields, type GraphHealth } from "../graph-health.js";
 
 /**
  * `ix explain --format llm`.
@@ -39,8 +40,15 @@ export function renderExplainLlm(
   role: RoleInference,
   importance: ImportanceInference,
   rendered: ExplanationOutput,
+  health?: GraphHealth,
 ): string[] {
   const lines: string[] = [];
+  // A hollowed graph answers every count below with 0, and the role and
+  // importance are inferred from those counts. First, so it is read before
+  // any of them; and the conclusions drawn from missing edges are withheld
+  // rather than stated (see graph-health.ts).
+  const degraded = isUnhealthy(health);
+  if (degraded) lines.push(llmLine("graph", graphHealthLlmFields(health)));
 
   lines.push(llmLine("entity", [
     ["id", llmShortId(facts.id)],
@@ -51,27 +59,36 @@ export function renderExplainLlm(
     ["stale", facts.stale ? "true" : null],
   ]));
 
-  lines.push(llmLine("role", [
-    ["role", role.role],
-    ["confidence", role.confidence],
-  ]));
+  if (degraded) {
+    lines.push(llmLine("role", [["role", "unknown"], ["confidence", "none"], ["reason", "graph_degraded"]]));
+    lines.push(llmLine("importance", [["level", "unknown"], ["reason", "graph_degraded"]]));
+  } else {
+    lines.push(llmLine("role", [
+      ["role", role.role],
+      ["confidence", role.confidence],
+    ]));
 
-  lines.push(llmLine("importance", [
-    ["level", importance.level],
-    ["category", importance.category],
-  ]));
+    lines.push(llmLine("importance", [
+      ["level", importance.level],
+      ["category", importance.category],
+    ]));
+  }
 
   // Zeroes are meaningful here, so they are stringified rather than passed as
-  // numbers — llmField drops "" but keeps "0".
+  // numbers — llmField drops "" but keeps "0". On a degraded graph a zero is
+  // an edge that may simply be missing, so it is `unknown` there; a non-zero
+  // count is still an edge that exists, i.e. a floor.
+  const count = (n: number) => (degraded && n === 0 ? "unknown" : String(n));
   lines.push(llmLine("edges", [
-    ["callers", String(facts.callerCount)],
-    ["callees", String(facts.calleeCount)],
-    ["dependents", String(facts.dependentCount)],
-    ["importers", String(facts.importerCount)],
-    ["members", String(facts.memberCount)],
-    ["downstream", String(facts.downstreamDependents)],
-    ["depth", String(facts.downstreamDepth)],
+    ["callers", count(facts.callerCount)],
+    ["callees", count(facts.calleeCount)],
+    ["dependents", count(facts.dependentCount)],
+    ["importers", count(facts.importerCount)],
+    ["members", count(facts.memberCount)],
+    ["downstream", count(facts.downstreamDependents)],
+    ["depth", count(facts.downstreamDepth)],
     ["history", String(facts.historyLength)],
+    ["complete", degraded ? "false" : null],
   ]));
 
   if (facts.container) {

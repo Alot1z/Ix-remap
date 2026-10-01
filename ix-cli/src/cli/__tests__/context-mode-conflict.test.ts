@@ -251,6 +251,11 @@ describe("mode-flag coverage does not drift from the command", () => {
    * so `--out` and `--save` take it, and every budget applies to it.
    */
   const CONTEXT_TARGET_FLAGS = ["fromIssue"];
+  /**
+   * Shapes what `--from-issue` prints, and means nothing without it: refused
+   * on its own, with every mode, and with `--save`/`--out`.
+   */
+  const CONTEXT_ISSUE_SHAPE_FLAGS = ["lean"];
 
   function registeredAttributes(register: (p: Command) => void, name: string): string[] {
     const program = new Command();
@@ -262,8 +267,17 @@ describe("mode-flag coverage does not drift from the command", () => {
 
   it("classifies every option ix context registers", () => {
     expect(registeredAttributes(registerContextCommand, "context")).toEqual(
-      [...CONTEXT_MODE_FLAGS, ...CONTEXT_BUILD_FLAGS, ...CONTEXT_UNIVERSAL_FLAGS, ...CONTEXT_TARGET_FLAGS].sort(),
+      [...CONTEXT_MODE_FLAGS, ...CONTEXT_BUILD_FLAGS, ...CONTEXT_UNIVERSAL_FLAGS, ...CONTEXT_TARGET_FLAGS,
+        ...CONTEXT_ISSUE_SHAPE_FLAGS].sort(),
     );
+  });
+
+  it("refuses an issue-shape flag without --from-issue, in every mode", () => {
+    for (const flag of CONTEXT_ISSUE_SHAPE_FLAGS) {
+      for (const mode of [{}, { list: true }, { resume: "x" }, { diff: "x" }]) {
+        expect(detectContextModeConflict({ ...mode, [flag]: true }), `--${flag} with ${JSON.stringify(mode)}`).toBeTruthy();
+      }
+    }
   });
 
   it("refuses every build flag given to a mode that builds nothing", () => {

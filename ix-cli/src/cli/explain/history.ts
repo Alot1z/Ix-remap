@@ -87,8 +87,12 @@ export function coChangedFiles(
   limit = MAX_CO_CHANGES,
 ): CoChange[] {
   // --full-diff lists every file each commit touched, not only `path`: one
-  // call instead of one `git show` per commit.
-  const out = git(["log", `-${HISTORY_DEPTH}`, "--format=@%h", "--name-only", "--full-diff", "--", path]);
+  // call instead of one `git show` per commit. --relative prints them relative
+  // to the workspace root git runs in, as `path` is: without it they were
+  // relative to the repository's top level, so a workspace in a subdirectory
+  // of its repo (`ix map packages/web`) never matched `path` and had no
+  // co-changes at all.
+  const out = git(["log", `-${HISTORY_DEPTH}`, "--format=@%h", "--name-only", "--relative", "--full-diff", "--", path]);
   if (!out) return [];
   const targetIsTest = isTestPath(path);
   const tally = new Map<string, CoChange>();
