@@ -14,6 +14,7 @@ import { registerOssCommands, registerProStubs } from "../cli/register/oss.js";
 import { tryLoadProCommands } from "../cli/register/pro-loader.js";
 import { resetReadScope } from "../cli/resolve.js";
 import { releaseLocksOwnedBy, setLockOwnerResolver } from "../cli/single-flight.js";
+import { IX_CALLER_ENV } from "../cli/next-step.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_ENTRYPOINT = fileURLToPath(new URL("../cli/main.js", import.meta.url));
@@ -390,6 +391,12 @@ async function executeInProcess(
   const callerExitCode = process.exitCode;
   process.exitCode = undefined;
   activeRun = run;
+  // Tell the command who is reading, so its hints name tools and arguments
+  // rather than CLI flags (see cli/next-step.ts). Scoped to the run: a command
+  // that outlives its timeout and prints afterwards writes into a closed run,
+  // whose output is dropped, so the restore cannot mislabel anything shown.
+  const callerSurface = process.env[IX_CALLER_ENV];
+  process.env[IX_CALLER_ENV] = "mcp";
 
   // Decided before the command starts: an orphan already in flight can write
   // process.exitCode at any point during this run, and there is no way to tell
@@ -427,6 +434,8 @@ async function executeInProcess(
   } finally {
     commandExitCode = commandExitCode ?? (exitCodeIsOurs ? process.exitCode : undefined);
     process.exitCode = callerExitCode;
+    if (callerSurface === undefined) delete process.env[IX_CALLER_ENV];
+    else process.env[IX_CALLER_ENV] = callerSurface;
     if (failure !== null) {
       if (run.truncated) {
         // appendChunk is a no-op once the cap has fired, but *why* the command
@@ -561,7 +570,7 @@ export async function runCurrentIx(
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [CLI_ENTRYPOINT, ...args], {
       cwd: process.cwd(),
-      env: { ...process.env, IX_MCP_CHILD: "1" },
+      env: { ...process.env, IX_MCP_CHILD: "1", [IX_CALLER_ENV]: "mcp" },
       encoding: "utf8",
       maxBuffer: MAX_OUTPUT_BYTES,
       timeout: timeoutMs,

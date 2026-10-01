@@ -1,13 +1,25 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
+import { satteri } from '@astrojs/markdown-satteri'
 import starlight from '@astrojs/starlight'
 import { defineConfig } from 'astro/config'
 import starlightOpenAPI, { createOpenAPISidebarGroup } from 'starlight-openapi'
+
+import { baseLinksPlugin } from './scripts/base-links-plugin.mjs'
+import { DOCS_BASE } from './site-base.mjs'
 
 const apiSidebarGroup = createOpenAPISidebarGroup()
 
 export default defineConfig({
   site: 'https://docs.ix-infra.com',
+  // Served at docs.ix-infra.com/oss/, with the Kartr docs to sit beside it.
+  // Astro does not nest the output under the base, so it is built into
+  // dist/oss/ and dist/ stays the root of the domain (scripts/finalize-dist.mjs).
+  base: DOCS_BASE,
+  outDir: `./dist${DOCS_BASE}`,
+  markdown: {
+    processor: satteri({ mdastPlugins: [baseLinksPlugin(DOCS_BASE)] }),
+  },
   integrations: [
     starlight({
       title: 'Ix Docs',
@@ -19,7 +31,7 @@ export default defineConfig({
       },
       favicon: '/favicon.png',
       head: [
-        { tag: 'meta', attrs: { property: 'og:image', content: 'https://docs.ix-infra.com/og-image.png' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: `https://docs.ix-infra.com${DOCS_BASE}/og-image.png` } },
       ],
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/ix-infrastructure/Ix' },

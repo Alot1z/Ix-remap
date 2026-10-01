@@ -5,33 +5,80 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveWorkspaceId } from "../bootstrap.js";
-import { formatNodes, relativePath, printJson } from "../format.js";
+import { disambiguatingIds, formatNodes, lineSpan, relativePath, printJson, rowLocation } from "../format.js";
 import { baseScore, originPenalty, hasDefinitionOf, mergeById, resolveReadSystemId } from "../resolve.js";
 import { isFileStemMatch } from "../candidate-origin.js";
 import { applyRoleFilter, roleHint } from "../role-filter.js";
 import { stderr } from "../stderr.js";
-import { llmLine, llmShortId } from "../llm.js";
+import { llmLine } from "../llm.js";
 import { isQuiet, projectRow } from "../output-shape.js";
 import { normalizePathSeparators } from "../path-match.js";
 
-/** Render `ix search` as llm records: a header line then one `node` row per hit (rank = order). */
+/** One `ix search` row as the llm renderer takes it. */
+export interface SearchLlmRow {
+  name: string;
+  kind: string;
+  id?: string;
+  path?: string;
+  /** `320-340`, from the graph's span; absent for a file or an unknown span. */
+  lines?: string;
+  score?: number;
+  /** Set only for a row that matched on something other than its name. */
+  match?: string;
+}
+
+/**
+ * Render `ix search` as llm records: a header line then one `node` row per hit
+ * (rank = order).
+ *
+ * `path` and `lines` together are the answer — the tool is described to agents
+ * as returning path:lines, and a row without the span sent them to grep for
+ * it. The id is printed only where two rows would otherwise read the same (see
+ * `disambiguatingIds`). A row that did not match by name says what it matched
+ * on in `match=`, so it cannot be mistaken for a definition.
+ */
 export function renderSearchLlm(
-  results: Array<{ name: string; kind: string; id?: string; path?: string; score?: number }>,
+  results: SearchLlmRow[],
   totalCandidates: number, diagnostics: Array<{ code: string; message: string }>,
+  hint?: string,
 ): string[] {
   const lines = [llmLine("search", [["count", results.length], ["candidates", totalCandidates]])];
-  for (const r of results) {
+  const ids = disambiguatingIds(
+    results,
+    (r) => `${r.name}\u0000${r.kind}\u0000${r.path ?? ""}`,
+    (r) => r.id,
+  );
+  results.forEach((r, i) => {
     lines.push(llmLine("node", projectRow([
-      ["name", r.name], ["kind", r.kind], ["id", llmShortId(r.id)],
-      ["path", r.path], ["score", r.score],
+      ["name", r.name], ["kind", r.kind], ["id", ids[i]],
+      ["path", r.path], ["lines", r.lines], ["score", r.score], ["match", r.match],
     ])));
-  }
+  });
   // Advice, not findings: `--quiet` drops it. An error still reaches the
   // caller through the error path, which this is not.
   if (!isQuiet()) {
     for (const d of diagnostics) lines.push(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
+    if (hint && results.length === 0) lines.push(llmLine("hint", [["text", hint]]));
   }
   return lines;
+}
+
+/**
+ * What to try after a search that found nothing.
+ *
+ * A bare `count=0` left an agent to guess why, and the usual reason is that it
+ * searched a phrase: search matches entity names, and no name contains
+ * "workspace resolve read".
+ */
+export function emptySearchHint(term: string, opts: { kind?: string; path?: string; language?: string } = {}): string {
+  const words = term.trim().split(/\s+/).filter((w) => w !== "");
+  if (words.length > 1) {
+    const longest = [...words].sort((a, b) => b.length - a.length)[0];
+    return `search matches one identifier by name, not a phrase. Search one word (e.g. ${longest}), or use ix text for a phrase.`;
+  }
+  const narrowed = [opts.kind && "--kind", opts.path && "--path", opts.language && "--language"].filter(Boolean);
+  const drop = narrowed.length > 0 ? `drop ${narrowed.join("/")}, ` : "";
+  return `No entity name matches. Try part of the name, ${drop}or use ix text for a literal string.`;
 }
 
 /** Structural kinds that should rank higher than incidental matches. */
@@ -210,6 +257,27 @@ export function dropIncidentalMatches(scored: Scored[]): Scored[] {
   return named ? scored.filter((s) => s.rank.tier < INCIDENTAL_TIER) : scored;
 }
 
+/** The name tiers: exact name (0-2). A partial name (3) is still a name match, but not a definition. */
+const EXACT_NAME_TIER = 2;
+
+/** Tier 4: the row matched on its provenance or a claim about it, not its name. */
+const NON_NAME_TIER = 4;
+
+/**
+ * Drop rows that did not match by name once one matched the name exactly.
+ *
+ * Searching `resolveWorkspaceRoot` returned its four definitions and then six
+ * rows at 0.33 — `absoluteFromSourceUri`, `createStaleProbe` — that matched a
+ * claim mentioning the term, because they call it. That is a callers answer
+ * served as a search answer, and an agent looking for a definition read it as
+ * padding. With no exact name in the set those rows can be the only lead, so
+ * they stay, marked `match=` in llm output.
+ */
+export function dropNonNameMatches(scored: Scored[]): Scored[] {
+  const exact = scored.some((s) => s.rank.tier <= EXACT_NAME_TIER);
+  return exact ? scored.filter((s) => s.rank.tier < NON_NAME_TIER) : scored;
+}
+
 function normalizePath(value: string | undefined): string {
   return (value ?? "").toLowerCase().replace(/\\/g, "/");
 }
@@ -240,8 +308,9 @@ export function registerSearchCommand(program: Command): void {
      rank here, behind it: imports of the name, CSS selectors, markdown
      headings and JSON keys (for a code-like term), and copies in build
      output (dist/, *.min.js, *-output.*), fixtures and samples
-  4. Exact filename/module match
-  5. Container-aware near match
+  4. Partial name match
+  5. Matched on provenance or a claim, not the name — dropped when any of
+     1-3 matched; marked match=<source> in --format llm
   6. Fuzzy/incidental match — dropped when any of 1-5 matched
 
 A chunk is folded away when the symbol it was cut from is already in the answer.
@@ -369,7 +438,7 @@ Examples:
       // dropped here makes room for a real one instead of leaving a shorter
       // answer. Semantic search keeps its own ordering but is pruned the same
       // way: a chunk twin is just as useless there.
-      const hygienic = dropIncidentalMatches(foldChunkTwins(scored));
+      const hygienic = dropNonNameMatches(dropIncidentalMatches(foldChunkTwins(scored)));
 
       const { filtered: roleFiltered, hiddenTestCount } = applyRoleFilter(
         hygienic.map(s => s.node),
@@ -411,14 +480,17 @@ Examples:
       const llmDiagnostics = diagnostics.filter((d) => d.code !== "unfiltered_search");
 
       if (opts.format === "llm") {
-        const rows = trimmed.map((s) => ({
+        const rows: SearchLlmRow[] = trimmed.map((s) => ({
           name: s.node.name || (s.node.attrs as any)?.name || "(unnamed)",
           kind: s.node.kind,
           id: s.node.id,
           path: relativePath(s.node.provenance?.sourceUri) ?? undefined,
+          lines: lineSpan(rowLocation(s.node)),
           score: tierRelevance(s.rank.tier),
+          match: s.rank.tier >= NON_NAME_TIER ? s.rank.matchSource : undefined,
         }));
-        for (const line of renderSearchLlm(rows, rawNodes.length, llmDiagnostics)) console.log(line);
+        const hint = emptySearchHint(term, opts);
+        for (const line of renderSearchLlm(rows, rawNodes.length, llmDiagnostics, hint)) console.log(line);
         return;
       }
 
@@ -439,10 +511,13 @@ Examples:
             count: ranked.length,
             totalCandidates: rawNodes.length,
           },
-          diagnostics,
+          diagnostics: ranked.length === 0
+            ? [...diagnostics, { code: "no_results", message: emptySearchHint(term, opts) }]
+            : diagnostics,
         });
       } else {
         formatNodes(ranked, opts.format);
+        if (ranked.length === 0 && !isQuiet()) stderr(chalk.dim(emptySearchHint(term, opts)));
         if (pathWindowLimited) stderr(chalk.dim(diagnostics.find(d => d.code === "path_search_truncated")!.message));
         const hint = roleHint(hiddenTestCount);
         if (hint) stderr(chalk.dim(hint));

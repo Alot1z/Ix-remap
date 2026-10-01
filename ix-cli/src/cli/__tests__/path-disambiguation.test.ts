@@ -6,6 +6,15 @@ import { registerCallersCommand } from "../commands/callers.js";
 import { registerImpactCommand } from "../commands/impact.js";
 import { registerImportsCommand } from "../commands/imports.js";
 
+// Graph reads refuse a directory no workspace covers (workspace_not_mapped),
+// and this suite runs from a checkout that is not registered anywhere. It is
+// about resolution, not scoping, so the directory counts as mapped here.
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => "ws-test",
+}));
+
+
 const { search, expand } = vi.hoisted(() => ({ search: vi.fn(), expand: vi.fn() }));
 
 vi.mock("../../client/api.js", () => ({

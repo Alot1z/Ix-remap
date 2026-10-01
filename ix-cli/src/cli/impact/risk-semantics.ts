@@ -1,5 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
+import { forMcp, suggest } from "../next-step.js";
+
 /**
  * Risk-semantics inference for ix impact.
  *
@@ -42,6 +44,12 @@ export interface ImpactFacts {
   name: string;
   kind: string;
   path?: string;
+  /**
+   * The target's workspace-relative file, used only to pin the suggested next
+   * call to this entity. Kept apart from `path`, which feeds categorisation:
+   * setting that would move the risk category the CLI has always printed.
+   */
+  targetPath?: string;
 
   // Container (class/module name wrapping this entity)
   container?: { kind: string; name: string };
@@ -506,6 +514,7 @@ function buildMostAffectedHint(facts: ImpactFacts, category: RiskCategory): stri
 // ── Next step ────────────────────────────────────────────────────────────────
 
 function buildNextStep(facts: ImpactFacts, category: RiskCategory): string | undefined {
+  if (forMcp()) return mcpNextStep(facts, category);
   if ((category === "foundation" || category === "shared") && facts.directImporters >= 3) {
     return `Understand its system role: ix explain ${facts.name}`;
   }
@@ -514,6 +523,29 @@ function buildNextStep(facts: ImpactFacts, category: RiskCategory): string | und
   }
   if (category === "flow" && facts.callers >= 1) {
     return `Trace flow propagation: ix depends ${facts.name} --depth 2`;
+  }
+  return undefined;
+}
+
+/**
+ * {@link buildNextStep} for an MCP caller, who has neither `ix explain` nor
+ * `ix depends` in the core toolset. The same three situations, each sent to
+ * the one-hop list that names the files involved: importers for a foundation
+ * type, callers for a boundary or a flow stage.
+ */
+function mcpNextStep(facts: ImpactFacts, category: RiskCategory): string | undefined {
+  const isFile = facts.kind.toLowerCase() === "file";
+  // A file resolves by its path; a symbol by name, pinned to its file.
+  const symbol = isFile ? (facts.targetPath ?? facts.name) : facts.name;
+  const pin = isFile ? {} : { path: facts.targetPath };
+  if ((category === "foundation" || category === "shared") && facts.directImporters >= 3) {
+    return `List every importer, with path:lines: ${suggest.neighbors(symbol, "imported_by", pin)}`;
+  }
+  if (category === "boundary" && facts.memberLevelCallers >= 10) {
+    return `List every caller, with path:lines: ${suggest.neighbors(symbol, "callers", pin)}`;
+  }
+  if (category === "flow" && facts.callers >= 1) {
+    return `List every caller, with path:lines: ${suggest.neighbors(symbol, "callers", pin)}`;
   }
   return undefined;
 }

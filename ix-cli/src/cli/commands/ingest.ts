@@ -12,7 +12,7 @@ import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
-import { getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
+import { canonicalWorkspacePath, getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
 import {
   clearRebuildProgress, extractorChanged, isRev, loadIngestBaseline, loadRebuildProgress,
   saveIngestBaseline, saveRebuildProgress,
@@ -168,9 +168,12 @@ const MINIFIED_AVG_LINE_THRESHOLD = 2_000;
 const SLOW_WORK_LOG_MS = 5_000;
 const SLOW_WORK_REPEAT_MS = 10_000;
 
-function parsePositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+export function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
   if (!raw) return fallback;
+  // Matched, not parsed, as in single-flight's lockMaxMs: `parseInt` reads any
+  // numeric prefix, so `1e3` meant 1 and `2k` meant 2.
+  if (!/^\d+$/.test(raw)) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
@@ -912,6 +915,26 @@ const REBUILD_PROGRESS_SAVE_MS = 2_000;
 // Mtime cache — skip readFileSync+sha256 for unchanged files
 // ---------------------------------------------------------------------------
 
+/**
+ * The mtimes to record, plus `carried` -- files this run did not process -- at
+ * their previous mtimes: deleted files whose cleanup had to be skipped (kept so
+ * the next run finds them deleted and retries) and files a `--lang` run left
+ * out (kept so it does not reset their state).
+ */
+export function carryForwardMtimes(
+  currentMtimes: Map<string, number>,
+  previousMtimes: Map<string, number>,
+  carried: readonly string[],
+): Map<string, number> {
+  if (carried.length === 0) return currentMtimes;
+  const out = new Map(currentMtimes);
+  for (const filePath of carried) {
+    const mtime = previousMtimes.get(filePath);
+    if (mtime !== undefined && !out.has(filePath)) out.set(filePath, mtime);
+  }
+  return out;
+}
+
 export function persistIngestBaselineIfClean(
   projectRoot: string,
   mtimes: Map<string, number>,
@@ -1477,7 +1500,7 @@ export async function ingestFiles(
   const trueStart = performance.now();
 
   const [
-    { parseFile, resolveEdges, isGrammarSupported },
+    { parseFile, resolveEdges },
     {
       buildPatchWithResolution,
       buildDeletionPatch,
@@ -1491,9 +1514,20 @@ export async function ingestFiles(
   const moduleLoadMs = Math.round(performance.now() - trueStart);
 
 
-  const resolvedPath = nodePath.isAbsolute(path)
+  // Canonical (realpath), because discovery canonicalises every file it finds:
+  // a root spelled through a symlink, macOS's /tmp or a Windows 8.3 name made
+  // every source_uri `../<real dir>/...` instead of workspace-relative. `ix
+  // map` hands in a canonical root already; `ix ingest <path>` did not. A path
+  // that does not exist stays as given, for the not-found error below.
+  const resolvedPath = canonicalWorkspacePath(nodePath.isAbsolute(path)
     ? path
-    : nodePath.resolve(resolveWorkspaceRoot(opts.root), path);
+    : nodePath.resolve(resolveWorkspaceRoot(opts.root), path));
+  // Here, not in the discovery phase below: the statSync that picks the
+  // workspace root runs first, and threw a bare ENOENT before the friendly
+  // message there could be reached.
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Path not found: ${resolvedPath}`);
+  }
 
   // Workspace identity for client-agnostic backend.
   //
@@ -1949,16 +1983,7 @@ export async function ingestFiles(
   try {
     // Phase: discover files
     const langFilter = opts.lang ? parseLangs(opts.lang) : null;
-    const supportsFile = (fileName: string): boolean => {
-      if (!isGrammarSupported(fileName)) return false;
-      if (!langFilter) return true;
-      const lang = languageFromPath(fileName);
-      return lang !== null && langFilter.has(lang);
-    };
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
     const stat = fs.statSync(resolvedPath);
     const excludePatterns = collectExcludePatterns(resolvedPath, opts.exclude ?? []);
     const excludeMatcher = createIgnoreMatcher(excludePatterns);
@@ -1972,7 +1997,15 @@ export async function ingestFiles(
             ?? Array.from(walkFiles(resolvedPath, opts.recursive ?? true, exclude))),
       stat.isFile() ? undefined : resolvedPath,
     );
-    const filePaths: string[] = discovery.files;
+    // `--lang` narrows discovery to the named languages. The files it leaves
+    // out keep their baseline entries (`langExcluded`, below): this run says
+    // nothing about them, so it must neither drop nor refresh them.
+    const inLangFilter = (fp: string): boolean => {
+      const lang = languageFromPath(fp);
+      return lang !== null && langFilter!.has(lang);
+    };
+    const filePaths: string[] = langFilter ? discovery.files.filter(inLangFilter) : discovery.files;
+    const langExcluded: string[] = langFilter ? discovery.files.filter(fp => !inLangFilter(fp)) : [];
     outsideRoot = discovery.outsideRoot;
     const resolveOpts = {
       ...crossRepoResolveOpts,
@@ -2129,8 +2162,12 @@ export async function ingestFiles(
     // fails closed when deletions are pending — but only the *deletions* need
     // that guarantee. Letting the throw escape aborted the entire map over one
     // transient blip, taking the ordinary ingest of every changed file with it.
-    // So catch it here: drop the deletions for this run (they stay in the
-    // baseline and are retried next time) and let the rest proceed.
+    // So catch it here: drop the deletions for this run and let the rest
+    // proceed. `deferredDeletions` carries them into the baseline this run
+    // writes -- without it they vanished: `currentMtimes` never held a deleted
+    // file, so the next run's baseline did not name them, they were never
+    // found deleted again, and their nodes stayed in the graph for good.
+    const deferredDeletions: string[] = [];
     if (hashLookupPaths.length > 0) {
       try {
         knownHashes = await loadExistingHashes(
@@ -2143,6 +2180,7 @@ export async function ingestFiles(
         );
       } catch (err) {
         if (debug) process.stderr.write(`\n  [deletion cleanup skipped] hash lookup failed: ${err}\n`);
+        deferredDeletions.push(...deletedPaths);
         deletedPaths.length = 0;
         knownHashes = new Map();
       }
@@ -3436,7 +3474,7 @@ export async function ingestFiles(
     // missing from the graph until a --force.
     const baselinePersisted = persistIngestBaselineIfClean(
       projectRoot,
-      currentMtimes,
+      carryForwardMtimes(currentMtimes, previousMtimes, [...deferredDeletions, ...langExcluded]),
       latestRev,
       // Lost parses count as parse errors HERE, whatever they are called
       // elsewhere. A run whose worker pool died resolves every later file as

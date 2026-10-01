@@ -96,7 +96,7 @@ function run(Service $service): void {
 
     expect(result?.relationships.filter(rel => rel.predicate === 'CALLS')).toEqual([
       { srcName: 'run', dstName: 'Service', predicate: 'CALLS', phpCallKind: 'constructor' },
-      { srcName: 'run', dstName: 'helper', predicate: 'CALLS', phpCallKind: 'function' },
+      { srcName: 'run', dstName: 'helper', predicate: 'CALLS', phpCallKind: 'function', bareCall: true },
       { srcName: 'run', dstName: 'Service.execute', predicate: 'CALLS', phpCallKind: 'member' },
     ]);
   });

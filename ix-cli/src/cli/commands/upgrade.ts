@@ -1282,6 +1282,9 @@ function requestedFormat(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
+/** Per-request bound for the background check on ordinary commands. */
+const BACKGROUND_CHECK_TIMEOUT_MS = 5_000;
+
 export async function checkForUpdate(): Promise<void> {
   const current = getCurrentVersion();
   const cache = readCache();
@@ -1299,12 +1302,23 @@ export async function checkForUpdate(): Promise<void> {
     return;
   }
 
-  Promise.all([
-    fetchLatestRelease(GITHUB_REPO),
-    fetchLatestRelease(COMPASS_DIST_REPO),
-    fetchLatestRelease(MEMORY_LAYER_DIST_REPO),
+  // Returned so a caller (or a test) can wait for it; main.ts does not. The
+  // fetches are short: nothing awaits them, but an open request still keeps
+  // the process alive after the command's output, and 30 s of that on every
+  // command behind a stalling proxy is a hang.
+  return Promise.all([
+    fetchLatestRelease(GITHUB_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
+    fetchLatestRelease(COMPASS_DIST_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
+    fetchLatestRelease(MEMORY_LAYER_DIST_REPO, BACKGROUND_CHECK_TIMEOUT_MS),
   ]).then(([latest, compassLatest, backendLatest]) => {
-    if (!latest) return;
+    if (!latest) {
+      // Record the attempt anyway, keeping whatever was known. Without it a
+      // failed check (GitHub blocked, rate-limited, offline) was retried by
+      // every command: three more requests against a 60/hour unauthenticated
+      // limit each time, which kept a rate-limited user rate-limited.
+      writeCache(cache?.latest ?? current, cache?.compassLatest, cache?.backendLatest);
+      return;
+    }
     writeCache(latest, compassLatest ?? undefined, backendLatest ?? undefined);
     const hasCliUpdate = isNewer(latest, current);
     const hasCompassUpdate = shouldOfferCompassUpgrade(compassLatest ?? undefined);
@@ -1361,12 +1375,20 @@ function printUpdateNotice(
  * An install run keeps the flat line, and that is not an oversight: by the time
  * it prints, every branch that added to `outstanding` has already acted on it,
  * so there the list says what was found and handled, not what is left. Reusing
- * it there would report the work that just succeeded as still pending.
+ * it there would report the work that just succeeded as still pending. What it
+ * must not do is sign off `[ok]` over a step that FAILED -- a pull, a restart,
+ * the compass install -- which `failures` reports ahead of everything else.
  */
 export function closingStatus(
   check: boolean | undefined,
   outstanding: readonly string[],
-): { upToDate: true } | { upToDate: false; summary: string } {
+  failures: readonly string[] = [],
+): { upToDate: true; failed?: false } | { upToDate: false; failed?: boolean; summary: string } {
+  // A step that failed outranks everything: the run is neither up to date nor
+  // merely behind.
+  if (failures.length > 0) {
+    return { upToDate: false, failed: true, summary: failures.join(", ") };
+  }
   if (check && outstanding.length > 0) {
     return { upToDate: false, summary: outstanding.join(", ") };
   }
@@ -1416,6 +1438,11 @@ export function registerUpgradeCommand(program: Command): void {
       // --check: an install pass acts on each of these as it goes, so there the
       // list describes what was found, not what is left. See the closing line.
       const outstanding: string[] = [];
+      // Steps an install run attempted and could not complete. Each one printed
+      // its own `[!!]` line and the run carried on -- then closed with `[ok] ix
+      // is up to date` and exit 0, which is what a script or a user skimming
+      // the last line believed.
+      const failures: string[] = [];
 
       const cliUpToDate = !isNewer(latest, current);
       if (cliUpToDate) {
@@ -1611,6 +1638,7 @@ export function registerUpgradeCommand(program: Command): void {
             });
             console.log("[ok] @ix/pro refreshed");
           } catch {
+            failures.push("@ix/pro refresh");
             console.error("[!!] Could not refresh @ix/pro. Run: npm update --prefix ~/.ix @ix/pro");
           }
         }
@@ -1665,26 +1693,36 @@ export function registerUpgradeCommand(program: Command): void {
               console.error(chalk.yellow(stampFailureMessage()));
             }
           } catch {
+            failures.push("backend image pull");
             console.error("[!!] Could not pull latest backend image. Run: ix docker restart");
           }
 
           // Restart backend if running
+          let backendRunning = false;
           try {
             execFileSync("curl", ["-sf", "http://localhost:8090/v1/health"], {
               stdio: "ignore",
               timeout: 3000,
             });
+            backendRunning = true;
+          } catch {
+            // Backend not running, that's fine
+          }
+          if (backendRunning && existsSync(backendComposeFile)) {
             console.log("Restarting backend...");
-            if (existsSync(backendComposeFile)) {
+            try {
               execFileSync(
                 "docker",
                 ["compose", "-f", backendComposeFile, "up", "-d", "--pull", "always"],
                 { stdio: "inherit" }
               );
               console.log("[ok] Backend restarted with latest image");
+            } catch {
+              // The backend WAS running, so this is a failed restart, not the
+              // "not running" case the old shared catch reported it as.
+              failures.push("backend restart");
+              console.error("[!!] Could not restart the backend. Run: ix docker restart");
             }
-          } catch {
-            // Backend not running, that's fine
           }
         }
       } else if (backendLatest && !backendUpgradeSkipped) {
@@ -1787,6 +1825,7 @@ export function registerUpgradeCommand(program: Command): void {
             writeFileSync(COMPASS_VERSION_FILE, `${compassLatest}\n`);
             console.log(`[ok] Compass upgraded to ${compassLatest}`);
           } catch (err) {
+            failures.push(`compass ${stage}`);
             console.error(`[!!] Compass ${stage} failed: ${describeExecFailure(err)}`);
             // Whether this is a degraded upgrade or a broken `ix view` depends
             // on what survived, and only the second is worth alarming about.
@@ -1832,8 +1871,11 @@ export function registerUpgradeCommand(program: Command): void {
       // `closingStatus` only reports outstanding work under `--check`. The
       // skipped-backend case is checked first because it describes work this
       // run declined to do, which outranks work it merely found.
-      const closing = closingStatus(opts.check, outstanding);
-      if (backendUpgradeSkipped) {
+      const closing = closingStatus(opts.check, outstanding, failures);
+      if (closing.failed) {
+        console.log(`[!!] ix upgrade did not complete: ${closing.summary} failed (see above)`);
+        process.exitCode = 1;
+      } else if (backendUpgradeSkipped) {
         console.log("[!!] ix upgrade finished with the backend unchanged");
       } else if (closing.upToDate) {
         console.log("[ok] ix is up to date");

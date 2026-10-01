@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -46,6 +46,8 @@ import { ingestMtimeCachePath, ingestRebuildPath } from "../config.js";
 /** A backend that answers the endpoints an ingest touches, and records them. */
 class FakeBackend {
   readonly requests: Array<{ path: string; patches: number; code?: number }> = [];
+  /** `source.uri` of every patch sent in a commit request, accepted or not. */
+  readonly sourceUris: string[] = [];
   /** Paths this fake does not implement. Asserted empty after every test. */
   readonly unknownPaths: string[] = [];
 
@@ -115,6 +117,8 @@ class FakeBackend {
    * path, which the tests written before it rely on.
    */
   rememberHashes = false;
+  /** Answer `/v1/source-hashes` with a 500, as a backend under load does. */
+  failSourceHashes = false;
   private readonly hashes = new Map<string, { workspaceId: string | null; uri: string; hash: string }>();
 
   /** Forget every request so far, so a second run can be measured on its own. */
@@ -237,6 +241,7 @@ class FakeBackend {
         /* a body we cannot read is still a request */
       }
       this.requests.push({ path, patches: patches.length });
+      for (const { source } of patches) if (source?.uri) this.sourceUris.push(source.uri);
       if (this.abortAfterCommits !== undefined && this.commitCount >= this.abortAfterCommits) {
         this.aborter.abort();
       }
@@ -305,6 +310,7 @@ class FakeBackend {
 
     if (path === "/v1/health") return send(200, { status: "ok", version: "1.0.28" });
     if (path === "/v1/source-hashes") {
+      if (this.failSourceHashes) return send(500, { error: "500: transaction begin timeout" });
       if (!this.rememberHashes) return send(200, []);
       let uris: string[] = [];
       try { uris = (JSON.parse(body) as { uris?: string[] }).uris ?? []; } catch { /* none */ }
@@ -448,9 +454,12 @@ describe("ingestFiles against a fake backend", () => {
     // on disk. Assigning the created path first means the variable always
     // names whatever was created, resolved or not.
     home = mkdtempSync(join(tmpdir(), "ix-ingest-home-"));
-    home = realpathSync(home);
+    // `.native`, as discovery canonicalises: on Windows the temp dir is an 8.3
+    // name (RUNNER~1) that plain realpathSync keeps and `.native` expands, so
+    // paths built from `repo` would not match the ones ingest records.
+    home = realpathSync.native(home);
     repo = mkdtempSync(join(tmpdir(), "ix-ingest-repo-"));
-    repo = realpathSync(repo);
+    repo = realpathSync.native(repo);
     const endpoint = await backend.start();
 
     // HOME *and* USERPROFILE: `os.homedir()` reads the latter on Windows, so
@@ -933,6 +942,71 @@ describe("ingestFiles against a fake backend", () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it("keeps a deletion it could not clean up in the baseline, so the next run retries it", async () => {
+    // A failed hash lookup with deletions pending drops them for this run. The
+    // baseline it then wrote came from the files still on disk, so it no
+    // longer named the deleted file: no later run could find it deleted, and
+    // its nodes stayed in the graph for good.
+    fixture(3);
+    backend.rememberHashes = true;
+    const incremental = () =>
+      ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const baselineFiles = () =>
+      Object.keys((JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { files: Record<string, number> }).files);
+    const deleted = join(repo, "src", "m001.ts");
+
+    await incremental();
+    expect(baselineFiles()).toContain(deleted);
+
+    rmSync(deleted);
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    backend.failSourceHashes = true;
+    await incremental();
+
+    expect(baselineFiles(), "the skipped deletion is still pending").toContain(deleted);
+    expect(baselineFiles()).toEqual(expect.arrayContaining([join(repo, "src", "m000.ts"), join(repo, "src", "m002.ts")]));
+  });
+
+  it("ingests only the languages --lang names, and keeps the rest of the baseline", async () => {
+    fixture(3);
+    writeFileSync(join(repo, "src", "tool.py"), "def tool():\n    return 1\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    const baselineFiles = () =>
+      Object.keys((JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as { files: Record<string, number> }).files);
+
+    await ingestFiles(repo, { format: "text", suppressOutput: true, printSummary: false });
+    const everything = baselineFiles();
+    expect(everything).toHaveLength(4);
+
+    backend.resetRequests();
+    const summary = await ingestFiles(repo, { format: "text", force: true, lang: "py", suppressOutput: true, printSummary: false });
+    expect(summary.filesDiscovered, "only the Python file is in scope").toBe(1);
+    expect(backend.acceptedPatches()).toBe(1);
+    expect(baselineFiles().sort(), "the TypeScript files keep their entries").toEqual([...everything].sort());
+  });
+
+  it("names a missing path rather than failing with a bare ENOENT", async () => {
+    await expect(
+      ingestFiles(join(repo, "no-such-dir"), { format: "text", suppressOutput: true, printSummary: false }),
+    ).rejects.toThrow(/^Path not found: /);
+  });
+
+  it("sends workspace-relative uris when the path it is given is a symlink", async () => {
+    // Discovery canonicalises every file with realpath; the root has to be
+    // canonical too, or every source_uri comes out as `../<real dir>/src/x.ts`
+    // (macOS /tmp -> /private/tmp, Windows 8.3 names, any symlinked checkout).
+    fixture(2);
+    const link = `${repo}-link`;
+    symlinkSync(repo, link, "dir");
+    try {
+      await ingestFiles(link, { format: "text", force: true, suppressOutput: true, printSummary: false });
+    } finally {
+      rmSync(link, { force: true });
+    }
+    expect(backend.sourceUris.length).toBeGreaterThan(0);
+    expect([...new Set(backend.sourceUris)].sort()).toEqual(["src/m000.ts", "src/m001.ts"]);
   });
 
   it("re-sends commits that lost the base-rev race to another writer", async () => {

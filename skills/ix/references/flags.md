@@ -40,7 +40,8 @@ surfaces (#575).
   rejected on its own; each combination errors with which flag to drop.
 - **`ix reset` is global.** `--code` narrows *what kind* of data goes, not
   which workspace — see the Gotchas section of [commands.md](commands.md)
-  before running it in a shared backend.
+  before running it in a shared backend. `--workspace` is the one that
+  narrows *which* workspace: only the registered one containing cwd.
 - **`--detailed` on `ix subsystems` requires `--list`**, and the reverse
   constraint bites harder: `--limit`, `--offset`, `--regions`, `--edge-cap` and
   `--member-file-cap` all *require* `--detailed`, so `ix subsystems --list
@@ -55,12 +56,17 @@ surfaces (#575).
   them at 3,000, for about 320 more tokens. `--max-chars` is still there for
   a caller who needs exact bytes and overrides it; passing both is refused
   rather than silently ranked, because the output does not say which one won.
-- **`ix mcp` advertises ten tools by default**, not twenty-six: `ix_health`,
-  `ix_locate`, `ix_search`, `ix_text`, `ix_impact`, `ix_overview`, `ix_read`,
-  `ix_neighbors`, `ix_explain` and `ix_context`. `ix_neighbors{relation}`
+- **`ix mcp` advertises five tools by default**, not twenty-six:
+  `ix_context`, `ix_search`, `ix_neighbors`, `ix_impact` and `ix_read`, one
+  per question the graph answers better than Grep/Read. `ix_neighbors{relation}`
   replaces `ix_callers` / `ix_callees` / `ix_imports` / `ix_imported_by`, whose
-  schemas differed by one word. `--tools=all` advertises every tool, and the Pro
-  tools are offered under both whenever Pro is installed.
+  schemas differed by one word; `ix_health`, `ix_text`, `ix_locate`,
+  `ix_overview` and `ix_explain` moved to `--tools=all`, which advertises every
+  tool. The Pro tools are offered under both whenever Pro is installed. The
+  server also sends `instructions` in `initialize` (when to use Ix over Grep,
+  and which tool first), which hosts that defer tool schemas still show the
+  model. Over MCP, hints and `next` records are phrased as tool calls
+  (`ix_neighbors symbol=X relation=callers`), never as CLI flags.
 - **`ix read <file>` stops at 400 lines.** The header then carries
   `truncated=true total_lines=<n> next=<path>:401-800`, so the next page is one
   command away. A line range you typed (`ix read a.ts:1-900`) is never capped,
@@ -494,7 +500,7 @@ Subcommands: `install`, `doctor`.
 
 | Flag | Value | Default | Effect |
 |---|---|---|---|
-| `--tools` | `core\|all` | `core` | Which catalog to advertise — ten tools, or every one |
+| `--tools` | `core\|all` | `core` | Which catalog to advertise — five tools, or every one |
 
 #### `ix mcp install`
 
@@ -604,6 +610,7 @@ Wipe graph data.
 | `--yes` / `-y` | — | off | Skip confirmation prompt |
 | `--code` | — | off | Reset only code graph (files, functions, classes, regions); preserve goals, plans, tasks, bugs, and decisions |
 | `--ingest` | — | off | Re-run ix map after wiping (rebuilds the code graph) |
+| `--workspace` | — | off | Reset only the registered workspace containing cwd (`/v1/reset/workspace`); every other workspace is left alone. The fix for a hollowed graph, with `--ingest` |
 
 ### `ix savings`
 

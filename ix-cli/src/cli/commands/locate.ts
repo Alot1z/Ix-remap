@@ -15,6 +15,7 @@ import { parsePickOption } from "../options.js";
 import { getEffectiveSystemPath, hasMapData } from "../hierarchy.js";
 import { humanizeLabel } from "../impact/risk-semantics.js";
 import { renderSection, renderKeyValue, renderNote, renderWarning, renderBreadcrumb, reportAmbiguousTarget } from "../ui.js";
+import { forMcp } from "../next-step.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
 const FILE_KINDS = new Set(["file"]);
@@ -148,7 +149,7 @@ export function registerLocateCommand(program: Command): void {
       // Diagnostic for missing map data
       const hasMap = hasMapData(systemPath);
       if (!hasMap) {
-        diagnostics.push("No system map. Run `ix map` to see hierarchy.");
+        diagnostics.push(`No system map. Run ${forMcp() ? "ix_map" : "`ix map`"} to see hierarchy.`);
       }
 
       // Build system path: append resolved symbol for non-file targets

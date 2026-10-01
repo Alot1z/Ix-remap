@@ -35,7 +35,26 @@ the backend, and maps the repo. Re-run it per repo.
 | Understand a component | `ix explain` | `ix explain IngestionService` |
 | Trace a flow | `ix trace` | `ix trace user_login_flow` |
 | Blast radius of a change | `ix impact` | `ix impact verify_token` |
-| Build / refresh the graph | `ix map` | `ix map .` |
+
+## Over MCP
+
+When the `ix-memory` MCP server is connected (`ix mcp`; register it with
+`ix mcp install`), the same graph is five tools. Reach for them where Grep,
+Glob and Read need several steps or cannot answer at all:
+
+| Question | Tool |
+|---|---|
+| Where to start on an issue or task; what a file or symbol touches | `ix_context target=<name or path>` or `ix_context issue=<issue text>` |
+| Who calls / is called by / imports / is imported by X, across files | `ix_neighbors symbol=X relation=callers\|callees\|imports\|imported_by` |
+| What a change to X reaches, before editing it | `ix_impact target=X` |
+| Which definition a name means when several share it | `ix_search term=X` |
+| A definition's source by name, without knowing its file | `ix_read symbol=X` |
+
+Not for a literal string or a line in a file you already have open: that is
+Grep and Read. `ix_context` and `ix_impact` end in `next` records phrased as
+tool calls; an ambiguous name answers with candidates and `pick=`/`path=` to
+choose one. No health check is needed first. `ix mcp --tools=all` serves
+every command as a tool.
 
 ## How to spend calls
 
@@ -44,9 +63,10 @@ the backend, and maps the repo. Re-run it per repo.
 2. **Read the ranges, not the files.** `ix read <symbol>`, or `path:120-180`, is
    one to three thousand tokens; the file around it is commonly thirty to sixty
    thousand — and every one of those is re-sent on every later step of the turn.
-3. Drill down with primitives, reusing the exact entity IDs from earlier output:
-   `ix search`, `ix callers`, `ix callees`, `ix contains`, `ix imports`,
-   `ix imported-by`, `ix depends`.
+3. Ask the graph what grep cannot: `ix callers`, `ix imported-by` and
+   `ix impact` answer "who uses this" and "what does a change reach" across
+   files. Drill further with `ix search`, `ix callees`, `ix contains`,
+   `ix imports`, `ix depends`, reusing the exact entity IDs from earlier output.
 4. **Do not poll `ix status`.** A command that needs the backend says so itself,
    with a hint; a health check in front of every call is a wasted round trip.
 5. Format: `llm` is the one to read, and `IX_FORMAT=llm` (or
@@ -58,12 +78,11 @@ the backend, and maps the repo. Re-run it per repo.
 
 1. Answer codebase questions from targeted `ix` commands, not from training data.
 2. Never guess a codebase fact that Ix holds.
-3. On contradictory information, run `ix conflicts` and present the results.
-4. Refresh with `ix map --silent` when the graph has gone stale — after a branch
-   switch, a pull, or a batch of edits. Editor plugins re-ingest edited files on
-   a debounce; this is not a per-edit step.
-5. When Ix reports low confidence, say so, suggest re-running `ix map`, and never
-   present it as established fact.
+3. The graph is kept current for you: bootstrap maps the repo and editor
+   plugins re-ingest edited files. Run `ix map --silent` only when results are
+   visibly stale, such as after a branch switch or a pull.
+4. When Ix reports low confidence, say so, and never present it as established
+   fact.
 
 ## References — load on demand
 
