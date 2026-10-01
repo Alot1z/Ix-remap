@@ -83,3 +83,42 @@ describe("read symbol span extraction", () => {
     expect(lineEnd).toBe(7);
   });
 });
+
+describe("symbolRange", () => {
+  // resolveMapRoot, recorded at 36-46; two lines were added above it since.
+  const file = [
+    ...Array.from({ length: 37 }, (_, i) => `// line ${i + 1}`),
+    "export function resolveMapRoot(explicit?: string): string {", // 38
+    ...Array.from({ length: 9 }, (_, i) => `  step${i};`),          // 39-47
+    "}",                                                            // 48
+    "// after",
+  ];
+
+  it("re-anchors a stale file's span to the declaration on disk", async () => {
+    const { symbolRange } = await import("../commands/read.js");
+    const r = symbolRange(file, "resolveMapRoot", 36, 46, true);
+    expect(r).toEqual({ lineStart: 38, lineEnd: 48, movedFrom: 36 });
+    expect(file[r.lineEnd - 1]).toBe("}");
+  });
+
+  it("uses a fresh file's span as recorded", async () => {
+    const { symbolRange } = await import("../commands/read.js");
+    expect(symbolRange(file, "resolveMapRoot", 36, 46, false)).toEqual({ lineStart: 36, lineEnd: 46 });
+  });
+
+  it("keeps a stale span that still starts at the declaration", async () => {
+    const { symbolRange } = await import("../commands/read.js");
+    expect(symbolRange(file, "resolveMapRoot", 38, 48, true)).toEqual({ lineStart: 38, lineEnd: 48 });
+  });
+
+  it("keeps the recorded span when the name is no longer declared", async () => {
+    const { symbolRange } = await import("../commands/read.js");
+    expect(symbolRange(file, "renamedAway", 36, 46, true)).toEqual({ lineStart: 36, lineEnd: 46 });
+  });
+
+  it("never runs past the end of the file", async () => {
+    const { symbolRange } = await import("../commands/read.js");
+    const short = ["// a", "// b", "function f() {", "}"];
+    expect(symbolRange(short, "f", 1, 10, true).lineEnd).toBe(4);
+  });
+});
