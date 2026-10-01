@@ -460,12 +460,13 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   registerTool(
     ctx,
     "ix_map",
-    "Use after editing code, when later answers must see the change. Re-ingests one path, or the whole workspace. Slow; not needed before reading.",
-    { file: z.string().min(1).optional() },
-    async (input) => {
-      const positionals = typeof input.file === "string" ? [input.file] : [];
-      return runJson(runIx, "ix_map", ix("map", positionals), 120_000);
-    },
+    "Use after editing code, when later answers must see the change. Re-maps the whole workspace; unchanged files are skipped. Slow; not needed before reading.",
+    {},
+    // No path argument. `ix map` takes a workspace root and rejects a file
+    // ("Map path is not a directory"), and a subdirectory would be mapped as a
+    // workspace of its own. The old optional `file` is dropped from the schema,
+    // so a caller that still sends it gets the workspace map.
+    async () => runJson(runIx, "ix_map", ix("map"), 120_000),
   );
   registerTool(
     ctx,
