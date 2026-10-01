@@ -1694,7 +1694,7 @@ async function buildIssueBundle(
     collectContextFacts(client, resolved),
     client.contextForNode(resolved.id, { asOfRev: opts.asOfRev, depth: opts.depth }),
     Promise.all(starts.filter((s) => s.id && s !== centre).map((s) => startNeighbourhood(client, s))),
-    checkGraphHealth(client, scope),
+    checkGraphHealth(client, activeReadScope()),
   ]);
 
   const near = new Map<string, Closeness>();
