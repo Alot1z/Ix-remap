@@ -40,6 +40,7 @@ import { registerPatchesCommand } from "../commands/patches.js";
 import { registerMcpCommand } from "../commands/mcp.js";
 import { registerContextCommand } from "../commands/context.js";
 import { registerAroundCommand } from "../commands/around.js";
+import { registerHookCommand } from "../commands/hook.js";
 import { validateCliOptions } from "../options.js";
 import { setPrettyJson } from "../format.js";
 import { setOutputShape } from "../output-shape.js";
@@ -76,6 +77,8 @@ const ADVANCED_COMMANDS = [
   "depends", "entity", "text", "conflicts", "query",
   // init is deprecated; ingest is now an implementation detail
   "init", "ingest",
+  // run by an agent harness, not typed
+  "hook",
 ];
 
 const OPTION_CHOICES: Record<string, Record<string, string[]>> = {
@@ -218,6 +221,7 @@ export function registerOssCommands(program: Command): void {
   registerMcpCommand(program);
   registerContextCommand(program);
   registerAroundCommand(program);
+  registerHookCommand(program);
 
   configureOssOptions(program);
 

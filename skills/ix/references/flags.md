@@ -382,6 +382,22 @@ Show provenance chain for a file or entity.
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
 | `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
 
+### `ix hook`
+
+Entry points an agent harness runs on its own events; not typed by hand. One subcommand per (harness, event), since each has its own stdin/stdout contract.
+
+No flags.
+
+#### `ix hook claude-post-edit`
+
+Claude Code PostToolUse hook for `Edit|MultiEdit|Write`: reads the hook JSON on stdin and prints `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}` naming the changed symbols' callers, importers that use them, and tests that reach them -- or prints nothing. Always exits 0; any failure (backend down, unmapped workspace, file not in the graph, non-code file, `IX_HOOK_TIMEOUT_MS`, default 3000, exceeded) prints nothing. `IX_HOOK_DEBUG=1` says why on stderr.
+
+| Flag | Value | Default | Effect |
+|---|---|---|---|
+| `--graph-root` | `<dir>` | — | Mapped workspace to query (default: the one containing the edited file) |
+| `--worktree` | `<dir>` | — | Root the edited `file_path` is under; mapped to the same relative path in `--graph-root` |
+| `--budget` | `<tokens>` | `300` | Token budget for the context it adds (~4 chars a token) |
+
 ### `ix impact <target>`
 
 System risk analysis — what behavior is at risk if this changes.

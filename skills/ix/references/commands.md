@@ -58,6 +58,18 @@ The graph's spans are re-anchored to the file on disk first, so a file edited
 since the last map is still read correctly. Output is held to `--budget` tokens
 (default 300); lists are cut, never their totals.
 
+The same answer is pushed to Claude Code after every edit by
+`ix hook claude-post-edit` (PostToolUse, matcher `Edit|MultiEdit|Write`):
+
+```json
+{"hooks":{"PostToolUse":[{"matcher":"Edit|MultiEdit|Write",
+  "hooks":[{"type":"command","command":"ix hook claude-post-edit"}]}]}}
+```
+
+It prints nothing and exits 0 whenever it cannot help. When the agent edits a
+different checkout from the mapped one, pass `--graph-root <mapped>` and
+`--worktree <agent checkout>`.
+
 ## History, Diffs & Contradictions
 
 | Goal | Command | Example |

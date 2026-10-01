@@ -86,8 +86,13 @@ registerOssCommands(program);
   // OUTSIDE the parseAsync try/catch below — render the failure here rather
   // than letting it reach the unhandledRejection handler by accident.
   let proLoaded = false;
+  // `ix hook` runs inside an agent harness after every edit and must exit 0
+  // with nothing on stdout whenever it cannot help. A broken Pro install would
+  // otherwise make it exit 1 before its action runs, and it needs nothing Pro
+  // registers.
+  const isHook = process.argv[2] === "hook";
   try {
-    proLoaded = await tryLoadProCommands(program);
+    if (!isHook) proLoaded = await tryLoadProCommands(program);
   } catch (err) {
     if (!isRepairInvocation(process.argv)) {
       renderCliError(err, debug, safeEndpoint()); // exits 1
