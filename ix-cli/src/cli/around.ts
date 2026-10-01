@@ -90,6 +90,47 @@ export interface AroundSymbol {
   tests: AroundSection;
   /** Other definitions in the same file with the same name. */
   sameName: Array<{ kind: string; lineStart: number; lineEnd: number }>;
+  /**
+   * Set when the edit is inside a class-like container but outside every
+   * member the graph has: a field, an annotation, a declaration line. Such a
+   * container's "callers" are mostly references to the type, so they are
+   * counted, not listed.
+   */
+  declarations?: { lineStart: number; lineEnd: number };
+}
+
+/** Definitions whose "callers" are references to a type rather than calls. */
+export const CONTAINER_KINDS = new Set([
+  "class", "interface", "enum", "struct", "trait", "object", "module", "record",
+  "annotation", "union", "namespace", "impl", "type",
+]);
+
+/**
+ * The edited lines inside container `d` that no member of it covers -- its
+ * fields and declarations, which the graph does not index as definitions
+ * (Java and TypeScript fields are not) -- or undefined when every edited line
+ * is inside a member.
+ */
+export function declarationLines(
+  d: PlacedDef, placed: PlacedDef[], ranges: LineRange[],
+): { start: number; end: number } | undefined {
+  if (!CONTAINER_KINDS.has(d.kind.toLowerCase())) return undefined;
+  const members = placed.filter((o) => o.id !== d.id && o.start >= d.start && o.end <= d.end
+    && (o.end - o.start) < (d.end - d.start));
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const r of ranges) {
+    if (r.insertion) {
+      if (r.start >= d.start && r.start <= d.end && !members.some((m) => m.start <= r.start && m.end >= r.end)) {
+        lo = Math.min(lo, r.start); hi = Math.max(hi, r.start);
+      }
+      continue;
+    }
+    for (let l = Math.max(r.start, d.start); l <= Math.min(r.end, d.end); l++) {
+      if (!members.some((m) => l >= m.start && l <= m.end)) { lo = Math.min(lo, l); hi = Math.max(hi, l); }
+    }
+  }
+  return lo <= hi ? { start: lo, end: hi } : undefined;
 }
 
 export interface AroundResult {
@@ -523,6 +564,9 @@ export async function gatherAround(client: AroundClient, req: AroundRequest): Pr
         return { kind: o.kind, lineStart: c?.start ?? o.lineStart, lineEnd: c?.end ?? o.lineEnd };
       });
     const testRows = [...tests.values()];
+    const decl = req.ranges && req.ranges.length > 0 ? declarationLines(d, anchorPlaced, req.ranges) : undefined;
+    // In the current file's coordinates, like the symbol's own span.
+    const shift = here.start - d.start;
     return {
       id: d.id,
       name: d.name,
@@ -535,6 +579,7 @@ export async function gatherAround(client: AroundClient, req: AroundRequest): Pr
       users: { total: users.length, rows: users.slice(0, caps.users) },
       tests: { total: testRows.length, rows: testRows.slice(0, caps.tests) },
       sameName,
+      ...(decl ? { declarations: { lineStart: decl.start + shift, lineEnd: decl.end + shift } } : {}),
     };
   }));
 
