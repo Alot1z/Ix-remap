@@ -9,6 +9,7 @@ import { absoluteFromSourceUri, getEndpoint, isReadablePath, readableRoots, reso
 import { resolveEntityFull, activeReadScope, ensureReadScope } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import { isFileStale } from "../stale.js";
+import { anchorSpan, bareName } from "../edge-sites.js";
 import { relativePath, printJson } from "../format.js";
 import { llmError, llmLine, llmShortId, printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
@@ -181,6 +182,25 @@ function withCursor(
  * payload and never has to guess whether a line of source is another record,
  * and says that each one carries a number to strip before the source.
  */
+/**
+ * The lines to show for a symbol. The graph's span is from the last ingest; in
+ * a file edited since, it no longer covers the symbol -- `resolveMapRoot` read
+ * as 36-46 while it sat at 38-48, and the read cut off its last two lines. A
+ * stale file's span is re-anchored to where the name is declared on disk now
+ * (`anchorSpan`, the same step edge sites use) and shifted with it. A fresh
+ * file's span is used as recorded: there, the nearest declaration can be a
+ * line below a recorded decorator, and moving to it would drop that line.
+ */
+export function symbolRange(
+  lines: string[], name: string, lineStart: number, lineEnd: number | undefined, stale: boolean,
+): { lineStart: number; lineEnd: number; movedFrom?: number } {
+  const end = lineEnd ?? lines.length;
+  if (!stale) return { lineStart, lineEnd: end };
+  const span = anchorSpan(lines, bareName(name), lineStart, end);
+  if (!span.anchored || span.start === lineStart) return { lineStart, lineEnd: end };
+  return { lineStart: span.start, lineEnd: Math.min(span.end, lines.length), movedFrom: lineStart };
+}
+
 export function renderReadLlm(result: ReadResult): string[] {
   const contentLines = result.content.split("\n");
   return [
@@ -405,22 +425,30 @@ Examples:
           // absoluteFromSourceUri passes an already-absolute source_uri through
           // untouched, so a graph row can still point anywhere on the disk.
           if (!guardReadable(absSourceUri, opts.root, "symbol source", opts.format)) return;
-          const lineStart = node.attrs?.lineStart ?? node.attrs?.line_start ?? 1;
-          const lineEnd = node.attrs?.lineEnd ?? node.attrs?.line_end;
           const fileContent = fs.readFileSync(absSourceUri, "utf-8");
           const allLines = fileContent.split("\n");
-          const effectiveEnd = lineEnd ?? allLines.length;
-          const content = allLines.slice(lineStart - 1, effectiveEnd).join("\n");
+          const range = symbolRange(
+            allLines, node.name,
+            node.attrs?.lineStart ?? node.attrs?.line_start ?? 1,
+            node.attrs?.lineEnd ?? node.attrs?.line_end,
+            stale,
+          );
+          const content = allLines.slice(range.lineStart - 1, range.lineEnd).join("\n");
           const result: ReadResult = {
             targetType: "symbol",
             path: absSourceUri,
-            lineStart,
-            lineEnd: effectiveEnd,
+            lineStart: range.lineStart,
+            lineEnd: range.lineEnd,
             content,
             symbol: node.name,
             kind: node.kind,
           };
-          if (stale) { result.stale = true; result.warning = "Results may be stale; file has changed since last ingest."; }
+          if (stale) {
+            result.stale = true;
+            result.warning = range.movedFrom
+              ? `The file has changed since the last ingest; ${node.name} was found at ${range.lineStart} on disk, not ${range.movedFrom} as the graph recorded. Lines added inside it since are not shown.`
+              : "Results may be stale; file has changed since last ingest.";
+          }
           outputResult(result, opts.format);
           return;
         }
