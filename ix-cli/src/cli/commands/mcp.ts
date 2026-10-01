@@ -104,7 +104,7 @@ export function registerMcpCommand(program: Command): void {
     .description("Serve Ix tools over the Model Context Protocol (stdio)")
     .option(
       "--tools <set>",
-      "Which catalog to advertise (core|all). core is ten tools; all is every one",
+      "Which catalog to advertise (core|all). core is five task-shaped tools; all is every one",
       "core",
     )
     .action(async (opts: { tools: string }) => {

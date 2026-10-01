@@ -13,6 +13,7 @@ import { llmError, llmLine } from "./llm.js";
 import { printJson, relativePath } from "./format.js";
 import { isQuiet } from "./output-shape.js";
 import type { AmbiguousResult, ResolveResult, Suggestion } from "./resolve.js";
+import { forMcp } from "./next-step.js";
 import { graphHealthJson, graphHealthLlmFields, graphHealthProse, type GraphHealth } from "./graph-health.js";
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
@@ -256,13 +257,15 @@ export function reportAmbiguousTarget(
     return;
   }
   if (format === "llm") {
-    const hints = ["--pick <n>"];
-    if (!opts?.kind) hints.push("--kind");
-    if (!opts?.path) hints.push("--path");
+    // Over MCP the same three levers are tool arguments, not flags.
+    const mcp = forMcp();
+    const hints = [mcp ? "pick=<n>" : "--pick <n>"];
+    if (!opts?.kind) hints.push(mcp ? "kind=<kind>" : "--kind");
+    if (!opts?.path) hints.push(mcp ? "path=<file substring>" : "--path");
     const lines = [
       llmError("ambiguous_target", message, [["count", String(result.candidates.length)]]),
       ...candidateLines(result.candidates, "candidate"),
-      llmLine("hint", [["text", `Use ${hints.join(" or ")} to disambiguate.`]]),
+      llmLine("hint", [["text", `${mcp ? "Pass" : "Use"} ${hints.join(" or ")} to disambiguate.`]]),
       ...(result.diagnostics ?? []).map((d) => llmLine("diagnostic", [["code", d.code], ["message", d.message]])),
     ];
     console.log(lines.join("\n"));

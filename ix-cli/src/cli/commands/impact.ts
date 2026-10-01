@@ -9,7 +9,7 @@ import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.
 import { checkGraphHealth, graphHealthJson, graphHealthLlmFields, graphHealthProse, isUnhealthy } from "../graph-health.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
-import { lineSpan, printJson, rowLocation, stripNulls } from "../format.js";
+import { lineSpan, printJson, relativePath, rowLocation, stripNulls } from "../format.js";
 import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
@@ -286,7 +286,7 @@ export function impactTailLlm(
 
 async function containerImpact(
   client: IxClient,
-  target: { id: string; kind: string; name: string; resolutionMode: string },
+  target: { id: string; kind: string; name: string; resolutionMode: string; path?: string },
   limit: number,
   depth: number,
   format: string,
@@ -377,6 +377,7 @@ async function containerImpact(
   const riskFacts: ImpactFacts = {
     name: target.name,
     kind: target.kind,
+    targetPath: target.path ? (relativePath(target.path) ?? target.path) : undefined,
     container: undefined,
     systemPath: systemPathMapped,
     members: members.length,
@@ -478,7 +479,7 @@ async function containerImpact(
 
 async function leafImpact(
   client: IxClient,
-  target: { id: string; kind: string; name: string; resolutionMode: string },
+  target: { id: string; kind: string; name: string; resolutionMode: string; path?: string },
   depth: number,
   format: string,
   graph?: Record<string, unknown>,
@@ -519,6 +520,7 @@ async function leafImpact(
   const riskFacts: ImpactFacts = {
     name: target.name,
     kind: target.kind,
+    targetPath: target.path ? (relativePath(target.path) ?? target.path) : undefined,
     container: undefined,
     systemPath: systemPathMapped,
     members: 0,

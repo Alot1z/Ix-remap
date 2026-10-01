@@ -11,6 +11,7 @@ import {
 } from "./hierarchy-semantics.js";
 import { inferSystemMeaning } from "./system-meaning.js";
 import { type FlowSemantics, inferFlowSemantics } from "./flow-semantics.js";
+import { forMcp, suggest } from "../next-step.js";
 
 export interface ExplanationOutput {
   explanation: string;
@@ -202,7 +203,7 @@ function renderFlowWhyItMatters(
       `Although it has ${callerPhrase}, this ${role} sits in the ${flowName} ` +
       `and feeds ${downstream}, ` +
       `making it a critical decision point in that flow. ` +
-      `Consider running \`ix impact ${facts.name}\` before modifying.`
+      `Consider running \`${suggest.impact(facts.name)}\` before modifying.`
     );
   }
 
@@ -210,7 +211,7 @@ function renderFlowWhyItMatters(
     return (
       `Because this ${role} ${behaviorVerb}, changes here ${verb} affect how ` +
       `${actionNoun} behaves across the system. ` +
-      `Run \`ix impact ${facts.name}\` before modifying.`
+      `Run \`${suggest.impact(facts.name)}\` before modifying.`
     );
   }
 
@@ -401,7 +402,7 @@ function renderWhyItMatters(
         `Although it has ${callerPhrase}, it sits inside the ${location} ` +
         `and feeds ${facts.downstreamDependents} downstream dependents, ` +
         `making it a critical decision point in that flow. ` +
-        `Consider running \`ix impact ${facts.name}\` before modifying.`
+        `Consider running \`${suggest.impact(facts.name)}\` before modifying.`
       );
     }
 
@@ -409,7 +410,7 @@ function renderWhyItMatters(
       `Although it has ${callerPhrase}, it sits in a path with ` +
       `${facts.downstreamDependents} downstream dependents, making it a ` +
       `structurally important decision point in the pipeline. ` +
-      `Consider running \`ix impact ${facts.name}\` before modifying.`
+      `Consider running \`${suggest.impact(facts.name)}\` before modifying.`
     );
   }
 
@@ -419,7 +420,7 @@ function renderWhyItMatters(
     if (hierPhrase) {
       return (
         `Because ${hierPhrase}. ` +
-        `Run \`ix impact ${facts.name}\` before modifying.`
+        `Run \`${suggest.impact(facts.name)}\` before modifying.`
       );
     }
 
@@ -428,7 +429,7 @@ function renderWhyItMatters(
     if (roleContext) {
       return (
         `${roleContext}, changes here ${verb} propagate across the codebase. ` +
-        `Run \`ix impact ${facts.name}\` before modifying.`
+        `Run \`${suggest.impact(facts.name)}\` before modifying.`
       );
     }
 
@@ -437,7 +438,7 @@ function renderWhyItMatters(
       : "High connectivity";
     return (
       `${reasonStr}. This is a central shared dependency — changes ${verb} propagate broadly. ` +
-      `Run \`ix impact ${facts.name}\` before modifying.`
+      `Run \`${suggest.impact(facts.name)}\` before modifying.`
     );
   }
 
@@ -461,7 +462,7 @@ function renderWhyItMatters(
     if (hierPhrase) {
       return (
         `Because ${hierPhrase}. ` +
-        `Run \`ix impact ${facts.name}\` before modifying.`
+        `Run \`${suggest.impact(facts.name)}\` before modifying.`
       );
     }
 
@@ -469,7 +470,7 @@ function renderWhyItMatters(
     if (roleContext) {
       return (
         `${roleContext}, changes here ${verb} have wide impact. ` +
-        `Run \`ix impact ${facts.name}\` before modifying.`
+        `Run \`${suggest.impact(facts.name)}\` before modifying.`
       );
     }
 
@@ -478,7 +479,7 @@ function renderWhyItMatters(
       : "This entity has high connectivity";
     return (
       `${reasonStr}. Changes here ${verb} have wide impact — run ` +
-      `\`ix impact ${facts.name}\` before modifying.`
+      `\`${suggest.impact(facts.name)}\` before modifying.`
     );
   }
 
@@ -535,7 +536,7 @@ function renderNotes(facts: EntityFacts): string[] {
   for (const d of facts.diagnostics) {
     switch (d.code) {
       case "unresolved_call_target":
-        notes.push("Some downstream calls could not be resolved to named entities. Run `ix map` to improve coverage.");
+        notes.push(`Some downstream calls could not be resolved to named entities. Run ${forMcp() ? "ix_map" : "`ix map`"} to improve coverage.`);
         break;
       case "stale_source":
         notes.push("Source file has changed since last ingest — results may be incomplete.");

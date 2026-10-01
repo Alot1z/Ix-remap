@@ -13,6 +13,7 @@ import { checkGraphHealth, isUnhealthy, type GraphHealth } from "./graph-health.
 import { reportAmbiguousTarget, reportResolutionFailure } from "./ui.js";
 import { relativePath } from "./format.js";
 import { isQuiet } from "./output-shape.js";
+import { disambiguationHint } from "./next-step.js";
 import {
   candidateOrigin, isFileStemMatch, looksLikeCodeIdentifier, requestsNonCode,
 } from "./candidate-origin.js";
@@ -700,7 +701,7 @@ function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
   return {
     resolutionMode: "ambiguous",
     candidates,
-    diagnostics: [{ code: "ambiguous_resolution", message: "Use --pick <n> or --path to disambiguate." }],
+    diagnostics: [{ code: "ambiguous_resolution", message: disambiguationHint("Use --pick <n> or --path to disambiguate.") }],
   };
 }
 

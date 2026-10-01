@@ -36,16 +36,33 @@ async function names(opts: Parameters<typeof connect>[0] = {}): Promise<string[]
 }
 
 describe("the core toolset", () => {
-  it("is what a session gets without asking", async () => {
-    expect(await names()).toEqual([...IX_MCP_CORE_TOOL_NAMES]);
+  it("is what a session gets without asking, ix_context first", async () => {
+    const listed = await names();
+    expect([...listed].sort()).toEqual([...IX_MCP_CORE_TOOL_NAMES].sort());
+    expect(listed[0]).toBe("ix_context");
   });
 
-  it("is ten tools, not twenty-six", async () => {
-    // `tools/list` is paid on every session before a single call is made, and a
-    // model choosing between 26 near-identical names picks worse than one
-    // choosing between ten.
-    expect(IX_MCP_CORE_TOOL_NAMES.length).toBe(10);
+  it("is five task-shaped tools, one per question", async () => {
+    // Ten was still too many: four of them answered "tell me about X" and two
+    // were name lookups, and recorded agents never reached for the graph's own
+    // answers (callers, importers, impact).
+    expect([...IX_MCP_CORE_TOOL_NAMES]).toEqual([
+      "ix_context",
+      "ix_search",
+      "ix_neighbors",
+      "ix_impact",
+      "ix_read",
+    ]);
     expect((await names({ tools: "all" })).length).toBeGreaterThan(20);
+  });
+
+  it("leaves ix_health and the overlapping lookups to --tools=all", async () => {
+    const core = await names();
+    const all = await names({ tools: "all" });
+    for (const name of ["ix_health", "ix_text", "ix_locate", "ix_overview", "ix_explain"]) {
+      expect(core, name).not.toContain(name);
+      expect(all, name).toContain(name);
+    }
   });
 
   it("costs a fraction of what the full catalog costs", async () => {
@@ -53,13 +70,12 @@ describe("the core toolset", () => {
     const core = JSON.stringify((await client.listTools()).tools).length;
     const full = JSON.stringify((await (await connect({ tools: "all" })).listTools()).tools).length;
 
-    // Measured: 6,437 bytes for ten tools against 15,365 for today's catalog,
-    // a 58% cut. The spec asked for 5 KB, which is not reachable: a tool with
-    // no parameters at all is 412 bytes of name, description and annotations,
-    // so ten of them are 4.1 KB before a single input is declared. Getting to
-    // 5 KB would mean giving back the disambiguation parameters that make an
-    // ambiguous symbol resolvable at all.
-    expect(core).toBeLessThan(6_600);
+    // Measured: 6,437 bytes for the old ten-tool core. Five tools with
+    // when-to-use descriptions, and disambiguation on every symbol tool, come
+    // to about 5 KB, and the server instructions (~850 bytes) are sent once in
+    // `initialize` on top of that, so the total still comes in under the old
+    // tools/list alone.
+    expect(core).toBeLessThan(5_300);
     expect(core).toBeLessThan(full / 2);
   });
 
@@ -141,11 +157,29 @@ describe("ix_neighbors", () => {
 });
 
 describe("tool descriptions", () => {
-  it("stay inside a line, so a catalog is skimmable", async () => {
+  it("stay within three short sentences, so a catalog is skimmable", async () => {
     const tools = (await (await connect({ tools: "all", proAvailable: true })).listTools()).tools;
     for (const tool of tools) {
       expect(tool.description, tool.name).toBeDefined();
-      expect(tool.description!.length, `${tool.name}: ${tool.description}`).toBeLessThanOrEqual(120);
+      expect(tool.description!.length, `${tool.name}: ${tool.description}`).toBeLessThanOrEqual(300);
+    }
+  });
+
+  it("say when to use each core tool and when not to", async () => {
+    // "Use instead of grep" gave no reason to. Each core description now says
+    // when to reach for it, what it returns, and what to use instead.
+    const tools = (await (await connect()).listTools()).tools;
+    for (const tool of tools) {
+      expect(tool.description, tool.name).toMatch(/^Use (when|first|before)/);
+      expect(tool.description, tool.name).toMatch(/Returns /);
+      expect(tool.description, tool.name).toMatch(/Not (for|needed)|For (a|transitive)/);
+    }
+  });
+
+  it("keep titles as labels, with the guidance in the description", async () => {
+    const tools = (await (await connect({ tools: "all" })).listTools()).tools;
+    for (const tool of tools) {
+      expect(tool.annotations?.title?.length ?? 0, tool.name).toBeLessThanOrEqual(40);
     }
   });
 

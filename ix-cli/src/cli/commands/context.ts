@@ -42,6 +42,7 @@ import { activeReadScope, ensureReadScope, resolveFileOrReport } from "../resolv
 import { createStaleProbe, hasCompletedSourceGraphBaseline } from "../stale.js";
 import { renderNote, renderSection, renderWarning, renderWarningErr, reportFailure } from "../ui.js";
 import { printJson, relativePath } from "../format.js";
+import { forMcp, suggest, toolCall } from "../next-step.js";
 import {
   assessTargetStructure, checkGraphHealth, graphHealthJson, isUnhealthy, worseHealth, type GraphHealth,
 } from "../graph-health.js";
@@ -2421,7 +2422,9 @@ export function renderBundle(bundle: ContextBundle, format: string): void {
       // `--format json` carries the rest for a caller that wants it.
       ...bundle.evidence.map(evidenceRecord(undefined)),
       // Last, so it reads as the closing instruction it is.
-      ...nextReads(bundle).map((cmd) => llmLine("next", { cmd })),
+      ...(forMcp()
+        ? nextToolCalls(bundle).map((step) => llmLine("next", { cmd: step.cmd, why: step.why }))
+        : nextReads(bundle).map((cmd) => llmLine("next", { cmd }))),
     ]);
     return;
   }
@@ -2535,9 +2538,9 @@ function summariseCut(dropped: EvidenceItem[]): Array<{ what: string; count: num
  * for anything and pays for everything.
  */
 function cutLever(bundle: ContextBundle, top: { what: string }): string {
+  if (forMcp()) return mcpCutLever(bundle, top);
   const name = bundle.target.name;
-  const container = ["file", "module", "class", "object", "trait", "interface"]
-    .includes(bundle.target.kind.toLowerCase());
+  const container = CONTAINER_TARGET_KINDS.includes(bundle.target.kind.toLowerCase());
   switch (top.what) {
     case "member":
       return container
@@ -2558,6 +2561,36 @@ function cutLever(bundle: ContextBundle, top: { what: string }): string {
       return `ix conflicts ${name}, or raise --max-tokens`;
     default:
       return `raise --max-tokens`;
+  }
+}
+
+const CONTAINER_TARGET_KINDS: readonly string[] = ["file", "module", "class", "object", "trait", "interface"];
+
+/**
+ * {@link cutLever} for an MCP caller: only core tools, and `max_tokens` for
+ * the budget, since `ix_context` takes no flags. `ix contains`, `ix depends`
+ * and `ix conflicts` have no core tool, so those cuts fall back to the nearest
+ * one that does exist, or to the budget alone.
+ */
+function mcpCutLever(bundle: ContextBundle, top: { what: string }): string {
+  const { name, path } = bundle.target;
+  const container = CONTAINER_TARGET_KINDS.includes(bundle.target.kind.toLowerCase());
+  const pin = container ? {} : { path };
+  const budget = "raise max_tokens (default 3000)";
+  switch (top.what) {
+    case "member":
+      return container ? `call ix_context on one of them, or ${budget}` : budget;
+    case "caller":
+      return `${suggest.neighbors(name, "callers", pin)}, or ${budget}`;
+    case "dependent":
+    case "relationship":
+      return `${suggest.impact(name, pin)}, or ${budget}`;
+    case "import":
+      return `${suggest.neighbors(name, "imports", pin)}, or ${budget}`;
+    case "call":
+      return `${suggest.neighbors(name, "callees", pin)}, or ${budget}`;
+    default:
+      return budget;
   }
 }
 
@@ -2629,6 +2662,53 @@ export function nextReads(bundle: ContextBundle, limit = 3): string[] {
     if (reads.length === limit) break;
   }
   return reads;
+}
+
+/** Longest range a suggested read may span; past it the read covers its head only. */
+export const NEXT_READ_MAX_LINES = 120;
+
+/**
+ * The next calls worth making, for an MCP caller.
+ *
+ * {@link nextReads} closes a CLI bundle with `ix read path:a-b`, which over MCP
+ * is the one suggestion an agent's own Read tool already covers — and the
+ * recorded agents that did follow the bundle never once asked the graph the
+ * questions only it answers. So the MCP close leads with those: who calls (or
+ * imports) the target across files, and what a change to it reaches. A read of
+ * the target's own range comes last, capped so a 558-line class does not turn
+ * into a 558-line suggestion.
+ *
+ * Every call names core tools only, and pins the target's file with `path=` so
+ * an ambiguous name resolves to the entity this bundle was built for.
+ */
+export function nextToolCalls(bundle: ContextBundle): Array<{ cmd: string; why: string }> {
+  const { name, kind, path } = bundle.target;
+  const steps: Array<{ cmd: string; why: string }> = [];
+  const isFile = kind.toLowerCase() === "file";
+  // A file resolves by its path; a symbol by name, pinned to its file.
+  const symbol = isFile ? (path ?? name) : name;
+  const pin = isFile ? {} : { path };
+
+  steps.push(
+    isFile
+      ? { cmd: suggest.neighbors(symbol, "imported_by", pin), why: "every file that imports this one" }
+      : { cmd: suggest.neighbors(symbol, "callers", pin), why: "every call site across files, from the graph rather than a name match" },
+  );
+  steps.push({ cmd: suggest.impact(symbol, pin), why: "what a change here reaches, before you edit it" });
+
+  const read = bundle.evidence.find(
+    (item) => item.location?.path && item.location.lineStart !== undefined && item.location.lineEnd !== undefined,
+  )?.location;
+  if (read?.lineStart !== undefined && read.lineEnd !== undefined) {
+    const end = Math.min(read.lineEnd, read.lineStart + NEXT_READ_MAX_LINES - 1);
+    steps.push({
+      cmd: toolCall("ix_read", { symbol: `${read.path}:${read.lineStart}-${end}` }),
+      why: end < read.lineEnd
+        ? `first ${NEXT_READ_MAX_LINES} of ${read.lineEnd - read.lineStart + 1} lines of the top-ranked evidence`
+        : "the top-ranked evidence",
+    });
+  }
+  return steps;
 }
 
 function locationField(ref: Located | undefined): { location?: EvidenceLocation } {
