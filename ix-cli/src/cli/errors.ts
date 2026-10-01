@@ -57,9 +57,14 @@ export function detectRequestedFormat(argv: readonly string[]): string | undefin
  * answer, because X" is an answer. The human prose is then skipped rather than
  * printed alongside, so the caller gets exactly one report.
  */
-function emitLlmError(code: string, message: string, hint?: string): boolean {
+function emitLlmError(
+  code: string,
+  message: string,
+  hint?: string,
+  extra: Array<[string, string]> = [],
+): boolean {
   if (requestedFormat !== "llm") return false;
-  console.log(llmError(code, message, hint ? [["hint", hint]] : []));
+  console.log(llmError(code, message, [...extra, ...(hint ? [["hint", hint] as [string, string]] : [])]));
   return true;
 }
 
@@ -131,6 +136,47 @@ export class CliResolutionError extends Error {
     super(message);
     this.name = "CliResolutionError";
   }
+}
+
+/**
+ * A graph read was asked for from a directory no registered workspace covers.
+ *
+ * This used to be answered anyway: the read fell back to whichever workspace
+ * carried `default: true` -- an unrelated repository -- or, with no default,
+ * ran unscoped across every workspace on the backend, which is how one
+ * function came back as four rows from four checkouts of the same repo. Both
+ * look like answers. Refusing, and saying how to map the directory, is the
+ * only response that cannot be mistaken for one.
+ *
+ * Its `message` stands alone, because `ix mcp` runs commands in-process and
+ * relays a thrown error's message as-is rather than through the renderer below.
+ */
+export class WorkspaceNotMappedError extends Error {
+  readonly code = "workspace_not_mapped";
+  constructor(
+    public readonly dir: string,
+    public readonly hint: string = workspaceNotMappedHint(dir),
+  ) {
+    super(`workspace_not_mapped: ${dir} is not inside a mapped Ix workspace, so there is no graph to answer from. ${hint}`);
+    this.name = "WorkspaceNotMappedError";
+  }
+  /** The message without the code prefix or the hint, for renderers that carry both separately. */
+  get summary(): string {
+    return `${this.dir} is not inside a mapped Ix workspace, so there is no graph to answer from.`;
+  }
+}
+
+/**
+ * How to get a graph for `dir`. `ix map` with no argument maps the enclosing
+ * git repository (see `resolveMapRoot`), so that is named when there is one;
+ * outside a repository a bare `ix map` would fall back to the configured
+ * default workspace, so the path is spelled out instead.
+ */
+export function workspaceNotMappedHint(dir: string, gitRoot?: string): string {
+  const map = gitRoot
+    ? `Run \`ix map\` here to map ${gitRoot}`
+    : `Run \`ix map ${dir}\` to map this directory`;
+  return `${map}, or run the command from inside a workspace that is already mapped (\`ix config show\` lists them).`;
 }
 
 /**
@@ -290,6 +336,15 @@ export function renderCliError(err: unknown, debug = false, endpoint?: string): 
     }
     if (debug && err instanceof CliResolutionError && err.detail) {
       process.stderr.write(chalk.dim(`Detail: ${err.detail}\n`));
+    }
+    process.exit(1);
+  }
+
+  if (err instanceof WorkspaceNotMappedError) {
+    if (requestedFormat === "json") {
+      console.log(JSON.stringify({ error: err.code, message: err.summary, dir: err.dir, next: err.hint }));
+    } else if (!emitLlmError(err.code, err.summary, err.hint, [["dir", err.dir]])) {
+      renderStructuredError({ error: err.code, message: err.summary, next: err.hint });
     }
     process.exit(1);
   }

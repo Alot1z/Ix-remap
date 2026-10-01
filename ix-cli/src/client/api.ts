@@ -637,12 +637,15 @@ export class IxClient {
     return resp.json();
   }
 
-  async stats(opts?: { workspaceId?: string; systemId?: string }): Promise<any> {
+  async stats(opts?: { workspaceId?: string; systemId?: string; timeoutMs?: number }): Promise<any> {
     const params = new URLSearchParams();
     if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
     if (opts?.systemId)    params.set("system_id",    opts.systemId);
     const qs = params.toString();
-    return this.get(`/v1/stats${qs ? `?${qs}` : ""}`);
+    // `timeoutMs` bounds a probe (the graph-health check) that must never hold
+    // up the answer it rides along with; the request is aborted, not abandoned,
+    // so a slow backend does not keep a finished CLI process alive either.
+    return this.get(`/v1/stats${qs ? `?${qs}` : ""}`, opts?.timeoutMs);
   }
 
   async health(): Promise<HealthResponse> {
@@ -675,9 +678,9 @@ export class IxClient {
     return parseOrThrowWithStatus<T>(resp);
   }
 
-  private async get<T>(path: string): Promise<T> {
+  private async get<T>(path: string, timeoutMs = 2 * 60 * 1000): Promise<T> {
     const resp = await fetch(`${this.endpoint}${path}`, {
-      signal: this.signalFor(2 * 60 * 1000),
+      signal: this.signalFor(timeoutMs),
     });
     if (!resp.ok) {
       const text = await resp.text();

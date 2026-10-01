@@ -38,6 +38,8 @@ again.
 | `Compass UI not found` on `ix view` | Run `ix upgrade` to fetch Compass. Re-running the installer wipes the Compass assets, so bootstrap auto-restores them with `ix upgrade`; skip with `IX_SKIP_COMPASS=1` |
 | Compass shows "Compass not connected to a codebase" | The scoped workspace has no graph — run `ix map .` from the repo root, then reload the tab |
 | Slow or stale results | Re-run `ix map --silent` to refresh the graph |
+| `error code=workspace_not_mapped` | The directory is in no registered workspace. Graph reads no longer fall back to the `default: true` workspace (an unrelated repo) or to every workspace on the backend. Run `ix map` in the repo (the error names the root it would map), or run from inside a mapped one |
+| `graph status=degraded` / `classification=degraded` | The graph kept its nodes but lost its edges, so zero callers/members mean *unknown*, not none. Usually another checkout of the same repo was ingested into this backend later (Ix-memory#211). `ix map` and `ix ingest --force` do not repair it; `ix reset --workspace --yes --ingest` (this workspace only) does. It hollows the other checkout in turn until the backend fix ships |
 | `Commits against <endpoint> kept failing` | Commits kept failing, so `ix map` gave up rather than sending one doomed request per file. Read the `Last error` line it prints — the CLI cannot tell the two causes apart, because the memory layer answers 500 for both. **A saturated database:** `ix doctor` still passes (it asks whether the backend is reachable and the graph consistent, and an ArangoDB too busy to begin a transaction is both), so check `docker stats` and `GET /_db/<db>/_api/query/current`, then re-map once it is idle. **Patches the backend will not accept:** the error names the patch or the field; re-map after fixing it, or `IX_COMMIT_FAILURE_LIMIT=0` to send the rest regardless. |
 
 ## Environment flags
@@ -49,6 +51,8 @@ again.
 - `IX_COMMIT_FAILURE_LIMIT=N` — consecutive failed commits before `ix map`
   stops sending more (default 5). `0` sends every patch regardless, which is
   the pre-#560 behaviour.
+- `IX_GRAPH_HEALTH=0` — skip the graph-structure check `ix explain` / `ix context`
+  run alongside their queries; `IX_GRAPH_HEALTH_TIMEOUT_MS` bounds it (default 2000).
 - `IX_COMMIT_BASE_REV_RETRIES=N` — how many times a commit is re-sent after
   another writer (a second `ix map` on the same backend) moved the graph
   revision under it (default 8). Only a commit that loses every retry is

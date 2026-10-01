@@ -845,7 +845,8 @@ export type DiagnosticCode =
   | "no_edges"
   | "text_fallback_used"
   | "stale_source"
-  | "unfiltered_search";
+  | "unfiltered_search"
+  | "graph_degraded";
 
 export interface Diagnostic {
   code: DiagnosticCode;

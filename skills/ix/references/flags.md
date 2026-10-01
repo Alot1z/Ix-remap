@@ -40,7 +40,8 @@ surfaces (#575).
   rejected on its own; each combination errors with which flag to drop.
 - **`ix reset` is global.** `--code` narrows *what kind* of data goes, not
   which workspace — see the Gotchas section of [commands.md](commands.md)
-  before running it in a shared backend.
+  before running it in a shared backend. `--workspace` is the one that
+  narrows *which* workspace: only the registered one containing cwd.
 - **`--detailed` on `ix subsystems` requires `--list`**, and the reverse
   constraint bites harder: `--limit`, `--offset`, `--regions`, `--edge-cap` and
   `--member-file-cap` all *require* `--detailed`, so `ix subsystems --list
@@ -603,6 +604,7 @@ Wipe graph data.
 | `--yes` / `-y` | — | off | Skip confirmation prompt |
 | `--code` | — | off | Reset only code graph (files, functions, classes, regions); preserve goals, plans, tasks, bugs, and decisions |
 | `--ingest` | — | off | Re-run ix map after wiping (rebuilds the code graph) |
+| `--workspace` | — | off | Reset only the registered workspace containing cwd (`/v1/reset/workspace`); every other workspace is left alone. The fix for a hollowed graph, with `--ingest` |
 
 ### `ix savings`
 

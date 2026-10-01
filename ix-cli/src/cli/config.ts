@@ -381,12 +381,17 @@ export function resolveWorkspaceRoot(explicitRoot?: string, cwd = process.cwd())
     const named = loadWorkspaces().find(w => w.workspace_name === cfg.workspace);
     if (named) return named.root_path;
   }
-  // 4. Configured default workspace
-  const defaultWs = getDefaultWorkspace();
-  if (defaultWs) return defaultWs.root_path;
-  // 5. Git root
+  // 4. Git root: the repository the caller is standing in. Ahead of the
+  //    default workspace for the reason `resolveMapRoot` gives: `default: true`
+  //    marks whichever repo was mapped first, so ranking it above a local
+  //    repository made `ix text` in an unmapped checkout search an unrelated
+  //    one. (Graph reads from such a directory refuse outright; see
+  //    `requireReadWorkspaceId`.)
   const gitRoot = gitRootFor(cwd);
   if (gitRoot) return gitRoot;
+  // 5. Configured default workspace, for a cwd with no local context at all
+  const defaultWs = getDefaultWorkspace();
+  if (defaultWs) return defaultWs.root_path;
   // 6. cwd fallback
   return cwd;
 }

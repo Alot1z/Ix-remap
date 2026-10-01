@@ -274,7 +274,9 @@ jobs:
           FIXTURE="$PWD/test/fixtures/sample_project"
           echo "::group::status"; $IX status; echo "::endgroup::"
           echo "::group::map fixture"; $IX map "$FIXTURE" --silent; echo "::endgroup::"
-          echo "::group::search"; $IX search BillingService --format json | tee search.json; echo "::endgroup::"
+          # From inside the fixture: a graph read from a directory no workspace
+          # covers is refused (workspace_not_mapped), not answered from the default.
+          echo "::group::search"; (cd "$FIXTURE" && $IX search BillingService --format json) | tee search.json; echo "::endgroup::"
           node -e "const r=require('./search.json');const n=(r.results||r).length||0;if(!n){console.error('no search results after map');process.exit(1)}console.log('search returned',n,'results')"
           # From the directory the fixture was mapped into. doctor answers for
           # its own cwd (#518), and `ix-cli` is not a registered workspace — a

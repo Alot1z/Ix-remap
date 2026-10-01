@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveEntityFull, scoreCandidate } from "../resolve.js";
 
+// Graph reads refuse a directory no workspace covers (workspace_not_mapped),
+// and this suite runs from a checkout that is not registered anywhere. It is
+// about resolution, not scoping, so the directory counts as mapped here.
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => "ws-test",
+}));
+
+
 /**
  * The resolver behind `ix context` / `ix explain` / `ix locate` must pick the
  * code definition of a name, not an import of it (a `module` entity located in

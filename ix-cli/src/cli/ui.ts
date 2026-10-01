@@ -13,6 +13,7 @@ import { llmError, llmLine } from "./llm.js";
 import { printJson, relativePath } from "./format.js";
 import { isQuiet } from "./output-shape.js";
 import type { AmbiguousResult, ResolveResult, Suggestion } from "./resolve.js";
+import { graphHealthJson, graphHealthLlmFields, graphHealthProse, type GraphHealth } from "./graph-health.js";
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
 //
@@ -175,21 +176,36 @@ export function reportUnresolvedTarget(
   target: string | string[],
   format?: string,
   suggestions?: Suggestion[],
+  detail?: { reason?: string; message?: string; graph?: GraphHealth },
 ): void {
-  const message = unresolvedTargetMessage(target);
+  // A file target's miss says which of "not ingested" and "does not exist" it
+  // is; the code stays `unresolved_target` so a consumer routes on one slug.
+  const message = detail?.message ?? unresolvedTargetMessage(target);
   const near = suggestions ?? [];
   if (format === "json") {
     printJson({
       ...unresolvedTargetRecord(target),
+      message,
+      ...(detail?.reason ? { reason: detail.reason } : {}),
       ...(near.length ? { suggestions: near } : {}),
+      ...(detail?.graph ? { graph: graphHealthJson(detail.graph) } : {}),
     });
   } else if (format === "llm") {
-    const lines = [llmError("unresolved_target", message), ...candidateLines(near, "suggestion")];
+    const lines = [
+      llmError("unresolved_target", message, detail?.reason ? [["reason", detail.reason]] : []),
+      ...(detail?.graph ? [llmLine("graph", graphHealthLlmFields(detail.graph))] : []),
+      ...candidateLines(near, "suggestion"),
+    ];
     if (near.length) {
       lines.push(llmLine("hint", [["text", "Re-run with one of these names, or narrow with --path."]]));
     }
     console.log(lines.join("\n"));
-  } else if (near.length) {
+  } else {
+    if (detail?.graph) console.error(chalk.yellow(graphHealthProse(detail.graph)));
+    if (!near.length) {
+      process.exitCode = 1;
+      return;
+    }
     // The resolver already wrote the miss itself for a person; this adds the
     // part that makes it actionable.
     console.error(chalk.dim("Did you mean:"));
@@ -274,6 +290,6 @@ export function reportResolutionFailure(
   opts?: { kind?: string; path?: string },
 ): void {
   if (result.ambiguous) reportAmbiguousTarget(target, result.result, format, opts);
-  else reportUnresolvedTarget(target, format, result.suggestions);
+  else reportUnresolvedTarget(target, format, result.suggestions, { reason: result.reason, message: result.message, graph: result.graph });
   process.exitCode = 1;
 }

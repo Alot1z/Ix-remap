@@ -6,6 +6,7 @@ import { renderSection, renderSuccess, renderError } from "../ui.js";
 import { IxClient } from "../../client/api.js";
 import { findWorkspaceForCwd, getDefaultWorkspace, getEndpoint } from "../config.js";
 import { resolveReadSystemId } from "../resolve.js";
+import { assessGraphStats } from "../graph-health.js";
 import { llmLine, printLlmLines } from "../llm.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join as pathJoin, resolve as resolvePath, win32 as winPath } from "node:path";
@@ -159,7 +160,7 @@ export function registerDoctorCommand(program: Command): void {
         // count. What the unscoped call added was every *live* node belonging to
         // some other workspace on the same backend, which is how a freshly
         // reset workspace still looked like a 17k-node graph.
-        const systemId = await resolveReadSystemId(client);
+        const systemId = await resolveReadSystemId(client, { allowUnmapped: true });
         const workspace = systemId ? undefined : (matchedWorkspace ?? substitutedWorkspace);
         const stats = await client.stats({ workspaceId: workspace?.workspace_id, systemId });
         // Named, not deictic. "this workspace" is only true when cwd actually
@@ -218,8 +219,8 @@ export function registerDoctorCommand(program: Command): void {
               return {
                 ok: false,
                 detail:
-                  `no workspace registered for ${cwd} — reads here answer from ` +
-                  `workspace '${substitutedWorkspace.workspace_name}' instead. ` +
+                  `no workspace registered for ${cwd} — graph reads here fail with workspace_not_mapped ` +
+                  `(they no longer fall back to the default workspace '${substitutedWorkspace.workspace_name}'). ` +
                   "Run `ix map` in this directory.",
               };
             }
@@ -294,6 +295,34 @@ export function registerDoctorCommand(program: Command): void {
               const { stats, scope } = await sharedStats();
               const total = stats.edges?.total ?? 0;
               return { ok: total > 0, detail: `${total} edges in ${scope}` };
+            } catch (e: any) {
+              return { ok: false, detail: e.message ?? "stats failed" };
+            }
+          },
+        },
+        {
+          // A graph can keep every node and lose nearly every edge (another
+          // checkout's ingest, Ix-memory#211): both counts above stay non-zero
+          // and every answer is quietly wrong. Same judgement as the query
+          // paths use (graph-health.ts), from the stats already fetched.
+          name: "Graph structure intact",
+          run: async () => {
+            try {
+              const { stats, scope } = await sharedStats();
+              const health = assessGraphStats(stats);
+              if (health.status === "degraded") {
+                return { ok: false, detail: `${scope}: ${health.message} Fix: ${health.fix}` };
+              }
+              if (health.status === "ok") {
+                return {
+                  ok: true,
+                  detail: `${health.structuralEdges} structural edges for ${health.symbols} symbols in ${scope}`,
+                };
+              }
+              // Empty (which "Graph has nodes" already fails) or a stats body
+              // without the per-predicate breakdown: nothing to judge by, and
+              // not a second failure for one problem.
+              return { ok: true, detail: `not judged: no ${health.status === "empty" ? "nodes" : "edge breakdown"} in ${scope}` };
             } catch (e: any) {
               return { ok: false, detail: e.message ?? "stats failed" };
             }
