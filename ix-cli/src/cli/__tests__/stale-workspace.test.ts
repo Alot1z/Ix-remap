@@ -273,8 +273,18 @@ describe("workspace-scoped staleness", () => {
       staleFiles: 1,
       sampleChangedFiles: ["deleted.js"],
     });
-    expect(isFileStale(filePath)).toBe(true);
-    expect(isFileStale(path.join(root, "never-mapped.js"))).toBe(false);
+    // From inside the workspace, as a read runs. The probe resolves the active
+    // root from cwd, and a repository cwd now outranks `default: true` (see
+    // resolveWorkspaceRoot), so asking from this test's own checkout would ask
+    // about that checkout instead.
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      expect(isFileStale(filePath)).toBe(true);
+      expect(isFileStale(path.join(root, "never-mapped.js"))).toBe(false);
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 
   it("persists an empty baseline after the last mapped file is deleted", () => {

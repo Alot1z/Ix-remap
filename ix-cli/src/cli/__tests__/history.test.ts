@@ -1,7 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,6 +101,25 @@ describe("gitRunner", () => {
     }
     const run = gitRunner(dir);
     expect(recentCommits(run, "a.ts").map((c) => c.subject)).toEqual(["fix: a handles b", "feat: add a"]);
+    expect(coChangedFiles(run, "a.ts", new Set()).map((c) => [c.path, c.commits])).toEqual([["b.ts", 2]]);
+  });
+
+  it("finds co-changes for a workspace in a subdirectory of its repository", () => {
+    // `git log --name-only` prints paths from the repository's top level, while
+    // the target path is relative to the workspace root git runs in.
+    dir = mkdtempSync(join(tmpdir(), "ix-history-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    mkdirSync(join(dir, "packages", "web"), { recursive: true });
+    for (const i of [0, 1]) {
+      writeFileSync(join(dir, "packages", "web", "a.ts"), `// ${i}\n`);
+      writeFileSync(join(dir, "packages", "web", "b.ts"), `// ${i}\n`);
+      git("add", ".");
+      git("commit", "-q", "-m", `change ${i}`);
+    }
+    const run = gitRunner(join(dir, "packages", "web"));
     expect(coChangedFiles(run, "a.ts", new Set()).map((c) => [c.path, c.commits])).toEqual([["b.ts", 2]]);
   });
 });

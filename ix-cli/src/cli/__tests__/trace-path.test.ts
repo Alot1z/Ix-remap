@@ -1,8 +1,17 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { findPath, pickTraceTarget } from '../commands/trace.js';
+
+// Graph reads refuse a directory no workspace covers (workspace_not_mapped),
+// and this suite runs from a checkout that is not registered anywhere. It is
+// about resolution, not scoping, so the directory counts as mapped here.
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => "ws-test",
+}));
+
 
 // ---------------------------------------------------------------------------
 // Helpers

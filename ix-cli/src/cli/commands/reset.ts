@@ -4,10 +4,11 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint, clearIngestMtimeCache, clearStitchScopeCache } from "../config.js";
+import { getEndpoint, clearIngestMtimeCache, clearStitchScopeCache, findWorkspaceForCwd } from "../config.js";
 import { canRenderProgress } from "../stderr.js";
 import { resolveWorkspaceId } from "../bootstrap.js";
 import { clearStitchCooldown } from "../stitch-guard.js";
+import { clearGraphHealthCache } from "../graph-health.js";
 
 /**
  * Drop this workspace's cached "am I stitched into a system?" answer.
@@ -28,7 +29,21 @@ export function registerResetCommand(program: Command): void {
     .option("-y, --yes", "Skip confirmation prompt")
     .option("--code", "Reset only code graph (files, functions, classes, regions); preserve goals, plans, tasks, bugs, and decisions")
     .option("--ingest", "Re-run ix map after wiping (rebuilds the code graph)")
-    .action(async (opts: { yes?: boolean; code?: boolean; ingest?: boolean }) => {
+    .option(
+      "--workspace",
+      "Wipe only the workspace this directory belongs to (every other workspace on the backend is untouched). " +
+        "With --ingest, this is the repair for a graph that has lost its edges",
+    )
+    .action(async (opts: { yes?: boolean; code?: boolean; ingest?: boolean; workspace?: boolean }) => {
+      if (opts.workspace) {
+        if (opts.code) {
+          console.error(chalk.red("Error:"), "--workspace and --code cannot be combined: a workspace reset already keeps every other workspace.");
+          process.exitCode = 1;
+          return;
+        }
+        await resetThisWorkspace(opts);
+        return;
+      }
       const scope = opts.code ? "code graph" : "all graph data";
       const warning = opts.code
         ? "This will delete all code nodes and edges (files, functions, classes, regions).\nPlanning artifacts (goals, plans, tasks, bugs, decisions) will be preserved."
@@ -73,6 +88,7 @@ export function registerResetCommand(program: Command): void {
           // Clear the mtime cache so the next ix map re-ingests all files
           clearIngestMtimeCache(process.cwd());
           clearStitchScopeCacheForCwd();
+          clearGraphHealthCache();
           // Ix#568: and the stitch cooldown. The re-ingest below is the one
           // run that can re-register this workspace, and a live cooldown would
           // refuse exactly it -- leaving the workspace unregistered with
@@ -93,6 +109,7 @@ export function registerResetCommand(program: Command): void {
           stopSpinner();
           clearIngestMtimeCache(process.cwd());
           clearStitchScopeCacheForCwd();
+          clearGraphHealthCache();
           // Ix#568: and the stitch cooldown. The re-ingest below is the one
           // run that can re-register this workspace, and a live cooldown would
           // refuse exactly it -- leaving the workspace unregistered with
@@ -124,4 +141,70 @@ export function registerResetCommand(program: Command): void {
         if (result.status !== 0) process.exitCode = result.status ?? 1;
       }
     });
+}
+
+/**
+ * `ix reset --workspace`: delete one workspace's graph through the scoped
+ * `/v1/reset/workspace`, then (with `--ingest`) map it again.
+ *
+ * This is the only repair for a hollowed graph (see graph-health.ts): `ix map`
+ * skips unchanged files and `ix ingest --force` re-sends patches the backend
+ * already recorded, so neither re-creates the lost edges. The backend clears
+ * the workspace's patch idempotency keys with its data, which is what makes
+ * the re-ingest real.
+ *
+ * Scoped by the directory, strictly: the registered workspace containing cwd,
+ * never a pinned or default one, because this deletes data and the target
+ * must be the one the user is standing in.
+ */
+async function resetThisWorkspace(opts: { yes?: boolean; ingest?: boolean }): Promise<void> {
+  const ws = findWorkspaceForCwd(process.cwd());
+  if (!ws) {
+    console.error(chalk.red("Error:"), `${process.cwd()} is not inside a registered workspace; nothing to reset.`);
+    console.error(chalk.dim("Run `ix map` here to map it instead."));
+    process.exitCode = 1;
+    return;
+  }
+  if (!opts.yes) {
+    console.log(chalk.yellow(
+      `This deletes the graph of workspace '${ws.workspace_name}' (${ws.root_path}) and nothing else.`,
+    ));
+    process.stdout.write(chalk.yellow(`Reset workspace '${ws.workspace_name}'? (y/N) `));
+    const answer = await new Promise<string>(resolve => {
+      process.stdin.setEncoding("utf8");
+      process.stdin.once("data", (chunk: string) => resolve(chunk.trim()));
+    });
+    process.stdin.destroy();
+    if (answer.toLowerCase() !== "y") {
+      console.log(chalk.dim("Aborted."));
+      return;
+    }
+  }
+
+  const client = new IxClient(getEndpoint());
+  try {
+    await client.deleteWorkspace(ws.workspace_id);
+  } catch (err: any) {
+    console.error(chalk.red("Error:"), err.message);
+    process.exitCode = 1;
+    return;
+  }
+  // The local "already ingested" state describes the graph just deleted: left
+  // in place, the map below would skip every file as unchanged.
+  clearIngestMtimeCache(ws.root_path);
+  clearStitchScopeCache(ws.workspace_id);
+  clearGraphHealthCache();
+  clearStitchCooldown(getEndpoint());
+  console.log(chalk.green("✓") + ` Workspace '${ws.workspace_name}' wiped. Other workspaces untouched.`);
+
+  if (!opts.ingest) {
+    console.log(chalk.dim("  Run `ix map` to rebuild it."));
+    return;
+  }
+  console.log(chalk.dim("Rebuilding..."));
+  const result = spawnSync(process.argv[0], [process.argv[1], "map"], {
+    stdio: "inherit",
+    cwd: ws.root_path,
+  });
+  if (result.status !== 0) process.exitCode = result.status ?? 1;
 }

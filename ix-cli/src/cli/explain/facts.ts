@@ -9,6 +9,7 @@ import { buildDependencyTree } from "../commands/depends.js";
 import { getSystemPath } from "../hierarchy.js";
 import type { CommitRef } from "./history.js";
 import type { RelatedRef } from "./related-files.js";
+import { forMcp, toolCall } from "../next-step.js";
 
 /** A related entity and where it is defined. */
 export interface EntityLocation {
@@ -439,7 +440,7 @@ export async function collectFacts(
               name: name || e.dst,
               kind: calleeNode.kind,
               resolved: false,
-              suggestedCommand: `ix text "${e.dst.slice(0, 8)}"`,
+              suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
             };
           }
           return {
@@ -448,14 +449,14 @@ export async function collectFacts(
             id: e.dst,
             resolved: true,
             path: relativePath(calleeNode.provenance?.source_uri ?? calleeNode.provenance?.sourceUri),
-            suggestedCommand: `ix explain "${name}"`,
+            suggestedCommand: forMcp() ? toolCall("ix_explain", { symbol: name }) : `ix explain "${name}"`,
           };
         } catch {
           return {
             name: e.dst,
             resolved: false,
             diagnostic: "unresolved_call_target",
-            suggestedCommand: `ix text "${e.dst.slice(0, 8)}"`,
+            suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
           } as EntityRef;
         }
       }),

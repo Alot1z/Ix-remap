@@ -1,16 +1,19 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import chalk from "chalk";
 import type { IxClient } from "../client/api.js";
 import { stderr } from "./stderr.js";
 import { applyRoleFilter } from "./role-filter.js";
 import { detectSystem } from "./system.js";
-import { resolveWorkspaceId } from "./bootstrap.js";
-import { readStitchScope, writeStitchScope } from "./config.js";
+import { requireReadWorkspaceId, resolveWorkspaceId } from "./bootstrap.js";
+import { readStitchScope, resolveWorkspaceRoot, writeStitchScope } from "./config.js";
+import { checkGraphHealth, isUnhealthy, type GraphHealth } from "./graph-health.js";
 import { reportAmbiguousTarget, reportResolutionFailure } from "./ui.js";
 import { relativePath } from "./format.js";
 import { isQuiet } from "./output-shape.js";
+import { disambiguationHint } from "./next-step.js";
 import {
   candidateOrigin, isFileStemMatch, looksLikeCodeIdentifier, requestsNonCode,
 } from "./candidate-origin.js";
@@ -60,7 +63,21 @@ function activeScope(): { workspaceId?: string; systemId?: string } {
  * Best-effort + cached (one lookup per cwd); an older backend or a true singleton
  * leaves the scope at workspace level. Read commands `await` this before resolving.
  */
-export async function ensureReadScope(client: Pick<IxClient, "workspaceSystem">): Promise<void> {
+export async function ensureReadScope(
+  client: Pick<IxClient, "workspaceSystem">,
+  opts?: { allowUnmapped?: boolean },
+): Promise<void> {
+  await foldStitchedSystem(client);
+  // A read with neither a workspace nor a system would run unscoped, across
+  // every workspace on the backend: the same function once per checkout, from
+  // repositories the caller never asked about. Refused with the fix instead.
+  // `ix doctor` opts out -- reporting this state is its job, not failing on it.
+  if (!opts?.allowUnmapped && !_scopeCache?.workspaceId && !_scopeCache?.systemId) {
+    requireReadWorkspaceId(process.cwd());
+  }
+}
+
+async function foldStitchedSystem(client: Pick<IxClient, "workspaceSystem">): Promise<void> {
   const cwd = process.cwd();
   if (_scopeCache?.cwd === cwd && _scopeCache.stitchChecked) return;
   const localSystem = detectSystem(cwd)?.systemId;
@@ -92,8 +109,11 @@ export async function ensureReadScope(client: Pick<IxClient, "workspaceSystem">)
  * scope to: a co-ingest system (detectSystem) OR a Path-2 stitched system (backend
  * lookup), else undefined (workspace-scoped). Drop-in for `detectSystem(cwd)?.systemId`.
  */
-export async function resolveReadSystemId(client: Pick<IxClient, "workspaceSystem">): Promise<string | undefined> {
-  await ensureReadScope(client);
+export async function resolveReadSystemId(
+  client: Pick<IxClient, "workspaceSystem">,
+  opts?: { allowUnmapped?: boolean },
+): Promise<string | undefined> {
+  await ensureReadScope(client, opts);
   return activeReadScope().systemId;
 }
 
@@ -137,6 +157,8 @@ export interface ResolveOpts {
   testsOnly?: boolean;
   searchLimit?: number;
   format?: string;
+  /** Internal: the caller reports the miss itself (a file target's miss). */
+  silentMiss?: boolean;
 }
 
 export interface Suggestion {
@@ -149,7 +171,21 @@ export interface Suggestion {
 export type ResolveResult =
   | { resolved: true; entity: ResolvedEntity; hiddenTestCount?: number }
   | { resolved: false; ambiguous: true; result: AmbiguousResult; hiddenTestCount?: number }
-  | { resolved: false; ambiguous: false; hiddenTestCount?: number; suggestions?: Suggestion[] };
+  | {
+      resolved: false;
+      ambiguous: false;
+      hiddenTestCount?: number;
+      suggestions?: Suggestion[];
+      /**
+       * Why it missed, when that is more than "no such name": a file target
+       * that is on disk but not in the graph (`file_not_in_graph`), or on
+       * neither (`file_not_found`). The message then replaces the generic one.
+       */
+      reason?: string;
+      message?: string;
+      /** Set by the reporter's caller when the graph itself is empty or degraded. */
+      graph?: GraphHealth;
+    };
 
 // ── Structural kind sets ──────────────────────────────────────────────────
 
@@ -170,7 +206,7 @@ const STRUCTURAL_KINDS = new Set([
  */
 function missProse(opts: ResolveOpts | undefined, message: string): void {
   const format = opts?.format;
-  if (format === "json" || format === "llm") return;
+  if (opts?.silentMiss || format === "json" || format === "llm") return;
   stderr(message);
 }
 
@@ -381,11 +417,14 @@ export async function resolveEntityFull(
   }
 
   if (nodes.length === 0) {
-    // Nothing to suggest: the search matched no name, and re-running it without
-    // `nameOnly` returns the same empty set (measured against a 1.4M-node graph
-    // on three terms), so a second call would only cost a round trip.
+    // The backend matches names by substring, so a typo (`parseBudgetOptoin`)
+    // matches nothing -- and re-running without `nameOnly` returns the same
+    // empty set (measured against a 1.4M-node graph on three terms). What does
+    // find it is a fragment of the name: one request each for a leading and a
+    // trailing fragment, ranked by edit distance. Only on this miss path.
     missProse(opts, `No entity found matching "${symbol}".`);
-    return { resolved: false, ambiguous: false };
+    const near = await nearestNames(client, symbol, { kind: kindFilter, workspaceId, systemId });
+    return { resolved: false, ambiguous: false, ...(near.length ? { suggestions: near } : {}) };
   }
 
   // Apply role filter before scoring
@@ -662,7 +701,7 @@ function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
   return {
     resolutionMode: "ambiguous",
     candidates,
-    diagnostics: [{ code: "ambiguous_resolution", message: "Use --pick <n> or --path to disambiguate." }],
+    diagnostics: [{ code: "ambiguous_resolution", message: disambiguationHint("Use --pick <n> or --path to disambiguate.") }],
   };
 }
 
@@ -856,7 +895,98 @@ export async function resolveFileOrEntityFull(
   // module-level constant is not ranked behind every config entry and heading
   // that happens to share its name (Ix#679).
   const allKinds = ["file", "class", "object", "trait", "interface", "module", "method", "function", "constant"];
-  return resolveEntityFull(client, target, allKinds, opts);
+  if (!looksFileLike(target)) return resolveEntityFull(client, target, allKinds, opts);
+  // A path is a question about a file. "No entity found" answered it as if it
+  // were a symbol, which does not say whether the file exists, was never
+  // ingested, or was mistyped -- three different next steps.
+  const result = await resolveEntityFull(client, target, allKinds, { ...opts, silentMiss: true });
+  if (result.resolved || result.ambiguous) return result;
+  return fileMiss(client, target, opts);
+}
+
+/**
+ * The miss for a file target: on disk but not in the graph, or on neither,
+ * with the graph's nearest file names as suggestions.
+ */
+async function fileMiss(client: IxClient, target: string, opts?: ResolveOpts): Promise<ResolveResult> {
+  const candidates = path.isAbsolute(target)
+    ? [target]
+    : [path.resolve(resolveWorkspaceRoot(), target), path.resolve(process.cwd(), target)];
+  const onDisk = candidates.some((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
+  const message = onDisk
+    ? `"${target}" exists on disk but is not in the graph: it has not been ingested yet (run \`ix map\`), ` +
+      "or it is ignored or of a type Ix does not parse."
+    : `No file "${target}" in the graph, and none at that path on disk.`;
+  missProse(opts, message);
+  const { workspaceId, systemId } = activeScope();
+  const stem = path.basename(target).replace(/\.[^.]+$/, "");
+  const near = (await nearestNames(client, stem, { kind: "file", workspaceId, systemId }, (n) => {
+    const name = String(n.name ?? "");
+    return name.replace(/\.[^.]+$/, "");
+  })).filter((sug) => !opts?.path || (sug.path ?? "").toLowerCase().includes(opts.path.toLowerCase()));
+  return {
+    resolved: false,
+    ambiguous: false,
+    reason: onDisk ? "file_not_in_graph" : "file_not_found",
+    message,
+    ...(near.length ? { suggestions: near } : {}),
+  };
+}
+
+/** Levenshtein distance, case-insensitive. Small inputs only (names). */
+export function editDistance(a: string, b: string): number {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  if (x === y) return 0;
+  let prev = Array.from({ length: y.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[y.length];
+}
+
+/**
+ * The graph names closest to `symbol`, for a miss. Two name-only searches, for
+ * a leading and a trailing fragment (a typo sits in one half or the other),
+ * then ranked by edit distance and kept only when close enough to be a
+ * plausible intent. Best-effort: any failure is "no suggestions".
+ */
+export async function nearestNames(
+  client: Pick<IxClient, "search">,
+  symbol: string,
+  scope: { kind?: string; workspaceId?: string; systemId?: string },
+  nameOf: (node: any) => string = (n) => String(n.name ?? n.attrs?.name ?? ""),
+  limit = 3,
+): Promise<Suggestion[]> {
+  if (symbol.length < 4) return [];
+  const width = Math.max(3, Math.ceil(symbol.length * 0.5));
+  const fragments = [...new Set([symbol.slice(0, width), symbol.slice(-width)])];
+  try {
+    const found = (await Promise.all(fragments.map((term) => client.search(term, {
+      limit: 30, kind: scope.kind, nameOnly: true, workspaceId: scope.workspaceId, systemId: scope.systemId,
+    })))).flat();
+    const maxDistance = Math.max(2, Math.floor(symbol.length / 3));
+    const ranked = found
+      .filter((n: any) => n?.id && n.kind !== "chunk")
+      .map((n: any) => ({ n, d: editDistance(nameOf(n), symbol) }))
+      .filter(({ d }) => d <= maxDistance)
+      .sort((a, b) => a.d - b.d || Number(!STRUCTURAL_KINDS.has(a.n.kind)) - Number(!STRUCTURAL_KINDS.has(b.n.kind)));
+    // One row per name and file: an import of the name in the same file adds nothing.
+    const seen = new Set<string>();
+    const unique = ranked.map(({ n }) => n).filter((n: any) => {
+      const key = `${n.name}|${n.provenance?.sourceUri ?? n.provenance?.source_uri ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return toSuggestions(unique, limit);
+  } catch {
+    return [];
+  }
 }
 
 export async function resolveFileOrEntity(
@@ -881,6 +1011,15 @@ export async function resolveFileOrReport(
   // reach stdout.
   const result = await resolveFileOrEntityFull(client, target, { ...opts, format });
   if (result.resolved) return result.entity;
+  if (!result.ambiguous) {
+    // A miss on an empty or hollowed graph is not evidence the name does not
+    // exist. Only on this path, and cached per backend revision.
+    const graph = await checkGraphHealth(client, activeScope());
+    if (isUnhealthy(graph)) {
+      reportResolutionFailure(target, { ...result, graph }, format, opts);
+      return null;
+    }
+  }
   reportResolutionFailure(target, result, format, opts);
   return null;
 }
@@ -910,8 +1049,9 @@ async function tryFileGraphMatch(
     systemId,
   });
 
-  // Filter to actual matches
-  const targetLower = normalizeForPathMatch(target);
+  // Filter to actual matches. Leading `./` and `../` say where the caller is
+  // standing, not where the file is, so they are not part of the suffix match.
+  const targetLower = normalizeForPathMatch(target).replace(/^(\.\.?\/)+/, "");
   const basenameLower = basename.toLowerCase();
   const basenameNoExt = basename.replace(/\.[^.]+$/, "").toLowerCase();
   const normalizedPathHint = normalizeForPathMatch(effectivePath);
@@ -942,6 +1082,11 @@ async function tryFileGraphMatch(
   }
 
   if (matches.length === 0) return null;
+  // A path names one file. When no node sits at it, a same-named file
+  // elsewhere is a different file: `docs-site/package.json` resolved to the
+  // repo-root `package.json` and was answered about with full confidence. The
+  // miss is reported instead, with that file among its suggestions.
+  if (targetHasPath && !effectivePath && !matches.some((m) => m.quality === 0)) return null;
 
   // Sort by quality then by URI length ascending (shorter = closer to root = more prominent)
   matches.sort((a, b) => {

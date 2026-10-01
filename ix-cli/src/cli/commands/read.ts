@@ -12,6 +12,7 @@ import { isFileStale } from "../stale.js";
 import { relativePath, printJson } from "../format.js";
 import { llmError, llmLine, llmShortId, printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
+import { disambiguationHint } from "../next-step.js";
 import { reportUnresolvedTarget } from "../ui.js";
 
 export interface ReadResult {
@@ -224,7 +225,7 @@ export function renderReadAmbiguityLlm(result: AmbiguityResult, target: string):
     "text",
     isFile
       ? "Provide a more specific path to disambiguate."
-      : "Use --pick <n>, --kind, or --path to disambiguate.",
+      : disambiguationHint("Use --pick <n>, --kind, or --path to disambiguate."),
   ]]));
   for (const d of result.diagnostics ?? []) {
     lines.push(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
@@ -450,7 +451,7 @@ Examples:
         outputAmbiguity({
           targetType: "ambiguous-symbol",
           candidates: symbolResult.candidates.map((c, i) => ({ ...c, rank: i + 1 })),
-          diagnostics: [{ code: "ambiguous_resolution", message: "Use --pick <n> or --path to disambiguate." }],
+          diagnostics: [{ code: "ambiguous_resolution", message: disambiguationHint("Use --pick <n> or --path to disambiguate.") }],
         }, target, opts.format);
         return;
       }
