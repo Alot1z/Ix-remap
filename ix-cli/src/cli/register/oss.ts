@@ -39,6 +39,7 @@ import { registerSavingsCommand } from "../commands/savings.js";
 import { registerPatchesCommand } from "../commands/patches.js";
 import { registerMcpCommand } from "../commands/mcp.js";
 import { registerContextCommand } from "../commands/context.js";
+import { registerAroundCommand } from "../commands/around.js";
 import { validateCliOptions } from "../options.js";
 import { setPrettyJson } from "../format.js";
 import { setOutputShape } from "../output-shape.js";
@@ -216,6 +217,7 @@ export function registerOssCommands(program: Command): void {
   registerPatchesCommand(program);
   registerMcpCommand(program);
   registerContextCommand(program);
+  registerAroundCommand(program);
 
   configureOssOptions(program);
 

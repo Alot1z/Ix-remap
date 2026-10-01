@@ -47,6 +47,16 @@ These aggregate multiple graph operations into single bounded responses.
 | What an entity imports | `ix imports` | `ix imports auth_provider.py` |
 | What imports an entity | `ix imported-by` | `ix imported-by AuthProvider` |
 | Dependency impact | `ix depends` | `ix depends verify_token --depth 2` |
+| Who depends on the code at a line you are editing | `ix around` | `ix around src/auth.py:120` |
+
+`ix around <path>[:<line>[-<end>]]` names the definitions whose span covers the
+line (innermost first, at most 3; the file's most-called top-level definitions
+when no line is given) and, for each, its callers at their call sites, the
+importing files that use it (including uses the graph has no edge for, such as
+a function passed by name), and the tests that reach it within two caller hops.
+The graph's spans are re-anchored to the file on disk first, so a file edited
+since the last map is still read correctly. Output is held to `--budget` tokens
+(default 300); lists are cut, never their totals.
 
 ## History, Diffs & Contradictions
 

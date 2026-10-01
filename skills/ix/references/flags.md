@@ -114,6 +114,19 @@ before a command name — `ix --version`, not `ix map --version`.
 | --- | --- | --- | --- |
 | `--version` | — | off | Print the CLI version and exit (`-V`) |
 
+### `ix around <target>`
+
+Show who depends on the code at a file location: callers, importers, tests. `<target>` is `path[:line[-end]]`, relative to the workspace root or absolute.
+
+| Flag | Value | Default | Effect |
+|---|---|---|---|
+| `--limit` | `<n>` | `8` | Max rows per list (callers; users, tests and importers cap at 5) |
+| `--budget` | `<tokens>` | `300` | Token budget for text/llm output (~4 chars a token); rows are cut to fit, totals are kept. json is not cut |
+| `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
+| `--quiet` | — | off | Drop headers, section titles and advisory hints (text: the importer rows) |
+| `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
+
 ### `ix callees <symbol>`
 
 Show methods/functions called by the given symbol (cross-file).

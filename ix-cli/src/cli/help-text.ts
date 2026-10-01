@@ -17,6 +17,7 @@ const OSS_HELP = [
   `  impact <target>       Analyze impact`,
   `  overview <target>     Summarize structure`,
   `  read <target>         Read source`,
+  `  around <path:line>    Who depends on it`,
   `  smells                Detect issues`,
   ``,
   chalk.bold(`Explore:`),

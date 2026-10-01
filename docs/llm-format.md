@@ -189,6 +189,31 @@ use, skipping comments and the name's own declaration. A row whose file is
 missing, outside the workspace, or has no findable use simply has no `site=`.
 `--format json` carries the same object as `site: {path, line, snippet, also}`.
 
+`ix around <path>[:<line>]` — the dependents of the code at a location, sized
+for an agent's context (`--budget`, default 300 tokens):
+
+```
+around path=ix-cli/src/cli/options.ts lines=90 symbols=1
+symbol name=parsePickOption kind=function path=ix-cli/src/cli/options.ts lines=90-92 callers=0 users=14 tests=1
+user site=ix-cli/src/cli/commands/subsystems.ts:70 snippet=".option(\"--pick <n>\", \"Resolve an ambiguous region target by numbered candidate\", parsePickOption)"
+user site=ix-cli/src/cli/commands/diff.ts:473 snippet=".option(\"--pick <n>\", \"Pick Nth candidate from ambiguous results (1-based)\", parsePickOption)"
+test site=ix-cli/src/cli/__tests__/pick-option-validation.test.ts:52 snippet="expect(() => parsePickOption(value)).toThrow(\"must be a positive integer\");"
+importers shown=0 total=17 tests=2
+```
+
+(Three `user` rows are left out above.) A `symbol` record carries the totals
+(`callers`, `users`, `tests`); the `caller` / `user` / `test` / `same_name`
+rows after it are the ones shown, so fewer rows than a total means the list
+was cut to the budget. With more than one symbol each row names its own with
+`of=`. `caller` is a CALLS/REFERENCES edge at its call site; `user` is a file
+that imports this one, names the symbol in that import, and uses it -- found
+on disk, so it also catches a function handed over by name, which no edge
+records; `test` is a test file that calls it, calls a caller of it (`via=`
+that caller), or imports and uses it. `importers` counts every file importing
+this one; its `importer` rows are the first cut when the answer is over
+budget. Empty lists print no rows. On a degraded graph a `graph` record
+follows the header and the totals are floors.
+
 `ix text <pattern>` — `match path=... line=... symbol=... snippet=...`. No
 `lang=`: the extension on `path` says it; `--format json` keeps `language`.
 
