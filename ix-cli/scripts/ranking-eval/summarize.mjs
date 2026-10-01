@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Tables from eval.mjs output: mean recall @5/@10/@20 per language and
 // overall, and per-instance wins/losses against a reference variant (a win is
 // a higher recall at that cutoff).

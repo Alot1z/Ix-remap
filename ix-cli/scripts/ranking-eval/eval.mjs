@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Score BM25 variants on the dev (or, once, the test) split.
 //
 //   node eval.mjs --set dev --variants base,code --out results/dev.jsonl [--plan] [--check]

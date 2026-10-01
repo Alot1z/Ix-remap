@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Read a repository snapshot straight from ix-bench's bare clones: no
 // checkout, no backend. `git ls-tree` lists the tracked files at the base
 // commit; `git cat-file --batch` reads the source ones in one process.

@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Named variants. Round 1 changes one thing from `base` each; later rounds
 // combine what won on dev.
 const DOCS_SITE = /(^|\/)(site|website|guides|demos?|playground|benchmarks?)\//;

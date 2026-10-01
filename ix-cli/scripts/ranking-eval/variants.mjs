@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // BM25 variants for the ranking study, one knob at a time. `base` reproduces
 // issue.ts's bm25Rank exactly (checked by eval.mjs --check); the rest change
 // one thing each, so a gain can be attributed.

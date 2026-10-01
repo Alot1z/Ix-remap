@@ -1,3 +1,5 @@
+# Copyright 2026 Ix Infrastructure Inc.
+
 """Fix the dev/test split before any results are looked at.
 
 DEV  = every instance id in the earlier ix-bench runs (tuning allowed).

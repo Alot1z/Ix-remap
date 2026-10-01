@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // A stand-in for `ix search --name-only` with no backend: the definitions of
 // a name, found by regex over the snapshot's source files. Only good enough to
 // measure the plan's ranking (starting files, then BM25) offline; the graph's

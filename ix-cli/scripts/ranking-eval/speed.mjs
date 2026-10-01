@@ -1,3 +1,5 @@
+// Copyright 2026 Ix Infrastructure Inc.
+
 // Time per issue of the baseline and the current bm25Rank, over the same
 // files and issue text: median of 7 runs after one warm-up.
 //
