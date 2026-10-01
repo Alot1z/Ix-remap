@@ -25,10 +25,12 @@ import {
   CENTRE_FALLBACK_TRIES,
   chooseCentre,
   CLOSENESS_BOOST,
+  leanIssueView,
   planIssue,
   rankIssueFiles,
   readIssueText,
   type Closeness,
+  type LeanIssueView,
   type RankedFile,
   type StartingPoint,
   type SymbolHit,
@@ -172,6 +174,8 @@ export function clampBudgets(opts: Partial<BudgetSnapshot>): BudgetSnapshot {
 interface ContextOptions extends Partial<BudgetSnapshot> {
   /** An issue or bug report to start from, in place of a target: a file, or `-` for stdin. */
   fromIssue?: string;
+  /** With `--from-issue`: only the trusted starting points and a few ranked files. */
+  lean?: boolean;
   kind?: string;
   path?: string;
   pick?: number;
@@ -339,6 +343,10 @@ export function registerContextCommand(program: Command): void {
       "--from-issue <file>",
       "Start from an issue or bug report instead of a target: a file, or - for stdin",
     )
+    .option(
+      "--lean",
+      "With --from-issue: only the starting points Ix trusts and the next few files, or one line saying it trusts none",
+    )
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
@@ -423,6 +431,10 @@ export function registerContextCommand(program: Command): void {
         );
         if (!fresh) return;
         renderInvestigationDiff(saved, fresh, opts.format, requestedBudgets);
+        return;
+      }
+      if (opts.fromIssue && opts.lean) {
+        await emitLeanIssue(opts.fromIssue, opts);
         return;
       }
       if (opts.fromIssue) {
@@ -646,6 +658,12 @@ export function detectContextModeConflict(
   opts: ContextModeOptions,
   target?: string,
 ): string | undefined {
+  if (opts.lean && opts.fromIssue === undefined) {
+    return "--lean only shapes a bundle built with --from-issue; add --from-issue <file>, or drop --lean.";
+  }
+  if (opts.lean && (opts.save || opts.out)) {
+    return `--lean cannot be combined with ${opts.save ? "--save" : "--out"}; a lean view is a few lines of pointers, not a bundle to persist. Drop --lean to save the full bundle.`;
+  }
   if (opts.list && target) {
     return `--list takes no target; it enumerates every saved investigation. Drop "${target}", or drop --list to build a fresh bundle for it.`;
   }
@@ -1653,30 +1671,10 @@ async function buildIssueBundle(
   opts: ContextOptions,
   budgets: BudgetSnapshot,
 ): Promise<ContextBundle | undefined> {
-  let text: string;
-  try {
-    text = await readIssueText(arg);
-  } catch (error) {
-    issueFailure(
-      "issue_unreadable",
-      `Cannot read the issue from ${arg === "-" ? "stdin" : `"${arg}"`}: ${(error as Error).message}`,
-      opts.format,
-    );
-    return undefined;
-  }
-  if (!text.trim()) {
-    issueFailure("empty_issue", `The issue ${arg === "-" ? "on stdin" : `in "${arg}"`} is empty.`, opts.format);
-    return undefined;
-  }
-
+  const text = await readIssueOrReport(arg, opts.format);
+  if (text === undefined) return undefined;
   const client = new IxClient(getEndpoint());
-  await ensureReadScope(client);
-  const scope = activeReadScope();
-  const plan = await planIssue(text, {
-    repo: gitRepoAccess(resolveWorkspaceRoot()),
-    search: async (name) =>
-      (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
-  });
+  const plan = await planIssueWith(client, text);
   // A path start has no node yet, and the graph may not have one either: it
   // does not index every tracked file. chooseCentre walks BM25 for one it does.
   const { starts, centre, walked } = await chooseCentre(
@@ -1696,7 +1694,7 @@ async function buildIssueBundle(
     collectContextFacts(client, resolved),
     client.contextForNode(resolved.id, { asOfRev: opts.asOfRev, depth: opts.depth }),
     Promise.all(starts.filter((s) => s.id && s !== centre).map((s) => startNeighbourhood(client, s))),
-    checkGraphHealth(client, scope),
+    checkGraphHealth(client, activeReadScope()),
   ]);
 
   const near = new Map<string, Closeness>();
@@ -1730,6 +1728,95 @@ async function buildIssueBundle(
       extraEntities: around.flatMap((n) => n.related),
     },
   });
+}
+
+/** The issue's text, or undefined after reporting why it has none. */
+async function readIssueOrReport(arg: string, format: string | undefined): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = await readIssueText(arg);
+  } catch (error) {
+    issueFailure(
+      "issue_unreadable",
+      `Cannot read the issue from ${arg === "-" ? "stdin" : `"${arg}"`}: ${(error as Error).message}`,
+      format,
+    );
+    return undefined;
+  }
+  if (!text.trim()) {
+    issueFailure("empty_issue", `The issue ${arg === "-" ? "on stdin" : `in "${arg}"`} is empty.`, format);
+    return undefined;
+  }
+  return text;
+}
+
+/** The issue's starting points and lexical ranking, against this workspace's graph. */
+async function planIssueWith(client: IxClient, text: string) {
+  await ensureReadScope(client);
+  const scope = activeReadScope();
+  return planIssue(text, {
+    repo: gitRepoAccess(resolveWorkspaceRoot()),
+    search: async (name) =>
+      (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
+  });
+}
+
+/**
+ * `ix context --from-issue --lean`: the starting points Ix trusts and the
+ * next few files, with no bundle around them. See `leanIssueView` for why.
+ * Nothing here needs a centre node, so it is also the cheap path: one search
+ * per name the issue mentions, and BM25 over the tracked files.
+ */
+async function emitLeanIssue(arg: string, opts: ContextOptions): Promise<void> {
+  const text = await readIssueOrReport(arg, opts.format);
+  if (text === undefined) return;
+  const view = leanIssueView(await planIssueWith(new IxClient(getEndpoint()), text));
+  if (opts.format === "json") {
+    printJson({ kind: "issue_lean", ...view });
+  } else if (opts.format === "llm") {
+    printLlmLines(renderLeanIssueLlm(view));
+  } else {
+    console.log(renderLeanIssueText(view));
+  }
+}
+
+function spanOf(s: StartingPoint): string {
+  return s.lineStart !== undefined ? `${s.path}:${s.lineStart}-${s.lineEnd ?? s.lineStart}` : s.path;
+}
+
+/** Why a start was trusted, in the words an agent reads. */
+function startWhy(s: StartingPoint): string {
+  return s.via === "path in issue" ? "the issue names this file" : `the issue names \`${s.token}\``;
+}
+
+export function renderLeanIssueText(view: LeanIssueView): string {
+  if (view.confidence === "low") {
+    return `Ix found no confident starting point for this issue: ${view.reason}.`;
+  }
+  const lines = ["Where to start (Ix resolved these from the issue's own words):"];
+  for (const s of view.startingPoints) {
+    lines.push(`  ${spanOf(s)}  ${s.kind === "file" ? "" : `${s.name} (${s.kind}) — `}${startWhy(s)}`);
+  }
+  if (view.alsoRanked.length > 0) {
+    lines.push(`Then, by the issue's text: ${view.alsoRanked.map((f) => f.path).join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function renderLeanIssueLlm(view: LeanIssueView): string[] {
+  const out = [llmLine("issue", [
+    ["confidence", view.confidence],
+    ...(view.reason ? [["reason", view.reason] as [string, string]] : []),
+  ])];
+  for (const s of view.startingPoints) {
+    out.push(llmLine("start", [
+      ["path", s.path],
+      ...(s.lineStart !== undefined ? [["lines", `${s.lineStart}-${s.lineEnd ?? s.lineStart}`] as [string, string]] : []),
+      ["name", s.name], ["kind", s.kind], ["why", startWhy(s)],
+    ]));
+  }
+  for (const f of view.alsoRanked) out.push(llmLine("ranked", [["path", f.path]]));
+  return out;
 }
 
 /**
