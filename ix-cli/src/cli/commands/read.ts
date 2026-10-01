@@ -168,15 +168,18 @@ function withCursor(
 /**
  * `ix read --format llm`.
  *
- * The one command whose payload is not records: an agent asked for source and
- * wants it byte-for-byte. Everything around it goes, though — `text` prefixes
- * every single line with a 4-column padded line number and an ANSI dim escape,
- * which on a 200-line read is 200 gutters of pure overhead for information the
- * `line_start` field already carries once.
+ * The one command whose payload is not records: an agent asked for source.
+ * Everything around it goes — `text` pads a 4-column gutter and wraps it in
+ * an ANSI dim escape — but the line numbers themselves stay, as a bare
+ * `<n>\t` prefix in the shape `cat -n` taught every agent to read. Without
+ * them the reader had `line_start` and a count, and to cite or edit line 312
+ * it had to count lines by hand or read the file again with a tool that
+ * numbers them; 23 of 31 benchmark reads were followed by exactly that.
  *
- * The `content lines=<n>` record makes the block self-delimiting, so a
- * consumer knows exactly how many following lines are payload and never has to
- * guess whether a line of source is another record.
+ * The `content lines=<n> numbered=true` record makes the block
+ * self-delimiting, so a consumer knows exactly how many following lines are
+ * payload and never has to guess whether a line of source is another record,
+ * and says that each one carries a number to strip before the source.
  */
 export function renderReadLlm(result: ReadResult): string[] {
   const contentLines = result.content.split("\n");
@@ -194,8 +197,8 @@ export function renderReadLlm(result: ReadResult): string[] {
       ["total_lines", result.totalLines !== undefined ? String(result.totalLines) : null],
       ["next", result.next],
     ]),
-    llmLine("content", [["lines", String(contentLines.length)]]),
-    ...contentLines,
+    llmLine("content", [["lines", String(contentLines.length)], ["numbered", "true"]]),
+    ...contentLines.map((line, i) => `${result.lineStart + i}\t${line}`),
   ];
 }
 

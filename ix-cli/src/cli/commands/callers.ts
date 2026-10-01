@@ -12,6 +12,7 @@ import { parsePickOption } from "../options.js";
 import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import { llmLine } from "../llm.js";
+import { edgeTargetFor, rankTextUses, withEdgeSites } from "../edge-sites.js";
 import { renderWarning } from "../ui.js";
 
 const execFileAsync = promisify(execFile);
@@ -89,8 +90,14 @@ export function registerCallersCommand(program: Command): void {
             } catch { /* skip malformed lines */ }
           }
 
-          const candidatesFound = allTextResults.length;
-          const textResults = allTextResults.slice(0, 10);
+          // Calls first and the definition out: an unranked fallback led with
+          // import lines and the target's own signature.
+          const ranked = rankTextUses(
+            allTextResults.map((r) => ({ ...r, snippet: r.attrs.snippet as string })),
+            target.name,
+          ).map(({ snippet: _snippet, ...r }) => r);
+          const candidatesFound = ranked.length;
+          const textResults = ranked.slice(0, 10);
 
           if (textResults.length > 0) {
             if (opts.format === "llm") {
@@ -143,7 +150,9 @@ export function registerCallersCommand(program: Command): void {
         // Both graph and text empty
         formatEdgeResults(sliceEdgeResults([], limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
       } else {
-        formatEdgeResults(sliceEdgeResults(result.nodes, limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
+        const slice = sliceEdgeResults(result.nodes, limit);
+        const site = await edgeTargetFor(client, target, "callers");
+        formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callers", site) }, "callers", target.name, opts.format, target, "graph", health.diagnostics);
       }
     });
 
@@ -171,6 +180,8 @@ export function registerCallersCommand(program: Command): void {
       });
       const health = await healthDiagnostics(healthCheck);
       bannerOverRows(health, opts.format, result.nodes.length);
-      formatEdgeResults(sliceEdgeResults(result.nodes, calleeLimit), "callees", target.name, opts.format, target, "graph", health.diagnostics);
+      const slice = sliceEdgeResults(result.nodes, calleeLimit);
+      const site = await edgeTargetFor(client, target, "callees");
+      formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callees", site) }, "callees", target.name, opts.format, target, "graph", health.diagnostics);
     });
 }

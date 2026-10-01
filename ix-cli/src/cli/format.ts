@@ -2,7 +2,8 @@
 
 import chalk from "chalk";
 import { llmLine, llmShortId } from "./llm.js";
-import { projectRow } from "./output-shape.js";
+import { projectRow, requestedFields } from "./output-shape.js";
+import type { EdgeSite } from "./edge-sites.js";
 
 export type ResultSource = "graph" | "text" | "graph+text" | "heuristic";
 
@@ -201,6 +202,34 @@ export function locationLabel(loc: { path?: string; lineStart?: number; lineEnd?
   if (!loc.path) return "";
   const span = lineSpan(loc);
   return span ? `${loc.path}:${span}` : loc.path;
+}
+
+/**
+ * The ids a list of rows should print: only where nothing else on the row
+ * tells it apart from another row in the same answer.
+ *
+ * Every search and edge row used to carry an 8-character id, and nothing an
+ * agent does next takes one — `read`, `callers` and `explain` are all called
+ * by name and narrowed with `--path`. Two rows with the same name, kind and
+ * path are the exception: nothing a caller can pass tells them apart except
+ * the id (every symbol command takes one), so those keep it. `lines` is not
+ * part of the key because no command takes a span to pick by. A caller who
+ * asks for ids with `--fields id` gets them on every row.
+ */
+export function disambiguatingIds<T>(
+  rows: T[],
+  key: (row: T) => string,
+  id: (row: T) => string | undefined,
+): Array<string | undefined> {
+  const wanted = requestedFields()?.includes("id") ?? false;
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(key(row), (counts.get(key(row)) ?? 0) + 1);
+  return rows.map((row) => (wanted || (counts.get(key(row)) ?? 0) > 1 ? llmShortId(id(row)) : undefined));
+}
+
+/** `path:line`, the form an editor and every agent tool cites. */
+export function siteLabel(site: EdgeSite): string {
+  return `${site.path}:${site.line}`;
 }
 
 export function confidenceColor(score: number): (text: string) => string {
@@ -559,7 +588,12 @@ export interface TextResult {
   symbol_hint?: string;
 }
 
-/** Render lexical search hits as llm `match` records (one per line). */
+/**
+ * Render lexical search hits as llm `match` records (one per line).
+ *
+ * No `lang=`: the extension on `path` already says it, and on a 20-row answer
+ * the field was ~80 tokens of nothing. `--format json` keeps `language`.
+ */
 export function renderTextResultsLlm(slice: Slice<TextResult>): string[] {
   const lines = [llmLine("text", [
     ["shown", slice.shown],
@@ -576,7 +610,6 @@ export function renderTextResultsLlm(slice: Slice<TextResult>): string[] {
     lines.push(llmLine("match", [
       ["path", relativePath(r.path) ?? r.path],
       ["line", r.line_start],
-      ["lang", r.language],
       ["symbol", r.symbol_hint],
       ["snippet", r.snippet.trim()],
     ]));
@@ -655,9 +688,15 @@ export function renderEdgeResultsLlm(
       name,
       kind: n.kind ?? undefined,
       id: n.id ?? undefined,
+      site: n.site as EdgeSite | undefined,
       ...rowLocation(n),
     };
   });
+  const ids = disambiguatingIds(
+    refs,
+    (r) => `${r.name}\u0000${r.kind ?? ""}\u0000${r.path ?? ""}`,
+    (r) => r.id,
+  );
   const unresolved = refs.filter((r) => !r.resolved).length;
   const lines = [llmLine(relation, [
     ["target", symbol],
@@ -679,14 +718,18 @@ export function renderEdgeResultsLlm(
   for (const d of diagnostics ?? []) {
     lines.push(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
   }
-  for (const ref of refs) {
+  refs.forEach((ref, i) => {
+    // An unresolved row has no name to go by, so its id is all there is.
     lines.push(ref.resolved
       ? llmLine("ref", projectRow([
-          ["name", ref.name], ["kind", ref.kind], ["id", llmShortId(ref.id)],
+          ["name", ref.name], ["kind", ref.kind], ["id", ids[i]],
           ["path", ref.path], ["lines", lineSpan(ref)],
+          ["site", ref.site ? siteLabel(ref.site) : undefined],
+          ["also", ref.site?.also?.join(",")],
+          ["snippet", ref.site?.snippet],
         ]))
       : llmLine("ref", projectRow([["kind", ref.kind], ["id", llmShortId(ref.id)], ["resolved", false]])));
-  }
+  });
   return lines;
 }
 
@@ -714,6 +757,7 @@ export function formatEdgeResults(
         kind: n.kind ?? undefined,
         id: resolved ? n.id : undefined,
         ...rowLocation(n),
+        ...(n.site ? { site: n.site } : {}),
       };
       if (!resolved) {
         ref.resolved = false;
@@ -786,6 +830,8 @@ export function formatEdgeResults(
         `  ${chalk.cyan((n.kind ?? "").padEnd(10))}  ${chalk.dim(shortId)}  ${chalk.bold(name)}`
         + (where ? `  ${chalk.dim(where)}` : ""),
       );
+      const site = n.site as EdgeSite | undefined;
+      if (site) console.log(`      ${chalk.dim(`at ${siteLabel(site)}`)}  ${site.snippet}`);
     }
   }
   if (slice.truncated) console.log(chalk.dim(`  ${truncationHint(slice, relation)}`));

@@ -52,6 +52,13 @@ which value it ignored, on stderr, when a person is there to read it.
   `parent=` still matches some other row's `id=`. `--format json` carries the
   full id. Ids that are not opaque blobs — a slug like `root`, a prefixed id
   like `c-8f31a2` — are left whole.
+- **Search and edge rows carry an id only when it is needed.** `search`,
+  `callers`, `callees`, `imports` and `imported-by` rows are acted on by name
+  and path, so they leave `id=` off — except on rows that share a name, kind
+  and path with another row in the same answer, where the id is the only
+  handle that tells them apart (every symbol command accepts one), and on an
+  unresolved `ref`, which has nothing else. `--fields id` asks for it on every
+  row.
 - **Quoting:** a value containing a space, `=`, `"`, `\`, or a control
   character is wrapped in double quotes. Inside quotes, `"` and `\` are
   backslash-escaped and newline / carriage-return / tab are encoded as `\n` /
@@ -131,6 +138,59 @@ Two commands cannot know a true total and say so rather than inventing one:
 - `ix text` reports `shown=N scanned=M`: ripgrep's traversal is bounded by a
   scan window, and `scanned` is how many matches were ranked, not how many
   exist.
+
+## Rows an agent acts on
+
+The rows below are the ones an agent reads and then opens, cites or edits, so
+each carries the location it will need next rather than leaving it to a
+second `grep` or `read`.
+
+`ix search <term>` — every row has `path=` and, for anything smaller than a
+file, `lines=`:
+
+```
+search count=1 candidates=30
+node name=resolveWorkspaceRoot kind=function path=ix-cli/src/cli/config.ts lines=320-340 score=0.83
+```
+
+A row that matched on a claim or its provenance rather than its name carries
+`match=<source>`, and such rows are dropped entirely when some row matched the
+name exactly. An empty result is followed by one `hint` record saying what to
+try — a multi-word term is the usual cause, since search matches names:
+
+```
+search count=0 candidates=0
+hint text="search matches one identifier by name, not a phrase. Search one word (e.g. workspace), or use ix text for a phrase."
+```
+
+`ix callers|callees|imports|imported-by` — `path=`/`lines=` say where the
+entity at the other end is defined; `site=` says where the edge itself is:
+
+```
+callers target=resolveWorkspaceRoot shown=2 total=2 resolved=2
+ref name=ingestFiles kind=function path=ix-cli/src/cli/commands/ingest.ts lines=1366-3660 site=ix-cli/src/cli/commands/ingest.ts:1496 snippet=": nodePath.resolve(resolveWorkspaceRoot(opts.root), path);"
+ref name=registerCallersCommand kind=function path=ix-cli/src/cli/commands/callers.ts lines=15-141 site=ix-cli/src/cli/commands/callers.ts:43 also=135 snippet="const root = resolveWorkspaceRoot();"
+```
+
+| relation | `site=` is |
+|---|---|
+| `callers` | the call to the target, inside the caller's span |
+| `callees` | the call to the row, inside the target's span (the target's file) |
+| `imported-by` | the import of the target, in the importing file |
+| `imports` | the import of the row, in the target's file |
+
+`also=` lists further sites in the same scope (at most four), and `snippet=`
+is the site's line, with up to two continuation lines of a call left open.
+The graph does not record call sites — a CALLS edge carries no line — so the
+CLI finds them in the file on disk: it re-anchors the graph's span to where the
+entity is declared now (a file edited since the last ingest has moved under
+it), then prefers call syntax (`name(`, `name<T>(`, `new Name`) over a bare
+use, skipping comments and the name's own declaration. A row whose file is
+missing, outside the workspace, or has no findable use simply has no `site=`.
+`--format json` carries the same object as `site: {path, line, snippet, also}`.
+
+`ix text <pattern>` — `match path=... line=... symbol=... snippet=...`. No
+`lang=`: the extension on `path` says it; `--format json` keeps `language`.
 
 ## Examples
 
@@ -313,9 +373,22 @@ than the `--format json` that `text` sent people to as a workaround.
 
 Two deliberate exceptions remain:
 
-- **`read`'s content block is not records.** An agent asked for source and wants
-  it byte-for-byte, so the payload is emitted raw after a `content lines=<n>`
-  record that makes the block self-delimiting. This is the only place the
+- **`read`'s content block is not records.** An agent asked for source, so
+  the payload follows a `content lines=<n> numbered=true` record that makes
+  the block self-delimiting, one source line per line, each prefixed with its
+  file line number and a tab — the `cat -n` shape, without the padding or the
+  ANSI of `--format text`:
+
+  ```
+  file path=src/auth.py line_start=10 line_end=11 target=symbol symbol=verify kind=function
+  content lines=2 numbered=true
+  10	def verify():
+  11	    return True
+  ```
+
+  The numbers are what let an agent cite or edit a line without reading the
+  file again through a tool that numbers it. Strip everything up to the first
+  tab to get the source byte-for-byte. This is the only place the
   one-record-per-line invariant is relaxed, and the count is what lets a
   consumer relax it safely.
 - **`status` is not smaller** — it is within a byte or two of `json`, because

@@ -103,7 +103,7 @@ describe("explain --format llm", () => {
 });
 
 describe("read --format llm", () => {
-  it("drops the per-line gutter and self-delimits the payload", () => {
+  it("numbers each line with a bare tab gutter and self-delimits the payload", () => {
     const lines = renderReadLlm({
       targetType: "symbol", path: "/repo/src/auth.py",
       lineStart: 10, lineEnd: 12,
@@ -115,10 +115,11 @@ describe("read --format llm", () => {
     expect(lines[0]).toContain("symbol=verify");
     // content lines=<n> tells the consumer exactly how many lines follow, so a
     // line of source can never be mistaken for another record.
-    expect(lines[1]).toBe("content lines=3");
-    expect(lines.slice(2)).toEqual(["def verify():", "    return True", ""]);
-    // No line number prefixes anywhere.
-    expect(lines.slice(2).some(l => /^\s*\d+ /.test(l))).toBe(false);
+    // numbered=true says every payload line is `<n>\t<source>`.
+    expect(lines[1]).toBe("content lines=3 numbered=true");
+    // The file's own line numbers, starting at line_start, in the `cat -n`
+    // shape an agent can cite and strip: no padding, no ANSI, one tab.
+    expect(lines.slice(2)).toEqual(["10\tdef verify():", "11\t    return True", "12\t"]);
   });
 
   it("lists candidates when the target is ambiguous", () => {
@@ -303,12 +304,14 @@ describe("read --format llm content framing", () => {
   it("keeps the blank line in place rather than closing the gap", () => {
     const out = emit("a\n\nb\n");
     expect(out.slice(out.findIndex(l => l.startsWith("content lines=")) + 1))
-      .toEqual(["a", "", "b", ""]);
+      .toEqual(["1\ta", "2\t", "3\tb", "4\t"]);
   });
 
-  it("routes --format llm to records, not the numbered gutter", () => {
+  it("routes --format llm to records, not the padded text gutter", () => {
     const out = emit("x\ny");
     expect(out[0]).toContain("file path=");
+    // text's gutter is `padStart(4)` + a space; llm's is a bare number + tab.
     expect(out.some(l => /^\s*\d+ /.test(l))).toBe(false);
+    expect(out.slice(-2)).toEqual(["1\tx", "2\ty"]);
   });
 });
