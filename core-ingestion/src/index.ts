@@ -215,11 +215,14 @@ export interface ParsedRelationship {
    */
   importBinding?: boolean;
   /**
-   * JS/TS CALLS only: true when every call site folded into this relationship
-   * calls a plain identifier (`foo()`, `new Foo()`), never a member
-   * (`obj.foo()`). A plain identifier is resolved by lexical scope, so it can
+   * CALLS only (JS/TS, Python, Rust, PHP): true when every call site folded
+   * into this relationship calls a plain identifier (`foo()`, `new Foo()` in
+   * JS/TS), never a member (`obj.foo()`, `self.foo()`, `$this->foo()`). In
+   * these languages a plain identifier is resolved by lexical scope, so it can
    * only denote a module-scope declaration — never a class member in another
-   * file. Absent means "at least one member-shaped use, or unknown".
+   * file. (Not set for Java, C#, Kotlin, Scala, C++, Ruby..., where a bare call
+   * can be an implicit-`this` method.) Absent means "at least one
+   * member-shaped use, or unknown".
    */
   bareCall?: true;
   /**
@@ -2547,8 +2550,11 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const importBindings: ImportBinding[] = [];
     const jsTsImportedLocalNames = new Set<string>();
     const jsTsImportUseHasUnshadowed = new Map<string, boolean>();
-    // JS/TS: per `${scope}\x00${callKey}`, whether every call site folded into
-    // that CALLS relationship is a plain identifier call (see ParsedRelationship.bareCall).
+    // Per `${scope}\x00${callKey}`, whether every call site folded into that
+    // CALLS relationship is a plain identifier call (see ParsedRelationship.bareCall).
+    // Only for languages where such a call can never reach a class member.
+    const tracksBareCalls = isJsTs || language === SupportedLanguages.Python ||
+      language === SupportedLanguages.Rust || language === SupportedLanguages.PHP;
     const jsTsCallBareOnly = new Map<string, boolean>();
     const jsTsCallRelationship = new Map<string, ParsedRelationship>();
     // JS/TS: helper-literal module paths already emitted (see importVia).
@@ -3218,12 +3224,32 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
 
         const callKey = phpCallKind ? `${phpCallKind}:${effectiveCallee}` : effectiveCallee;
         const bareKey = `${scope}\x00${callKey}`;
-        if (isJsTs) {
-          // `foo()` / `new Foo()`: the JS/TS queries capture the callee as an
-          // `identifier` only there; `obj.foo()` captures a property_identifier.
-          // (Read from the node's own type: `.parent` walks down from the root
-          // in these bindings, which is quadratic in a long call chain.)
-          const isBare = !qualifierCapture && callName.node.type === 'identifier';
+        if (tracksBareCalls) {
+          let isBare: boolean;
+          if (isJsTs) {
+            // `foo()` / `new Foo()`: the JS/TS queries capture the callee as an
+            // `identifier` only there; `obj.foo()` captures a property_identifier.
+            // (Read from the node's own type: `.parent` walks down from the root
+            // in these bindings, which is quadratic in a long call chain.)
+            isBare = !qualifierCapture && callName.node.type === 'identifier';
+          } else if (language === SupportedLanguages.PHP) {
+            // `foo()` is a function_call_expression; a method is only reachable
+            // through `$obj->`, `?->`, `Class::` or `new`.
+            isBare = phpCallKind === 'function';
+          } else if (language === SupportedLanguages.Python) {
+            // `foo()` / `f(key=foo)`: an identifier that is not the attribute of
+            // `obj.foo()`. A method needs `self.` / `cls.` / `obj.`. A callee
+            // rewritten through a local alias (`cls = mod.Engine; cls()`) is not
+            // what the call site spelled, so it is left unmarked.
+            isBare = !qualifierCapture && effectiveCallee === callee &&
+              callName.node.type === 'identifier' && callName.node.parent?.type !== 'attribute';
+          } else {
+            // Rust: `foo()` / `foo::<T>()`. A method or associated function needs
+            // `self.` / `x.` / `Type::`.
+            const parentType = callName.node.parent?.type;
+            isBare = !qualifierCapture && callName.node.type === 'identifier' &&
+              (parentType === 'call_expression' || parentType === 'generic_function');
+          }
           jsTsCallBareOnly.set(bareKey, (jsTsCallBareOnly.get(bareKey) ?? true) && isBare);
         }
         if (!seen.has(callKey)) {
@@ -3235,7 +3261,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
             ...(phpCallKind ? { phpCallKind } : {}),
           };
           relationships.push(rel);
-          if (isJsTs) jsTsCallRelationship.set(bareKey, rel);
+          if (tracksBareCalls) jsTsCallRelationship.set(bareKey, rel);
         }
         continue;
       }
@@ -4950,9 +4976,9 @@ export function resolveEdges(
         }
       }
 
-      // Reachability filter for every cross-file tier below (JS/TS only; other
-      // languages keep plain name matching):
-      //   - A bare call (`foo()`, rel.bareCall) is resolved by lexical scope, so
+      // Reachability filter for every cross-file tier below:
+      //   - A bare call (`foo()`, rel.bareCall; set by the parser for JS/TS,
+      //     Python, Rust and PHP) is resolved by lexical scope, so
       //     it can only denote a module-scope declaration. A class member of the
       //     same name (`SampleCommand.describe`) is reachable only through a
       //     receiver and is never a candidate.
@@ -4963,9 +4989,9 @@ export function resolveEdges(
       //     under a directory named after it (`packages/utils/**` for
       //     `@acme/utils`, `packages/babel-types/**` for `@babel/types`). This
       //     keeps monorepo workspace imports resolving while an external
-      //     package's names stop landing on unrelated same-named symbols.
+      //     package's names stop landing on unrelated same-named symbols (JS/TS only).
       // The global tier applies the first rule differently -- see there.
-      const bareCall = srcIsJsTs && rel.predicate === 'CALLS' && rel.bareCall === true;
+      const bareCall = rel.predicate === 'CALLS' && rel.bareCall === true;
       const boundPackage = srcIsJsTs && binding && isBarePackageSpecifier(binding.pkg) &&
         (bindingProviderFiles?.length ?? 0) === 0 && !(configuredBindingTargets?.length)
         ? binding.pkg

@@ -422,7 +422,15 @@ export function detectSystem(rootPath: string): DetectedSystem | undefined {
     .filter(c => isRepoRoot(nodePath.join(rootPath, c.name)))
     .map(c => c.name);
   if (members.length < 2) return undefined;
-  const abs = nodePath.resolve(rootPath).split(nodePath.sep).join("/");
+  // Canonical, because the id is compared across callers that spell the root
+  // differently: `ix map` hashes its realpath'd root, while every read scopes
+  // by `detectSystem(process.cwd())`, which on Windows keeps the drive-letter
+  // case and 8.3 names the shell used. Different spellings meant a different
+  // system_id, and reads scoped to a system that holds nothing.
+  let canonicalRoot: string;
+  try { canonicalRoot = fs.realpathSync.native(rootPath); }
+  catch { canonicalRoot = nodePath.resolve(rootPath); }
+  const abs = canonicalRoot.split(nodePath.sep).join("/");
   const packageRegistry = buildPackageRegistry(rootPath, members);
   return {
     systemId: stableId(`system:${abs}`),

@@ -57,6 +57,7 @@ def top_level():
       srcName: 'Service.run',
       dstName: 'helper',
       predicate: 'CALLS',
+      bareCall: true,
     });
     expect(result!.relationships).toContainEqual({
       srcName: 'Service.run',
@@ -121,6 +122,7 @@ def my_view(request):
       srcName: 'my_view',
       dstName: 'MyClass',
       predicate: 'CALLS',
+      bareCall: true,
     });
     // conn resolved to MyClass via assignTypeMap → MyClass.execute
     expect(result!.relationships).toContainEqual({
@@ -152,6 +154,7 @@ class AdminSite:
       srcName: 'AdminSite.login',
       dstName: 'AdminAuthenticationForm',
       predicate: 'CALLS',
+      bareCall: true,
     });
   });
 

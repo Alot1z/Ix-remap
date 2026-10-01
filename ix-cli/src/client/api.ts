@@ -319,9 +319,18 @@ export class IxClient {
 
   // Path-2 grouping (Ix#225 Half B): the system_id a workspace currently belongs
   // to (null if a singleton). Lets `ix map <repo>` scope to its stitched system.
+  //
+  // Only a 404 (an older backend without the endpoint) means "no system". Any
+  // other failure -- backend down, timeout, 5xx, a non-JSON body -- is not an
+  // answer and is thrown: `ensureReadScope` persists what this returns with no
+  // TTL, so turning an outage into `null` pinned every later read in a stitched
+  // workspace to the single repo until the next map.
   async workspaceSystem(workspaceId: string): Promise<{ systemId: string | null }> {
     try { return await this.get(`/v1/stitch/system/${workspaceId}`); }
-    catch { return { systemId: null }; } // older backend without the endpoint
+    catch (err) {
+      if (err instanceof Error && err.message.startsWith("404:")) return { systemId: null };
+      throw err;
+    }
   }
 
   async map(opts?: { full?: boolean; workspaceId?: string; systemId?: string }): Promise<any> {
