@@ -96,21 +96,36 @@ export async function getEffectiveSystemPath(
   return directPath;
 }
 
-/** Group a set of node IDs by their containing region (IN_REGION). */
+/** A node to bucket: its id, or the node itself when the caller already holds it. */
+export type BucketInput = string | { id: string; name?: string; kind?: string; attrs?: { name?: string } };
+
+/**
+ * Group a set of nodes by their containing region (IN_REGION).
+ *
+ * A caller that already holds the nodes -- every caller does: they come from
+ * an expand -- passes them rather than their ids, and the entity read per
+ * node, which only fetched the name and kind the caller already had, is
+ * skipped. On `ix impact IxClient` that was 69 of the command's 166 requests.
+ *
+ * Buckets, and the members in each, are in input order. They used to be in
+ * the order the lookups finished, so the same graph printed differently from
+ * one run to the next.
+ */
 export async function bucketByHierarchy(
   client: IxClient,
-  nodeIds: string[],
+  nodes: BucketInput[],
 ): Promise<Array<{ region: { name: string; kind: string }; members: Array<{ name: string; kind: string }> }>> {
-  if (nodeIds.length === 0) return [];
+  if (nodes.length === 0) return [];
 
   // For each node, find its immediate region
-  const buckets = new Map<string, { region: { name: string; kind: string }; members: Array<{ name: string; kind: string }> }>();
-
-  await Promise.all(
-    nodeIds.map(async (nodeId) => {
+  const kindOrder: Record<string, number> = { file: 0, module: 1, region: 1, subsystem: 2, system: 3 };
+  const placed = await Promise.all(
+    nodes.map(async (input) => {
+      const nodeId = typeof input === "string" ? input : input.id;
       try {
-        const nodeDetails = await client.entity(nodeId);
-        const node = nodeDetails.node as any;
+        const node = typeof input === "string" || !input.kind
+          ? ((await client.entity(nodeId)).node as any)
+          : input;
         const memberName = node.name || node.attrs?.name || "(unnamed)";
         const memberKind = node.kind || "unknown";
 
@@ -118,23 +133,24 @@ export async function bucketByHierarchy(
         const regionNodes = regionResult.nodes as Array<{ id: string; name?: string; attrs?: { name?: string }; kind?: string }>;
 
         // Pick the most specific region (lowest in hierarchy)
-        const kindOrder: Record<string, number> = { file: 0, module: 1, region: 1, subsystem: 2, system: 3 };
         const region = regionNodes.sort((a, b) => (kindOrder[(a as any).kind ?? ""] ?? 4) - (kindOrder[(b as any).kind ?? ""] ?? 4))[0];
-
-        if (region) {
-          const regionName = (region as any).name || region.attrs?.name || "(unnamed)";
-          const regionKind = (region as any).kind || "region";
-          const key = region.id;
-          if (!buckets.has(key)) {
-            buckets.set(key, { region: { name: regionName, kind: regionKind }, members: [] });
-          }
-          buckets.get(key)!.members.push({ name: memberName, kind: memberKind });
-        }
+        if (!region) return undefined;
+        return {
+          key: region.id,
+          region: { name: (region as any).name || region.attrs?.name || "(unnamed)", kind: (region as any).kind || "region" },
+          member: { name: memberName, kind: memberKind },
+        };
       } catch {
-        /* skip nodes that can't be expanded */
+        return undefined; /* skip nodes that can't be expanded */
       }
     }),
   );
 
+  const buckets = new Map<string, { region: { name: string; kind: string }; members: Array<{ name: string; kind: string }> }>();
+  for (const p of placed) {
+    if (!p) continue;
+    if (!buckets.has(p.key)) buckets.set(p.key, { region: p.region, members: [] });
+    buckets.get(p.key)!.members.push(p.member);
+  }
   return [...buckets.values()];
 }

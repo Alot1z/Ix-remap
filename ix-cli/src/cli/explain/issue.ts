@@ -325,7 +325,7 @@ const BM25_STOPWORDS = new Set((
 export const BM25_IDENTIFIER_WEIGHT = 2;
 
 /** Each query word, with its weight: 1 for prose, more for a word of a named identifier. */
-function bm25Query(query: string): Map<string, number> {
+export function bm25QueryWeights(query: string): Map<string, number> {
   const weights = new Map<string, number>();
   for (const t of bm25Tokens(query)) if (!BM25_STOPWORDS.has(t)) weights.set(t, 1);
   for (const id of extractCandidates(query).identifiers) {
@@ -337,6 +337,36 @@ function bm25Query(query: string): Map<string, number> {
 export interface Bm25Hit {
   path: string;
   score: number;
+}
+
+/** One file as BM25 reads it: how often each counted word occurs, and its length in words. */
+export interface Bm25Doc {
+  tf: Map<string, number>;
+  length: number;
+}
+
+/**
+ * A file's text as BM25 reads it, or undefined when it is not scored (too
+ * large, or unreadable). `wanted` limits the words counted -- see `bm25Rank`;
+ * without it every word is, which is what the on-disk index stores.
+ */
+export function bm25Doc(path: string, text: string | undefined, wanted?: ReadonlySet<string>): Bm25Doc | undefined {
+  if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) return undefined;
+  const tf = new Map<string, number>();
+  let length = 0;
+  // Counted as the words stream past: no array per file.
+  const count = (t: string) => {
+    length++;
+    if (!wanted || wanted.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
+  };
+  eachBm25Token(path.replace(/\//g, " "), count);
+  eachBm25Token(text, count);
+  return { tf, length };
+}
+
+/** The query's scored words (stopwords dropped), in the order it first uses them. */
+export function bm25QueryTerms(query: string): string[] {
+  return [...bm25QueryWeights(query).keys()];
 }
 
 /**
@@ -361,22 +391,27 @@ export function bm25Rank(
   // Only the query's words are counted: BM25 needs no other term frequency,
   // and a map of every word of every file is most of the memory and a third
   // of the time on a large repository. A document's length is still every word.
-  const weights = bm25Query(query);
-  const terms = [...weights.keys()];
-  const docs = new Map<string, { tf: Map<string, number>; length: number }>();
+  const weights = bm25QueryWeights(query);
+  const wanted = new Set(weights.keys());
+  const docs = new Map<string, Bm25Doc>();
   for (const path of files) {
-    const text = repo.read(path);
-    if (text === undefined || Buffer.byteLength(text, "utf8") > MAX_BM25_BYTES) continue;
-    const tf = new Map<string, number>();
-    let length = 0;
-    const count = (t: string) => {
-      length++;
-      if (weights.has(t)) tf.set(t, (tf.get(t) ?? 0) + 1);
-    };
-    eachBm25Token(path.replace(/\//g, " "), count);
-    eachBm25Token(text, count);
-    docs.set(path, { tf, length });
+    const doc = bm25Doc(path, repo.read(path), wanted);
+    if (doc) docs.set(path, doc);
   }
+  return bm25Score(docs, weights, k1, b);
+}
+
+/**
+ * BM25 of already-tokenized files. Split out of `bm25Rank` so the on-disk
+ * index (`bm25-cache.ts`) scores through the very same arithmetic: the same
+ * documents in, the same scores out, to the last bit.
+ */
+export function bm25Score(
+  docs: ReadonlyMap<string, Bm25Doc>,
+  weights: ReadonlyMap<string, number>,
+  k1 = 1.2,
+  b = 0.75,
+): Bm25Hit[] {
   if (docs.size === 0) return [];
   const n = docs.size;
   let total = 0;
@@ -389,12 +424,12 @@ export function bm25Rank(
   const out: Bm25Hit[] = [];
   for (const [path, doc] of docs) {
     let score = 0;
-    for (const t of terms) {
+    for (const [t, weight] of weights) {
       const f = doc.tf.get(t);
       if (!f) continue;
       const d = df.get(t)!;
       const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5));
-      score += weights.get(t)! * idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * doc.length) / avg)));
+      score += weight * idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * doc.length) / avg)));
     }
     if (score > 0) out.push({ path, score });
   }
@@ -417,10 +452,16 @@ export interface IssuePlan {
  */
 export async function planIssue(
   text: string,
-  deps: { repo?: RepoAccess; search: PickDeps["search"] },
+  deps: {
+    repo?: RepoAccess;
+    search: PickDeps["search"];
+    /** BM25 over the source files; `bm25Rank` unless the caller has an index. */
+    rank?: (repo: RepoAccess, files: string[], query: string) => Bm25Hit[];
+  },
 ): Promise<IssuePlan> {
   const files = deps.repo?.files() ?? [];
-  const bm25 = deps.repo ? bm25Rank(deps.repo, files.filter(isSourcePath), text) : [];
+  const rank = deps.rank ?? bm25Rank;
+  const bm25 = deps.repo ? rank(deps.repo, files.filter(isSourcePath), text) : [];
   const scores = new Map(bm25.map((h) => [h.path, h.score]));
   const { starts, unresolved } = await pickStartingPoints(text, {
     files, search: deps.search, fileScore: (p) => scores.get(p) ?? 0,

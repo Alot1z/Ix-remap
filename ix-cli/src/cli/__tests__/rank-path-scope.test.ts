@@ -58,3 +58,39 @@ describe("rank path filtering before the candidate limit", () => {
     expect(expand).not.toHaveBeenCalled();
   });
 });
+
+describe("rank scoring order", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("scores every candidate once and reports in candidate order, however the expands finish", async () => {
+    const nodes = Array.from({ length: 45 }, (_, i) => ({ id: `n${i}`, name: `N${i}`, kind: "class", provenance: { sourceUri: "src/x.ts" } }));
+    listByKind.mockReset().mockResolvedValue(nodes);
+    let inFlight = 0;
+    let peak = 0;
+    expand.mockReset().mockImplementation(async (id: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      const i = Number(id.slice(1));
+      // Later candidates answer first; every fifth one fails.
+      await new Promise((resolve) => setTimeout(resolve, (45 - i) % 7));
+      inFlight--;
+      if (i % 5 === 0) throw new Error("down");
+      // Score i % 4, with a duplicate id that must count once.
+      const members = Array.from({ length: i % 4 }, (_, k) => ({ id: `m${k}` }));
+      return { nodes: [...members, ...members.slice(0, 1)], edges: [] };
+    });
+
+    const output = await run(["--top", "45"]);
+
+    expect(expand).toHaveBeenCalledTimes(45);
+    expect(peak).toBeLessThanOrEqual(20);
+    // A stable sort of scores computed in candidate order: ties keep that order.
+    const expected = nodes
+      .map((n, i) => ({ name: n.name, kind: "class", score: i % 5 === 0 ? 0 : i % 4 }))
+      .sort((a, b) => b.score - a.score);
+    expect(output.results).toEqual(expected);
+    expect(output.diagnostics).toEqual(
+      nodes.filter((_, i) => i % 5 === 0).map((n) => `Failed to expand entity ${n.id}`),
+    );
+  });
+});
