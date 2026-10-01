@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { formatExplain, relativePath, printJson, type ExplainResult, type EntityRef, type Diagnostic } from "../format.js";
-import { resolveFileOrReport, isRawId } from "../resolve.js";
+import { resolveFileOrReport, isRawId, activeReadScope } from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { collectFacts } from "../explain/facts.js";
 import { inferRole } from "../explain/role-inference.js";
@@ -15,6 +15,9 @@ import { printLlmLines } from "../llm.js";
 import { parsePickOption } from "../options.js";
 import { renderSection, renderWarning, renderNote } from "../ui.js";
 import { forMcp, toolCall } from "../next-step.js";
+import {
+  assessTargetStructure, checkGraphHealth, graphHealthJson, graphHealthProse, isUnhealthy, worseHealth,
+} from "../graph-health.js";
 
 export function registerExplainCommand(program: Command): void {
   program
@@ -37,14 +40,33 @@ export function registerExplainCommand(program: Command): void {
         return;
       }
 
-      // New pipeline: collect facts → infer role → infer importance → render
+      // New pipeline: collect facts → infer role → infer importance → render.
+      // The workspace health check runs alongside: cached per backend
+      // revision, so on a warm cache it is one ~10 ms request in parallel.
+      const healthCheck = checkGraphHealth(client, activeReadScope());
       const facts = await collectFacts(client, target.id, target.name, target.kind);
-      const role = inferRole(facts);
-      const importance = inferImportance(facts);
+      const health = worseHealth(await healthCheck, assessTargetStructure(facts));
+      const degraded = isUnhealthy(health);
+      let role = inferRole(facts);
+      let importance = inferImportance(facts);
       const rendered = renderExplanation(facts, role, importance);
+      if (degraded) {
+        // Every inference below is drawn from edge counts the graph has lost,
+        // so "localized-helper, low importance, 0 callers" would be a confident
+        // wrong answer. Withheld, with the reason attached.
+        const why = `graph degraded: ${health.reason}`;
+        role = { role: "unknown", confidence: "low", reasons: [why] };
+        importance = { level: "low", category: "normal", reasons: [why] };
+        rendered.explanation =
+          `\`${facts.name}\` is a ${facts.kind}${facts.path ? ` in ${facts.path}` : ""}; its role cannot be ` +
+          "inferred from this graph." + (facts.signature ? ` Signature: \`${facts.signature}\`.` : "");
+        rendered.whyItMatters =
+          "Unknown: the graph for this workspace is missing structural edges, so callers, callees and " +
+          "dependents cannot be counted. Counts shown here are floors, and a zero means unknown.";
+      }
 
       if (opts.format === "llm") {
-        printLlmLines(renderExplainLlm(facts, role, importance, rendered));
+        printLlmLines(renderExplainLlm(facts, role, importance, rendered, health));
       } else if (opts.format === "json") {
         const output: any = {
           resolvedTarget: { kind: target.kind, name: target.name },
@@ -53,9 +75,17 @@ export function registerExplainCommand(program: Command): void {
           importance,
           rendered,
         };
+        if (degraded) {
+          output.graph = graphHealthJson(health);
+          // Not a level the type can hold on purpose: nothing downstream may
+          // mistake it for a real `low`.
+          output.importance = { level: "unknown", category: "unknown", reasons: importance.reasons };
+          facts.diagnostics.unshift({ code: "graph_degraded", message: graphHealthProse(health) });
+        }
         if (facts.diagnostics.length > 0) output.diagnostics = facts.diagnostics;
         printJson(output);
       } else {
+        if (degraded) renderWarning(graphHealthProse(health));
         if (facts.stale) {
           renderWarning("Source has changed since last ingest. Run ix map to update.");
         }

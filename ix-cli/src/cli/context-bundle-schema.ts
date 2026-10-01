@@ -106,6 +106,18 @@ export const contextBundleSchema = z.object({
     })
     .catchall(z.unknown()),
   freshness: z.object({ stale: z.boolean(), classification: z.string() }),
+  // Only when the graph the bundle was drawn from is degraded or empty (see
+  // graph-health.ts). Optional and additive, like `issue`; declared so zod
+  // does not strip it on the way to disk.
+  graph: z
+    .object({
+      status: z.string(),
+      reason: z.string().optional(),
+      message: z.string().optional(),
+      fix: z.string().optional(),
+    })
+    .catchall(z.unknown())
+    .optional(),
   evidence: z.array(
     z.object({
       id: z.string(),

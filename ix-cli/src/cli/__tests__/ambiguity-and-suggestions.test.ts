@@ -3,6 +3,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
+// Graph reads refuse a directory no workspace covers (workspace_not_mapped),
+// and this suite runs from a checkout that is not registered anywhere. It is
+// about resolution, not scoping, so the directory counts as mapped here.
+vi.mock("../bootstrap.js", async (orig) => ({
+  ...(await orig<typeof import("../bootstrap.js")>()),
+  resolveWorkspaceId: () => "ws-test",
+}));
+
+
 const search = vi.hoisted(() => vi.fn());
 
 vi.mock("../../client/api.js", () => ({
@@ -162,15 +171,36 @@ describe("a target that resolves to nothing", () => {
   });
 
   it("adds nothing when the name matched nothing at all", async () => {
-    // A miss here means the search came back empty, so there is nothing to
-    // suggest — and re-running it without `nameOnly` returns the same empty
-    // set, which is why nothing tries.
+    // Re-running the search without `nameOnly` returns the same empty set, so
+    // nothing does that. What is tried is one search each for a leading and a
+    // trailing fragment of the name (nearestNames); when those find nothing
+    // either, the miss carries no suggestions.
     search.mockResolvedValue([]);
     const { stdout } = await run(["overview", "NothingLikeThis", "--format", "json"]);
     expect(JSON.parse(stdout)).toEqual({
       error: "unresolved_target",
       message: 'No entity found matching "NothingLikeThis".',
     });
-    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(search.mock.calls.slice(1).map((c) => c[0])).toEqual(["NothingL", "LikeThis"]);
+  });
+
+  it("offers the nearest names for a typo the substring search cannot match", async () => {
+    // `parseBudgetOptoin` matches no name by substring; its leading fragment
+    // finds `parseBudgetOption`, one transposition away.
+    search.mockImplementation(async (term: string) =>
+      term === "parseBudg"
+        ? [
+            { id: "f-1", name: "parseBudgetOption", kind: "function", provenance: { sourceUri: "src/options.ts" } },
+            { id: "c-1", name: "parseBudgetOption", kind: "chunk", provenance: { sourceUri: "src/options.ts" } },
+            { id: "f-2", name: "parseBudgetLimitsFromEnvironment", kind: "function", provenance: { sourceUri: "src/env.ts" } },
+          ]
+        : []);
+    const { stdout } = await run(["overview", "parseBudgetOptoin", "--format", "json"]);
+    expect(JSON.parse(stdout)).toEqual({
+      error: "unresolved_target",
+      message: 'No entity found matching "parseBudgetOptoin".',
+      suggestions: [{ id: "f-1", name: "parseBudgetOption", kind: "function", path: "src/options.ts" }],
+    });
   });
 });

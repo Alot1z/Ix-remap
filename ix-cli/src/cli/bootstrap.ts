@@ -7,11 +7,13 @@ import { execFileSync } from "node:child_process";
 import chalk from "chalk";
 import { IxClient } from "../client/api.js";
 import { renderBanner } from "./banner.js";
-import { canonicalWorkspacePath, getEndpoint, loadConfig, saveConfig, findWorkspaceForCwd, getDefaultWorkspace, type WorkspaceConfig } from "./config.js";
+import { canonicalWorkspacePath, getEndpoint, gitRootFor, loadConfig, loadWorkspaces, saveConfig, findWorkspaceForCwd, type WorkspaceConfig } from "./config.js";
+import { WorkspaceNotMappedError, workspaceNotMappedHint } from "./errors.js";
 import { ixHome } from "./ix-home.js";
 import { stderr } from "./stderr.js";
 import { workspaceIdForPath } from "./system.js";
 import { readBackendHealth } from "./commands/upgrade.js";
+import { isLocalEndpoint } from "./backend-version.js";
 
 export interface BootstrapResult {
   createdConfig: boolean;
@@ -142,13 +144,55 @@ export function ensureWorkspaceId(cwd = process.cwd()): string {
 }
 
 /**
- * Resolve the workspace id for a READ, without creating one. Returns the id of the
- * nearest registered workspace containing cwd, else the default workspace, else
- * undefined — meaning an unscoped/global read, preserving back-compat for callers
- * run outside any registered workspace.
+ * Resolve the workspace id for a READ, without creating one: the nearest
+ * registered workspace containing cwd, else a workspace pinned by name with
+ * `ix config set workspace <name>`, else undefined.
+ *
+ * Deliberately NOT the `default: true` workspace. That flag is set on whichever
+ * repo happened to be mapped first, not chosen, and falling back to it answered
+ * reads from an unrelated repository with nothing on screen saying so (the
+ * ix-bench runner found agents in an unregistered worktree getting another
+ * repo's `ix context`). Undefined is not "read everything" either: graph reads
+ * refuse it through {@link requireReadWorkspaceId}.
  */
 export function resolveWorkspaceId(cwd = process.cwd()): string | undefined {
-  return (findWorkspaceForCwd(cwd) ?? getDefaultWorkspace())?.workspace_id;
+  const nearest = findWorkspaceForCwd(cwd);
+  if (nearest) return nearest.workspace_id;
+  const pinned = loadConfig().workspace;
+  if (pinned) return loadWorkspaces().find(w => w.workspace_name === pinned)?.workspace_id;
+  return undefined;
+}
+
+/**
+ * The workspace a graph read is scoped to, or a {@link WorkspaceNotMappedError}
+ * naming the directory and how to map it. For every command whose answer comes
+ * from the graph; commands that do not need one (`text`, `status`, `doctor`,
+ * `view --all`, `map` itself) never call this.
+ */
+export function requireReadWorkspaceId(cwd = process.cwd()): string {
+  const id = resolveWorkspaceId(cwd);
+  if (id) return id;
+  // git prints its top-level with forward slashes on Windows; the hint is
+  // for a person to read and paste, so it gets the platform's own form.
+  const gitRoot = gitRootFor(cwd);
+  throw new WorkspaceNotMappedError(cwd, workspaceNotMappedHint(cwd, gitRoot && resolve(gitRoot)));
+}
+
+/**
+ * Whether an unreachable `endpoint` is the backend `ix docker start` brings up.
+ *
+ * That command always starts the standalone compose on localhost:8090. For any
+ * other endpoint -- a remote, a second local backend on another port -- it
+ * starts containers the command then never talks to (and may collide with
+ * someone else's on 8090), while the real endpoint stays down.
+ */
+export function canAutoStartBackend(endpoint: string): boolean {
+  if (!isLocalEndpoint(endpoint)) return false;
+  try {
+    return new URL(endpoint).port === "8090";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -163,8 +207,14 @@ export async function ensureBackendAvailable(): Promise<void> {
     // ingest path, so without this it would never record at all.
     await readBackendHealth(client);
   } catch {
+    if (!canAutoStartBackend(endpoint)) {
+      throw new Error(`Ix backend at ${endpoint} is not reachable.`);
+    }
     try {
-      execFileSync("ix", ["docker", "start"], { stdio: "inherit", timeout: 120000 });
+      // This CLI's own entry point under this node, not `ix` off PATH: on
+      // Windows `ix` is `ix.cmd`, which execFile cannot launch without a shell,
+      // and PATH may name a different install.
+      execFileSync(process.execPath, [process.argv[1], "docker", "start"], { stdio: "inherit", timeout: 120000 });
     } catch {
       throw new Error("Failed to start Ix backend. Run: ix docker start");
     }

@@ -284,3 +284,22 @@ describe("manifest reads are bounded and typed", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });
+
+describe("detectSystem system id", () => {
+  it("is the same however the root is spelled (symlink, as a shell cwd may be)", () => {
+    const base = fs.realpathSync(fs.mkdtempSync(nodePath.join(os.tmpdir(), "ix-sysid-")));
+    try {
+      const parent = nodePath.join(base, "systems");
+      for (const repo of ["alpha", "beta"]) {
+        fs.mkdirSync(nodePath.join(parent, repo, ".git"), { recursive: true });
+      }
+      const link = nodePath.join(base, "link");
+      fs.symlinkSync(parent, link, "dir");
+      const direct = detectSystem(parent);
+      expect(direct).toBeDefined();
+      expect(detectSystem(link)?.systemId).toBe(direct!.systemId);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});

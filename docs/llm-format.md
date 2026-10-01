@@ -60,12 +60,40 @@ which value it ignored, on stderr, when a person is there to read it.
   format as data lines; the process still exits non-zero. A graph target that
   does not exist is always `unresolved_target`. `locate` is the remaining
   exit-status exception tracked in #539.
+  A file target's miss adds `reason=file_not_in_graph` (on disk, not ingested)
+  or `reason=file_not_found`, any miss may carry `suggestion` records with the
+  nearest names in the graph, and a miss on an empty or degraded graph carries
+  a `graph` record saying so.
+  A graph read from a directory no registered workspace covers is
+  `workspace_not_mapped`, with `dir=` and a `hint=` naming the command that
+  maps it.
   An ambiguous graph target is instead `ambiguous_target`, includes numbered
   candidates, and exits non-zero because the requested graph operation could
   not choose a target. (The
   backend spells a missing target `unknown_target` in its own JSON bodies; that
   is a wire detail and is translated on the way out, so a consumer never sees
   both.)
+
+## Graph health
+
+`explain` and `context` check that the graph they answer from still has its
+structure (`ix-cli/src/cli/graph-health.ts`). When it does not, a `graph`
+record comes first (right after the header for `context`), the `context`
+header carries `graph=degraded classification=degraded` instead of `stale=`,
+and `explain` withholds what it would infer from the missing edges:
+
+```
+graph status=degraded reason=hollow message="9243 nodes but 387 edges: 1% of symbols are attached to a file (healthy: ~100%), so callers, callees and members are missing, not zero. ..." fix="ix reset --workspace --yes --ingest"
+entity id=9dbdebd9 name=parseBudgetOption kind=function path=ix-cli/src/cli/options.ts rev=1243
+role role=unknown confidence=none reason=graph_degraded
+importance level=unknown reason=graph_degraded
+edges callers=unknown callees=unknown dependents=unknown importers=unknown members=unknown downstream=unknown depth=1 history=1 complete=false
+```
+
+A non-zero count on a degraded graph is still an edge that exists, so it is a
+floor; a zero is `unknown`. `reason=orphaned_target` is the same verdict for
+one entity whose file lost its edges while the rest of the graph looks fine.
+`--format json` carries the verdict as a top-level `graph` object.
 
 ## Hierarchies
 
