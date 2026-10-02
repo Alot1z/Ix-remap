@@ -279,7 +279,8 @@ Set `IX_DEBUG=1` for full stack traces on any error.
 ```bash
 ix map .           # map this repo
 ix watch           # re-map on change
-ix reset           # wipe the graph (asks first; --code keeps goals, plans and decisions)
+ix reset --workspace   # wipe this repo's graph (asks first)
+ix reset              # wipe every repo on the backend (--code keeps goals, plans and decisions)
 ```
 
 **Understand**
