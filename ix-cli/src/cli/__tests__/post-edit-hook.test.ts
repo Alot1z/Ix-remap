@@ -1,14 +1,14 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseHookArgs, runPostEditHook, type EntryDeps } from "../hook/entry.js";
 import { postToolUseOutput, withDeadline } from "../hook/io.js";
-import { fingerprint, loadState, parseUnifiedDiff, statePath } from "../hook/session.js";
+import { fingerprint, loadState, parseUnifiedDiff, pruneStates, statePath } from "../hook/session.js";
 import { HOOK_CAPS, reportToolEdit, summarize, type PostToolUseInput } from "../hook/claude-post-edit.js";
 import { estimateTokens, type AroundRequest, type AroundResult, type AroundSymbol } from "../around.js";
 import { WorkspaceNotMappedError } from "../errors.js";
@@ -269,8 +269,29 @@ describe("runPostEditHook: the diff path", () => {
     const out = await runPostEditHook(bash(), { graphRoot: "/graph", worktree: repo, env: { IX_HOOK_STATE_DIR: stateDir } },
       { ...deps(calls), chdir, workspaceRoot: () => "/graph" });
     expect(out).toBeDefined();
-    expect(chdir).toHaveBeenCalledWith("/graph");
+    expect(chdir).toHaveBeenCalledWith(resolve("/graph"));
     expect(calls[0].relPath).toBe("src/lib.js");
+  });
+
+  // git names the top level with links resolved; the roots the hook is handed
+  // are as someone typed them. macOS's temp directory is such a link.
+  it.skipIf(process.platform === "win32")("reports an edit in a checkout reached through a symlink", async () => {
+    const link = `${repo}-link`;
+    symlinkSync(repo, link, "dir");
+    try {
+      edit("  return y * 2;", "  return y * 3;");
+      const calls: AroundRequest[] = [];
+      const input = JSON.stringify({ ...JSON.parse(bash()), cwd: link });
+      const out = await runPostEditHook(input, { env: { IX_HOOK_STATE_DIR: stateDir } },
+        deps(calls, { workspaceRoot: () => link }));
+      expect(context(out)).toMatch(/^Ix: you changed `beta`/);
+      expect(calls[0].relPath).toBe("src/lib.js");
+      // One checkout, one memory, whichever way it was reached.
+      expect(statePath("s1", link, { IX_HOOK_STATE_DIR: stateDir }))
+        .toBe(statePath("s1", repo, { IX_HOOK_STATE_DIR: stateDir }));
+    } finally {
+      unlinkSync(link);
+    }
   });
 
   it("stores the diff's fingerprint once everything in it was reported", async () => {
@@ -278,6 +299,24 @@ describe("runPostEditHook: the diff path", () => {
     await run(bash(), deps([]));
     const diff = execFileSync("git", ["-C", repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "HEAD", "--"], { encoding: "utf-8" });
     expect(loadState(statePath("s1", repo, { IX_HOOK_STATE_DIR: stateDir })).fingerprint).toBe(fingerprint(diff));
+  });
+
+  it("keeps its memory under IX_HOME, not in the shared temp directory", () => {
+    const home = join(stateDir, "home");
+    expect(dirname(statePath("s1", repo, { IX_HOME: home }))).toBe(join(home, "hook-state"));
+    expect(dirname(statePath("s1", repo, { IX_HOME: home, IX_HOOK_STATE_DIR: stateDir }))).toBe(stateDir);
+  });
+
+  it("drops a session's file a week after its last write, and keeps the rest", () => {
+    const fresh = join(stateDir, "fresh.json");
+    const stale = join(stateDir, "stale.json");
+    const other = join(stateDir, "notes.txt");
+    for (const f of [fresh, stale, other]) writeFileSync(f, "{}");
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(stale, eightDaysAgo, eightDaysAgo);
+    utimesSync(other, eightDaysAgo, eightDaysAgo);
+    pruneStates(stateDir);
+    expect(readdirSync(stateDir).sort()).toEqual(["fresh.json", "notes.txt"]);
   });
 });
 
