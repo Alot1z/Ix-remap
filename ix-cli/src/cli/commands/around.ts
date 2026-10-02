@@ -28,9 +28,16 @@ function reportError(code: string, message: string, format: string, extra: Array
 /** The file's lines, or none when it is not on disk (the graph's spans then stand as recorded). */
 export function readLines(abs: string): string[] {
   try {
-    const stat = fs.statSync(abs);
-    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return [];
-    return fs.readFileSync(abs, "utf-8").split("\n");
+    // One descriptor for the checks and the read, so the file measured is the
+    // file read (CodeQL js/file-system-race).
+    const fd = fs.openSync(abs, "r");
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return [];
+      return fs.readFileSync(fd, "utf-8").split("\n");
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return [];
   }

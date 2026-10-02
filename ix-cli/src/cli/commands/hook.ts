@@ -26,7 +26,7 @@ export function registerHookCommand(program: Command): void {
 Reads Claude Code's PostToolUse JSON on stdin and the working tree's diff
 against HEAD, so an edit made through Bash counts as much as one made with
 Edit or Write. Each edited symbol is reported once per session (state in
-IX_HOOK_STATE_DIR, default <tmp>/ix-hook); a call that edited nothing new
+IX_HOOK_STATE_DIR, default <IX_HOME>/hook-state); a call that edited nothing new
 prints nothing. Prints one JSON object,
 {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}},
 naming the changed symbols' callers, importers that use them, and tests that

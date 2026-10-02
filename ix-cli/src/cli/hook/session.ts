@@ -38,6 +38,23 @@ export interface FileDiff {
 
 const GIT_TIMEOUT_MS = 2000;
 
+/**
+ * A path with its symlinks -- and, on Windows, its 8.3 short names -- resolved,
+ * as far as it exists: a deleted file takes its directory's spelling.
+ *
+ * git names the repository's top level this way, while `--worktree`,
+ * `--graph-root`, a registered workspace and a tool's `file_path` come as
+ * someone typed them. Compared as given, a checkout reached through a link
+ * (macOS's temp directory, for one) puts every edited file "outside" the
+ * workspace, and the hook says nothing.
+ */
+export function canonicalPath(p: string): string {
+  const resolved = path.resolve(p);
+  try { return fs.realpathSync.native(resolved); } catch { /* does not exist: resolve what does */ }
+  const parent = path.dirname(resolved);
+  return parent === resolved ? resolved : path.join(canonicalPath(parent), path.basename(resolved));
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf-8",
@@ -51,7 +68,7 @@ function git(cwd: string, args: string[]): string {
 export function gitTopLevel(dir: string): string | undefined {
   try {
     const out = git(dir, ["rev-parse", "--show-toplevel"]).trim();
-    return out ? path.resolve(out) : undefined;
+    return out ? canonicalPath(out) : undefined;
   } catch {
     return undefined;
   }
@@ -130,11 +147,42 @@ export interface HookState {
   reported: string[];
 }
 
-/** One file per (session, worktree), under IX_HOOK_STATE_DIR or the OS temp dir. */
+/** A session's file is dropped this long after the hook last wrote it. */
+const STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * One file per (session, worktree), under IX_HOOK_STATE_DIR or
+ * `<IX_HOME>/hook-state`. The worktree is keyed by its canonical path, so one
+ * checkout is one memory however it was reached.
+ *
+ * Not the OS temp directory: that is shared, the names here are predictable,
+ * and another user could plant a link where the hook is about to write.
+ */
 export function statePath(sessionId: string | undefined, worktree: string, env: NodeJS.ProcessEnv = process.env): string {
-  const dir = env.IX_HOOK_STATE_DIR || path.join(os.tmpdir(), "ix-hook");
-  const key = fingerprint(`${sessionId ?? "no-session"}\0${path.resolve(worktree)}`).slice(0, 24);
+  const dir = env.IX_HOOK_STATE_DIR || path.join(env.IX_HOME || path.join(os.homedir(), ".ix"), "hook-state");
+  const key = fingerprint(`${sessionId ?? "no-session"}\0${canonicalPath(worktree)}`).slice(0, 24);
   return path.join(dir, `${key}.json`);
+}
+
+/**
+ * Sessions end without telling the hook, and nothing else cleans this
+ * directory: drop what has not been written for a week. The age is read off a
+ * descriptor, and a file removed just as its session came back only makes the
+ * hook repeat itself once.
+ */
+export function pruneStates(dir: string, now = Date.now()): void {
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    if (!name.endsWith(".json") && !name.endsWith(".tmp")) continue;
+    const file = path.join(dir, name);
+    try {
+      const fd = fs.openSync(file, "r");
+      let stale: boolean;
+      try { stale = now - fs.fstatSync(fd).mtimeMs > STATE_MAX_AGE_MS; } finally { fs.closeSync(fd); }
+      if (stale) fs.unlinkSync(file);
+    } catch { /* gone already, or not ours to remove */ }
+  }
 }
 
 export function loadState(file: string): HookState {
@@ -152,10 +200,12 @@ export function loadState(file: string): HookState {
 /** Written whole and renamed into place, so a concurrent reader never sees half a file. */
 export function saveState(file: string, state: HookState): void {
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const dir = path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     fs.renameSync(tmp, file);
+    pruneStates(dir);
   } catch { /* a hook that cannot remember only repeats itself */ }
 }
 

@@ -7,7 +7,7 @@ import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { SourceFiles } from "../edge-sites.js";
 import { isSourcePath } from "../explain/issue.js";
 import type { FileDiff } from "./session.js";
-import { gitShowHead, symbolKey } from "./session.js";
+import { canonicalPath, gitShowHead, symbolKey } from "./session.js";
 import { hookTimeoutMs, postToolUseOutput } from "./io.js";
 import {
   DEFAULT_TOKEN_BUDGET, estimateTokens, fitToBudget, gatherAround, hasDependents, type AroundRequest, type AroundResult, type LineRange,
@@ -236,9 +236,16 @@ const FOOTER = "These may need updating to match your edit.";
 
 function defaultReadFile(abs: string): string | undefined {
   try {
-    const stat = fs.statSync(abs);
-    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return undefined;
-    return fs.readFileSync(abs, "utf-8");
+    // One descriptor for the checks and the read, so the file measured is the
+    // file read (CodeQL js/file-system-race).
+    const fd = fs.openSync(abs, "r");
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return undefined;
+      return fs.readFileSync(fd, "utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return undefined;
   }
@@ -257,21 +264,23 @@ interface Roots {
   sourceRoot: string;
 }
 
+/** Every root in its canonical spelling (see `canonicalPath`), so they compare. */
 function resolveRoots(worktree: string, opts: HookOptions, deps: HookDeps): Roots {
-  const graphRoot = path.resolve(opts.graphRoot ?? worktree);
+  const graphRoot = canonicalPath(opts.graphRoot ?? worktree);
   (deps.chdir ?? process.chdir)(graphRoot);
-  const workspaceRoot = path.resolve((deps.workspaceRoot ?? resolveWorkspaceRoot)());
+  const workspaceRoot = canonicalPath((deps.workspaceRoot ?? resolveWorkspaceRoot)());
+  const root = canonicalPath(worktree);
   return {
-    worktree: path.resolve(worktree),
+    worktree: root,
     graphRoot,
     workspaceRoot,
-    sourceRoot: path.join(path.resolve(worktree), path.relative(graphRoot, workspaceRoot)),
+    sourceRoot: path.join(root, path.relative(graphRoot, workspaceRoot)),
   };
 }
 
 /** A worktree file as the graph spells it, or undefined when it is outside the workspace or not code. */
 function graphPath(roots: Roots, worktreeFile: string): string | undefined {
-  const rel = path.relative(roots.worktree, worktreeFile);
+  const rel = path.relative(roots.worktree, canonicalPath(worktreeFile));
   if (!isInside(rel)) return undefined;
   const relPath = path.relative(roots.workspaceRoot, path.join(roots.graphRoot, rel)).split(path.sep).join("/");
   return isInside(relPath) && isSourcePath(relPath) ? relPath : undefined;
