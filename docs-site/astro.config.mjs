@@ -54,7 +54,12 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting started',
-          items: ['getting-started/introduction', 'getting-started/installation', 'getting-started/quickstart'],
+          items: [
+            { label: 'Overview', link: '/' },
+            'getting-started/introduction',
+            'getting-started/installation',
+            'getting-started/quickstart',
+          ],
         },
         {
           label: 'Concepts',
