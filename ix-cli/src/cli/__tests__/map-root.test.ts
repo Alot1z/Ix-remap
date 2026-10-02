@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import { registerMapCommand } from "../commands/map.js";
-import { canonicalMapRoot, resolveMapRoot } from "../map-root.js";
+import { canonicalMapRoot, resolveIngestRoot, resolveMapRoot } from "../map-root.js";
+import { loadConfig } from "../config.js";
 import { lockPathForTest } from "../single-flight.js";
 
 const fixtures: string[] = [];
@@ -169,5 +170,82 @@ describe("map root resolution", () => {
     writeFileSync(file, "export {};\n");
 
     expect(() => canonicalMapRoot(file)).toThrow(`Map path is not a directory: ${file}`);
+  });
+});
+
+describe("ingest root resolution", () => {
+  const writeWorkspaces = (...roots: string[]): void => {
+    writeFileSync(join(home, ".ix", "config.yaml"), [
+      "endpoint: http://localhost:8090",
+      "workspaces:",
+      ...roots.flatMap((root, i) => [
+        `  - workspace_id: id-${i}`,
+        `    workspace_name: ws-${i}`,
+        `    root_path: ${root}`,
+        `    default: ${i === 0}`,
+      ]),
+      "",
+    ].join("\n"));
+  };
+
+  it("puts a file or subdirectory of a registered workspace in that workspace", () => {
+    const repo = realpathSync.native(fixture());
+    mkdirSync(join(repo, "src", "util"), { recursive: true });
+    writeFileSync(join(repo, "src", "a.ts"), "export {};\n");
+    writeWorkspaces(repo);
+
+    expect(resolveIngestRoot(join(repo, "src", "a.ts"), false)).toBe(repo);
+    expect(resolveIngestRoot(join(repo, "src", "util"), true)).toBe(repo);
+    expect(resolveIngestRoot(repo, true)).toBe(repo);
+  });
+
+  it("prefers the nearest registered workspace over an enclosing one and over the git root", () => {
+    const repo = realpathSync.native(fixture());
+    const member = join(repo, "member");
+    mkdirSync(join(member, "src"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    writeWorkspaces(repo, member);
+
+    expect(resolveIngestRoot(join(member, "src"), true)).toBe(member);
+  });
+
+  it("uses the git root of a path in an unregistered repository", () => {
+    const repo = realpathSync.native(fixture());
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "a.ts"), "export {};\n");
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+
+    expect(resolveIngestRoot(join(repo, "src"), true)).toBe(repo);
+    expect(resolveIngestRoot(join(repo, "src", "a.ts"), false)).toBe(repo);
+  });
+
+  it("falls back to the directory itself, or a file's directory, outside every workspace and repo", () => {
+    const loose = realpathSync.native(fixture());
+    mkdirSync(join(loose, "dir"));
+    writeFileSync(join(loose, "x.ts"), "export {};\n");
+    // A registered default elsewhere does not claim it: the user named a path.
+    writeWorkspaces(realpathSync.native(fixture()));
+
+    expect(resolveIngestRoot(join(loose, "dir"), true)).toBe(join(loose, "dir"));
+    expect(resolveIngestRoot(join(loose, "x.ts"), false)).toBe(loose);
+  });
+
+  it("takes --root first, and refuses a path outside it", () => {
+    const repo = realpathSync.native(fixture());
+    const other = realpathSync.native(fixture());
+    mkdirSync(join(repo, "src"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+
+    expect(resolveIngestRoot(join(repo, "src"), true, join(repo, "src"))).toBe(join(repo, "src"));
+    expect(() => resolveIngestRoot(join(repo, "src"), true, other)).toThrow(/is outside --root/);
+  });
+
+  it("does not register anything itself", () => {
+    const repo = realpathSync.native(fixture());
+    mkdirSync(join(repo, "src"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+
+    resolveIngestRoot(join(repo, "src"), true);
+    expect(loadConfig().workspaces ?? []).toEqual([]);
   });
 });

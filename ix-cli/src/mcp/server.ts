@@ -646,7 +646,7 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
   registerTool(
     ctx,
     "ix_ingest",
-    "Add a path or a GitHub repo to the graph. Slow; ix_map is the usual way in",
+    "Add a path or a GitHub repo to the graph. A path inside a mapped workspace refreshes just that part of it. Slow; ix_map is the usual way in",
     {
       path: z.string().min(1).optional(),
       github: z.string().min(1).optional().describe("owner/repo"),
