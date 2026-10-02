@@ -79,7 +79,12 @@ export function gitTopLevel(dir: string): string | undefined {
  * not in it, and need not be: a file that is new has no graph facts.
  */
 export function gitDiffHead(repoRoot: string): string {
-  return git(repoRoot, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "HEAD", "--"]);
+  // The prefixes are spelled out because the user's config can change them:
+  // `diff.mnemonicPrefix` writes `c/` and `w/`, `diff.noprefix` none, and
+  // `parseUnifiedDiff` strips `a/` and `b/`.
+  return git(repoRoot, [
+    "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--",
+  ]);
 }
 
 /** A file's content in HEAD, or undefined when HEAD has no such file. */
@@ -91,14 +96,35 @@ export function gitShowHead(repoRoot: string, repoPath: string): string | undefi
   }
 }
 
-function unquote(p: string): string {
-  // git quotes paths with unusual characters: "a/sp\303\251cial.ts"
-  if (!p.startsWith("\"")) return p;
-  try { return JSON.parse(p) as string; } catch { return p.slice(1, -1); }
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, "\"": 34, "\\": 92 };
+
+/**
+ * A path as git quotes it when it holds unusual characters: C escapes, and
+ * every byte of a non-ASCII name in octal (`"a/sp\303\251cial.ts"`) unless
+ * `core.quotePath` is off. The octal bytes are UTF-8, so they are collected
+ * as bytes and decoded together; JSON.parse cannot read them.
+ */
+function unquoteGitPath(p: string): string {
+  if (!(p.length >= 2 && p.startsWith("\"") && p.endsWith("\""))) return p;
+  const bytes: number[] = [];
+  const body = p.slice(1, -1);
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch !== "\\" || i + 1 >= body.length) {
+      bytes.push(...Buffer.from(ch, "utf-8"));
+      continue;
+    }
+    const oct = /^[0-7]{3}/.exec(body.slice(i + 1, i + 4));
+    if (oct) { bytes.push(parseInt(oct[0], 8)); i += 3; continue; }
+    const esc = C_ESCAPES[body[i + 1]];
+    if (esc !== undefined) { bytes.push(esc); i += 1; continue; }
+    bytes.push(92);
+  }
+  return Buffer.from(bytes).toString("utf-8");
 }
 
 function diffPath(raw: string, prefix: "a/" | "b/"): string | undefined {
-  const p = unquote(raw.trim());
+  const p = unquoteGitPath(raw.trim());
   if (p === "/dev/null") return undefined;
   return p.startsWith(prefix) ? p.slice(prefix.length) : p;
 }
@@ -112,17 +138,22 @@ function diffPath(raw: string, prefix: "a/" | "b/"): string | undefined {
 export function parseUnifiedDiff(text: string): FileDiff[] {
   const files: FileDiff[] = [];
   let cur: FileDiff | undefined;
+  // Inside a file's hunks, a removed line `-- x` reads `--- x` and an added
+  // `++ x` reads `+++ x`: the `---` / `+++` headers only come before them.
+  let inHunks = false;
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
       cur = { oldRanges: [] };
       files.push(cur);
+      inHunks = false;
     } else if (!cur) {
       continue;
-    } else if (line.startsWith("--- ")) {
+    } else if (!inHunks && line.startsWith("--- ")) {
       cur.oldPath = diffPath(line.slice(4), "a/");
-    } else if (line.startsWith("+++ ")) {
+    } else if (!inHunks && line.startsWith("+++ ")) {
       cur.newPath = diffPath(line.slice(4), "b/");
     } else if (line.startsWith("@@")) {
+      inHunks = true;
       const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
       if (!m) continue;
       const start = Number(m[1]);

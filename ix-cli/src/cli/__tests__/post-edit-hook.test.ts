@@ -67,7 +67,22 @@ describe("parseUnifiedDiff", () => {
   });
 
   it("parses a quoted path", () => {
-    expect(parseUnifiedDiff(diff)[3].oldPath).toMatch(/^src\/sp.*cial\.ts$/);
+    expect(parseUnifiedDiff(diff)[3].oldPath).toBe("src/spécial.ts");
+    expect(parseUnifiedDiff(diff)[3].newPath).toBe("src/spécial.ts");
+  });
+
+  it("does not take a removed `-- ` line or an added `++ ` line for a file header", () => {
+    const files = parseUnifiedDiff([
+      "diff --git a/src/q.py b/src/q.py",
+      "--- a/src/q.py",
+      "+++ b/src/q.py",
+      "@@ -3,2 +3,2 @@",
+      "--- select 1",
+      "-x = 1",
+      "+++ select 2",
+      "+x = 2",
+    ].join("\n"));
+    expect(files).toEqual([{ oldPath: "src/q.py", newPath: "src/q.py", oldRanges: [{ start: 3, end: 4 }] }]);
   });
 });
 
@@ -292,6 +307,14 @@ describe("runPostEditHook: the diff path", () => {
     } finally {
       unlinkSync(link);
     }
+  });
+
+  it("reads the diff whatever prefixes the user's git config asks for", async () => {
+    git("config", "diff.mnemonicPrefix", "true");
+    edit("  return y * 2;", "  return y * 3;");
+    const calls: AroundRequest[] = [];
+    expect(await run(bash(), deps(calls))).toBeDefined();
+    expect(calls.map((c) => c.relPath)).toEqual(["src/lib.js"]);
   });
 
   it("stores the diff's fingerprint once everything in it was reported", async () => {
