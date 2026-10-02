@@ -1,6 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { isPreConnectionFailure, RESET_RECONCILIATION_ERROR } from "./transport.js";
+import { Limiter, RequestMemo } from "./request-memo.js";
 import type {
   IngestResult,
   StructuredContext,
@@ -21,7 +22,38 @@ export interface ListSubsystemsOptions {
   memberFileCap?: number;
 }
 
+/**
+ * How a client created for ONE query command talks to the backend. Off by
+ * default: every existing caller sends exactly the requests it did.
+ */
+export interface IxClientOptions {
+  /**
+   * Answer a repeated read (same method, path and body) from the first
+   * response instead of asking again. See `request-memo.ts` for why this is
+   * per-command only and never for a long-lived client.
+   */
+  shareReads?: boolean;
+  /** At most this many requests in flight at once. */
+  maxInFlight?: number;
+}
+
+/**
+ * The reads `shareReads` may answer from an earlier response: lookups whose
+ * answer cannot change because of anything the same command does.
+ */
+const SHARED_READ_PREFIXES = [
+  "/v1/expand", "/v1/search", "/v1/context", "/v1/list",
+  "/v1/entity/", "/v1/provenance/", "/v1/resolve-prefix/",
+];
+
+function isSharedRead(path: string): boolean {
+  return SHARED_READ_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 export class IxClient {
+  private readonly memo?: RequestMemo<SuccessBody>;
+  private readonly limiter?: Limiter;
+
   // An optional deadline signal shared across every request this client makes.
   // `ix map` sets it to a hard wall-clock budget so that, even when the backend
   // is unhealthy and individual requests would otherwise sit on their long
@@ -32,7 +64,16 @@ export class IxClient {
     // than being handed a second string that is only equal by inspection.
     public readonly endpoint: string = "http://localhost:8090",
     private deadlineSignal?: AbortSignal,
-  ) {}
+    options: IxClientOptions = {},
+  ) {
+    if (options.shareReads) this.memo = new RequestMemo();
+    if (options.maxInFlight !== undefined) this.limiter = new Limiter(options.maxInFlight);
+  }
+
+  /** Reads answered from `shareReads` instead of the backend, for diagnostics and tests. */
+  get sharedReadHits(): number {
+    return this.memo?.hits ?? 0;
+  }
 
   // Combine a per-request timeout with the optional shared deadline. Whichever
   // fires first aborts the fetch. AbortSignal.any propagates the first abort.
@@ -662,32 +703,51 @@ export class IxClient {
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
-    const resp = await fetch(`${this.endpoint}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      // These small reads/writes (source-hashes, stitch, list, ...) had no
-      // timeout, so a stalled connection could hang the process indefinitely.
-      // 2 min per request, also bounded by the shared deadline when set.
-      signal: this.signalFor(2 * 60 * 1000),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`${resp.status}: ${text}`);
-    }
-    return parseOrThrowWithStatus<T>(resp);
+    const payload = JSON.stringify(body);
+    return this.read<T>("POST", path, payload, () =>
+      fetch(`${this.endpoint}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        // These small reads/writes (source-hashes, stitch, list, ...) had no
+        // timeout, so a stalled connection could hang the process indefinitely.
+        // 2 min per request, also bounded by the shared deadline when set.
+        signal: this.signalFor(2 * 60 * 1000),
+      }));
   }
 
   private async get<T>(path: string, timeoutMs = 2 * 60 * 1000): Promise<T> {
-    const resp = await fetch(`${this.endpoint}${path}`, {
-      signal: this.signalFor(timeoutMs),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`${resp.status}: ${text}`);
-    }
-    return parseOrThrowWithStatus<T>(resp);
+    return this.read<T>("GET", path, "", () =>
+      fetch(`${this.endpoint}${path}`, {
+        signal: this.signalFor(timeoutMs),
+      }));
   }
+
+  /**
+   * One request whose body is JSON: sent under the in-flight limit when there
+   * is one, shared with an identical earlier request when `shareReads` is on
+   * and the path is a read, and parsed per caller either way.
+   */
+  private async read<T>(method: string, path: string, payload: string, send: () => Promise<Response>): Promise<T> {
+    const fetchBody = async (): Promise<SuccessBody> => {
+      const run = async (): Promise<SuccessBody> => {
+        const resp = await send();
+        const text = await resp.text();
+        if (!resp.ok) throw new Error(`${resp.status}: ${text}`);
+        return { status: resp.status, text };
+      };
+      return this.limiter ? this.limiter.run(run) : run();
+    };
+    const body = this.memo && isSharedRead(path)
+      ? await this.memo.run(`${method} ${path} ${payload}`, fetchBody)
+      : await fetchBody();
+    return parseOrThrowWithStatus<T>(body);
+  }
+}
+
+interface SuccessBody {
+  status: number;
+  text: string;
 }
 
 /**
@@ -702,12 +762,11 @@ export class IxClient {
  * inference into a fact the error carries, and it matches the `${status}: ...`
  * shape every other failure here already uses.
  */
-async function parseOrThrowWithStatus<T>(resp: Response): Promise<T> {
-  const text = await resp.text();
+function parseOrThrowWithStatus<T>({ status, text }: SuccessBody): T {
   try {
     return JSON.parse(text) as T;
   } catch {
     const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
-    throw new Error(`${resp.status}: response body is not JSON: ${preview}`);
+    throw new Error(`${status}: response body is not JSON: ${preview}`);
   }
 }

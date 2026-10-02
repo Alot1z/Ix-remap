@@ -84,8 +84,13 @@ surfaces (#575).
   d+1, so the first level is complete before the second begins. (The walk
   used to be depth-first, and could spend the whole cap down its first
   branch.) A walk the cap does not cut is the same tree it always was.
-- **`ix ingest` honours `--exclude <glob>` and a `.ixignore` at the ingest
-  root.** A deliberate subset of `.gitignore`: `#` comments, `*`, `?`, `**`, a
+- **`ix ingest <path>` writes to the workspace the path belongs to** -- the
+  registered workspace containing it, else its git repository -- and a file or
+  directory inside it refreshes just that part, leaving the rest of the
+  workspace alone. Only a path in no workspace and no repository becomes a
+  workspace of its own.
+- **`ix ingest` honours `--exclude <glob>` and a `.ixignore` at the workspace
+  root**, matched relative to that root. A deliberate subset of `.gitignore`: `#` comments, `*`, `?`, `**`, a
   leading `/` to anchor at the root, a trailing `/` for directories only, and a
   bare name matching at any depth. **No** `!` negation and no character
   classes — a pattern that starts with `!` is dropped rather than half-honoured.

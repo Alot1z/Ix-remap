@@ -18,7 +18,7 @@ import { llmError } from "./llm.js";
  */
 let requestedFormat: string | undefined;
 
-/** Record the format for the error boundary. Called once, from `cli.ts`. */
+/** Record the format for the error boundary. Called once, from `run-cli.ts`. */
 export function setErrorFormat(format: string | undefined): void {
   requestedFormat = format;
 }

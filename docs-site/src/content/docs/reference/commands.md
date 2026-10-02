@@ -66,7 +66,11 @@ These commands combine several graph queries into one bounded answer. Reach for 
 | `ix watch` | Re-map on every change | `ix watch` |
 | `ix ingest [path]` | Ingest files, or GitHub data | `ix ingest --github owner/repo --limit 50` |
 
-`ix ingest` honors `--exclude <glob>` and an `.ixignore` file at the ingest root. `.ixignore` supports a subset of
+`ix ingest <path>` writes to the workspace the path belongs to: the registered workspace containing it, else its
+git repository. A file or directory inside that workspace refreshes just that part of it, and the rest of the
+workspace is left alone. A path outside every workspace and repository is ingested as a workspace of its own.
+
+`ix ingest` honors `--exclude <glob>` and an `.ixignore` file at the workspace root. `.ixignore` supports a subset of
 `.gitignore` syntax: `#` comments, `*`, `?`, `**`, a leading `/` to anchor to the root, a trailing `/` for
 directories, and bare names that match at any depth. There is no `!` negation.
 

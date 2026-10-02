@@ -323,16 +323,17 @@ describe("ix mcp", () => {
     }]);
   });
 
-  it("keeps the existing ix_map file argument contract", async () => {
+  it("maps the workspace, never a file, even when a caller still sends file", async () => {
     const calls: string[][] = [];
     const client = await connect(async (args) => {
       calls.push(args);
       return { ok: true, stdout: "{}", stderr: "" };
     });
 
-    await client.callTool({ name: "ix_map", arguments: { file: "src/service.ts" } });
+    const result = await client.callTool({ name: "ix_map", arguments: { file: "src/service.ts" } });
 
-    expect(calls).toEqual([["map", "--format=json", "--", "src/service.ts"]]);
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([["map", "--format=json"]]);
   });
 
   it("applies ix_smells path and limit compatibility without unsupported CLI flags", async () => {

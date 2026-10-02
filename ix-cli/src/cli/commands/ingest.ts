@@ -12,7 +12,8 @@ import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
-import { canonicalWorkspacePath, getEndpoint, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
+import { canonicalWorkspacePath, getEndpoint, isPathInside, resolveWorkspaceRoot, clearMapResultCache, clearStitchScopeCache } from '../config.js';
+import { resolveIngestRoot } from '../map-root.js';
 import {
   clearRebuildProgress, extractorChanged, isRev, loadIngestBaseline, loadRebuildProgress,
   saveIngestBaseline, saveRebuildProgress,
@@ -1006,7 +1007,7 @@ export function registerIngestCommand(program: Command): void {
       (value: string, previous: string[] = []) => [...previous, value],
       [] as string[],
     )
-    .addHelpText('after', '\nExamples:\n  ix ingest ./src\n  ix ingest --path ./src --force\n  ix ingest --path ./rocksdb --lang cpp,c\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx')
+    .addHelpText('after', '\nExamples:\n  ix ingest ./src\n  ix ingest --path ./src --force\n  ix ingest --path ./rocksdb --lang cpp,c\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx\n\nA path inside a mapped workspace (or a git repo) refreshes just that part of it, under that\nworkspace; a path outside every workspace and repo is ingested as a workspace of its own.')
     .action(async (positionalPath: string | undefined, opts: {
       path?: string; recursive?: boolean; force?: boolean; github?: string; token?: string;
       since?: string; limit: string; format: string; root?: string; debug?: boolean; lang?: string;
@@ -1541,10 +1542,29 @@ export async function ingestFiles(
   // (see workspaceIdForPath / repoWorkspaceIdFor), keeping its node identity
   // byte-identical across both. The backend treats both as opaque strings; it
   // never reads host files.
-  const workspaceRoot = fs.statSync(resolvedPath).isDirectory()
-    ? resolvedPath
-    : nodePath.dirname(resolvedPath);
-  const { workspaceId, migrated: workspaceMigrated, previousWorkspaceId } = ensureWorkspaceIdState(workspaceRoot);
+  //
+  // The workspace is the one the path BELONGS to, not the path itself: see
+  // `resolveIngestRoot`. A path strictly inside that root is a scoped run --
+  // discovery, deletion and the stitch are limited to it, and the rest of the
+  // workspace's baseline is carried forward untouched.
+  const workspaceRoot = resolveIngestRoot(resolvedPath, fs.statSync(resolvedPath).isDirectory(), opts.root);
+  const {
+    workspaceId,
+    migrated: workspaceMigrated,
+    previousWorkspaceId,
+    created: workspaceCreated,
+    name: workspaceName,
+  } = ensureWorkspaceIdState(workspaceRoot);
+  if (workspaceCreated && !opts.suppressOutput && opts.format === 'text') {
+    process.stderr.write(chalk.dim(`Registered workspace "${workspaceName}" (${workspaceRoot}).\n`));
+  }
+  // What this run discovers. A migrated workspace is widened to its root: the
+  // re-key below re-ingests everything under the new id and then deletes the
+  // old id's graph, which after a scoped run would leave the rest of the
+  // workspace with no nodes and a baseline vouching for them.
+  const scopePath = workspaceMigrated ? workspaceRoot : resolvedPath;
+  const scopedRun = scopePath !== workspaceRoot;
+  const inScope = (absPath: string): boolean => !scopedRun || isPathInside(scopePath, absPath);
   if (workspaceMigrated) {
     // Legacy random workspace_id was just re-keyed to the path-based id (Ix#225
     // gap 2). Node identity folds the workspace_id, so the previously-ingested
@@ -1984,18 +2004,20 @@ export async function ingestFiles(
     // Phase: discover files
     const langFilter = opts.lang ? parseLangs(opts.lang) : null;
 
-    const stat = fs.statSync(resolvedPath);
-    const excludePatterns = collectExcludePatterns(resolvedPath, opts.exclude ?? []);
+    const stat = fs.statSync(scopePath);
+    // `.ixignore` and `--exclude` are the WORKSPACE's, matched root-relative,
+    // so a scoped run leaves out exactly what a map of the whole root would.
+    const excludePatterns = collectExcludePatterns(workspaceRoot, opts.exclude ?? []);
     const excludeMatcher = createIgnoreMatcher(excludePatterns);
     const exclude = excludeMatcher.size > 0
-      ? { matcher: excludeMatcher, root: resolvedPath, onSkip: () => { filesExcluded += 1; } }
+      ? { matcher: excludeMatcher, root: workspaceRoot, onSkip: () => { filesExcluded += 1; } }
       : undefined;
     const discovery = discoverIngestFilePaths(
       stat.isFile()
-        ? (isSupportedSourceFile(resolvedPath) ? [resolvedPath] : [])
-        : (tryGitLsFiles(resolvedPath, opts.recursive ?? true, exclude)
-            ?? Array.from(walkFiles(resolvedPath, opts.recursive ?? true, exclude))),
-      stat.isFile() ? undefined : resolvedPath,
+        ? (isSupportedSourceFile(scopePath) ? [scopePath] : [])
+        : (tryGitLsFiles(scopePath, opts.recursive ?? true, exclude)
+            ?? Array.from(walkFiles(scopePath, opts.recursive ?? true, exclude))),
+      stat.isFile() ? undefined : scopePath,
     );
     // `--lang` narrows discovery to the named languages. The files it leaves
     // out keep their baseline entries (`langExcluded`, below): this run says
@@ -2007,10 +2029,22 @@ export async function ingestFiles(
     const filePaths: string[] = langFilter ? discovery.files.filter(inLangFilter) : discovery.files;
     const langExcluded: string[] = langFilter ? discovery.files.filter(fp => !inLangFilter(fp)) : [];
     outsideRoot = discovery.outsideRoot;
+    // The files edges may resolve TO. A scoped run parses only its own files,
+    // but an import from `src/a.ts` to `lib/b.ts` still names a file the
+    // workspace holds: resolving against the scope alone would drop that edge
+    // from every file the run re-sends. Paths only -- nothing outside the
+    // scope is read or parsed.
+    const resolutionPaths = scopedRun
+      ? discoverIngestFilePaths(
+          tryGitLsFiles(workspaceRoot, true, exclude && { ...exclude, onSkip: undefined })
+            ?? Array.from(walkFiles(workspaceRoot, true, exclude && { ...exclude, onSkip: undefined })),
+          workspaceRoot,
+        ).files
+      : filePaths;
     const resolveOpts = {
       ...crossRepoResolveOpts,
-      resolveModuleSpecifier: createTypeScriptModuleResolver(workspaceRoot, filePaths),
-      packageDirOf: declaredPackageDirs(workspaceRoot, filePaths),
+      resolveModuleSpecifier: createTypeScriptModuleResolver(workspaceRoot, resolutionPaths),
+      packageDirOf: declaredPackageDirs(workspaceRoot, resolutionPaths),
     };
 
     filesDiscovered = filePaths.length;
@@ -2024,15 +2058,20 @@ export async function ingestFiles(
 
     // Phase: mtime pre-filter — skip readFileSync+sha256 for files whose mtime
     // is unchanged since the last successful ingest (common "ix map" re-run case).
-    const projectRoot = fs.statSync(resolvedPath).isDirectory() ? resolvedPath : nodePath.dirname(resolvedPath);
+    // The WORKSPACE's baseline, scoped run or not: it is the one record of what
+    // the graph holds for this workspace, and a scoped run updates its own
+    // files in it and carries every other entry forward.
+    const projectRoot = workspaceRoot;
     // A just-migrated workspace (new path-based id) has no nodes under the new id, so
     // skip the mtime pre-filter and re-ingest everything, exactly like --force.
     const previousBaseline = loadIngestBaseline(projectRoot);
     const currentExtractor = extractorName();
-    // A --lang or single-file run re-extracts only its own files, so it must
-    // not record the new extractor for the rest; keep the old one and the next
-    // full run still re-ingests them.
-    const partialRun = Boolean(opts.lang) || stat.isFile();
+    // A --lang run, or one scoped to a file or directory below the root,
+    // re-extracts only its own files, so it must not record the new extractor
+    // for the rest; keep the old one and the next full run still re-ingests
+    // them. The same goes for every other whole-workspace claim -- see the
+    // baseline write and the stitch below.
+    const partialRun = Boolean(opts.lang) || scopedRun;
     const baselineExtractor = partialRun ? previousBaseline?.extractor : currentExtractor;
     // Files a full re-ingest for this extractor has committed, recorded as they
     // land so a run cut short resumes instead of starting over; null when no
@@ -2049,7 +2088,9 @@ export async function ingestFiles(
         `\n  [extractor changed] ${previousBaseline?.extractor ?? 'unrecorded'} -> ${currentExtractor}. ` +
         (resumedRebuild
           ? `Resuming the re-ingest: ${resumedRebuild.size} of ${filePaths.length} files already done.\n`
-          : `Re-ingesting every file once.\n`),
+          : partialRun
+            ? `Re-ingesting the ${filePaths.length} file(s) in this run; the next full map re-ingests the rest.\n`
+            : `Re-ingesting every file once.\n`),
       );
       // A resumed re-ingest is not forced: the files it already committed are
       // skipped by mtime below, and every other file is forced one by one.
@@ -2146,10 +2187,12 @@ export async function ingestFiles(
       }
     }
 
+    // Only inside the scope: a scoped run says nothing about the rest of the
+    // workspace, so a file missing there is the next full map's to delete.
     const deletedPaths = workspaceMigrated
       ? []
       : [...previousMtimes.keys()].filter(filePath =>
-          !currentMtimes.has(filePath) && !fs.existsSync(filePath)
+          inScope(filePath) && !currentMtimes.has(filePath) && !fs.existsSync(filePath)
         );
     if (deletedPaths.length > 0) deletionsFound = true;
 
@@ -3180,7 +3223,7 @@ export async function ingestFiles(
           // parseFile.
           const relSources = new Map<string, string>();
           for (const [abs, text] of sources) relSources.set(toWorkspaceRelative(abs), text);
-          const relFilePaths = filePaths.map(toWorkspaceRelative);
+          const relFilePaths = resolutionPaths.map(toWorkspaceRelative);
           const preParsed = await preParsePrescanSources(relSources);
           globalIndex = (ingestion.buildGlobalResolutionIndex as Function)(relFilePaths, relSources, preParsed);
           sources.clear();
@@ -3249,7 +3292,7 @@ export async function ingestFiles(
             if (texts[j] != null) sources.set(toWorkspaceRelative(batch[j]), texts[j]!);
           }
         }
-        const relFilePaths = filePaths.map(toWorkspaceRelative);
+        const relFilePaths = resolutionPaths.map(toWorkspaceRelative);
         const preParsed = await preParsePrescanSources(sources);
         globalIndex = ingestion.buildGlobalResolutionIndex(relFilePaths, sources, preParsed);
         sources.clear();
@@ -3472,9 +3515,16 @@ export async function ingestFiles(
     // three guards would start caching mtimes for files whose patches never
     // landed. The next run would skip them as unchanged and they would stay
     // missing from the graph until a --force.
-    const baselinePersisted = persistIngestBaselineIfClean(
+    // A scoped run carries every entry outside its scope forward, and keeps
+    // the workspace's last full-ingest time: `lastIngestAt` is what a file
+    // missing from the baseline is judged stale against, and only a run over
+    // the whole root has looked at those. With no baseline to update it
+    // writes none -- one written from a part of the workspace would mark the
+    // whole graph complete.
+    const outOfScope = scopedRun ? [...previousMtimes.keys()].filter(fp => !inScope(fp)) : [];
+    const baselinePersisted = (scopedRun && !previousBaseline) ? false : persistIngestBaselineIfClean(
       projectRoot,
-      carryForwardMtimes(currentMtimes, previousMtimes, [...deferredDeletions, ...langExcluded]),
+      carryForwardMtimes(currentMtimes, previousMtimes, [...deferredDeletions, ...langExcluded, ...outOfScope]),
       latestRev,
       // Lost parses count as parse errors HERE, whatever they are called
       // elsewhere. A run whose worker pool died resolves every later file as
@@ -3486,7 +3536,7 @@ export async function ingestFiles(
       // respawns without a cap and loses one file per crash.
       parseErrors + crashedParses(),
       commitErrors,
-      undefined,
+      scopedRun && previousBaseline ? new Date(previousBaseline.lastIngestAt) : undefined,
       nextDeletedFiles,
       baselineExtractor,
     );
@@ -3542,7 +3592,10 @@ export async function ingestFiles(
     // that file's exports. A file `parseFile` simply returned null for is not --
     // that is deterministic, usually an unavailable optional grammar, and
     // gating on it blocked stitching forever for any repo containing one.
-    const registrationIsComplete = filesSkippedAsUnchanged === 0 && crashedParses() === 0;
+    // And never on a partial run (`--lang`, or a path below the root): it
+    // parsed a part of the repo by construction, so even with nothing skipped
+    // its provides/consumes would replace the full registration with a slice.
+    const registrationIsComplete = !partialRun && filesSkippedAsUnchanged === 0 && crashedParses() === 0;
     // Every way the stitch does not happen is REPORTED, not just the guard's.
     // `stitch_skipped: null` means "the cross-repo edges are current", so every
     // path that leaves it unset while skipping the stitch says something false
@@ -3577,9 +3630,11 @@ export async function ingestFiles(
       // current" for the commonest map there is, while a cooldown was refusing
       // stitches the whole time. The staleness is identical either way.
       stitchSkippedRule = "incomplete";
-      stitchSkipped =
-        "this map did not re-parse every file, so it has no complete cross-workspace " +
-        "registration to send";
+      stitchSkipped = partialRun
+        ? "this run ingested only part of the workspace, so it has no complete " +
+          "cross-workspace registration to send"
+        : "this map did not re-parse every file, so it has no complete cross-workspace " +
+          "registration to send";
     }
     if (stitchEnabled && registrationIsComplete && stitchFiles.length > 0 && ingestCompletedCleanly(parseErrors, commitErrors)) {
       try {

@@ -39,8 +39,8 @@ try {
 }
 
 const program = new Command();
-// Mirror cli.ts's root registration. `--version` / `-V` is declared on the
-// program itself (cli.ts), not on any subcommand, so without this the one
+// Mirror run-cli.ts's root registration. `--version` / `-V` is declared on the
+// program itself (run-cli.ts), not on any subcommand, so without this the one
 // place a flag can be added with no per-command file changing is also the one
 // place this inventory cannot see it.
 const pkg = createRequire(import.meta.url)("../package.json");
