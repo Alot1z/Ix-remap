@@ -4,7 +4,17 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { renderSection, renderSuccess, renderError } from "../ui.js";
 import { IxClient } from "../../client/api.js";
-import { findWorkspaceForCwd, getDefaultWorkspace, getEndpoint } from "../config.js";
+import {
+  canonicalWorkspacePath,
+  findWorkspaceForCwd,
+  getDefaultWorkspace,
+  getEndpoint,
+  gitRootFor,
+  loadWorkspaces,
+  selectWorkspaceForCwd,
+  type WorkspaceConfig,
+} from "../config.js";
+import { ixHome } from "../ix-home.js";
 import { resolveReadSystemId } from "../resolve.js";
 import { assessGraphStats } from "../graph-health.js";
 import { llmLine, printLlmLines } from "../llm.js";
@@ -121,6 +131,75 @@ export function checkWindowsLauncher(
   };
 }
 
+/** A registered workspace sitting inside another one. */
+export interface NestedWorkspace {
+  nested: WorkspaceConfig;
+  parent: WorkspaceConfig;
+}
+
+/**
+ * Registered workspaces nested inside another registered workspace whose own
+ * root is not a git root.
+ *
+ * Before `ix ingest <path>` looked for the workspace a path belongs to, it
+ * registered the path itself (or a file's directory) as a new workspace: `ix
+ * ingest src/a.ts` in a mapped repo left a `repo/src` workspace holding one
+ * file, and every read under `src/` resolved to it from then on. A nested
+ * workspace that is its own git root is the legitimate shape -- a member repo
+ * of a multi-repo system mapped on its own -- and is not reported.
+ *
+ * `isGitRoot` is injected so the rule can be tested without spawning git.
+ */
+export function findStrayNestedWorkspaces(
+  workspaces: WorkspaceConfig[],
+  isGitRoot: (root: string) => boolean,
+): NestedWorkspace[] {
+  const found: NestedWorkspace[] = [];
+  for (const ws of workspaces) {
+    const root = canonicalWorkspacePath(ws.root_path);
+    const others = workspaces.filter(o => o !== ws && canonicalWorkspacePath(o.root_path) !== root);
+    const parent = selectWorkspaceForCwd(others, root);
+    if (parent && !isGitRoot(root)) found.push({ nested: ws, parent });
+  }
+  return found;
+}
+
+/** Whether `dir` is the top level of a git working tree. */
+export function isGitTopLevel(dir: string): boolean {
+  const top = gitRootFor(dir);
+  return top !== undefined && canonicalWorkspacePath(top) === canonicalWorkspacePath(dir);
+}
+
+/**
+ * The doctor check over {@link findStrayNestedWorkspaces}. Read-only: it names
+ * the repair and leaves the deleting to the user. There is no command that
+ * unregisters a workspace, so the repair is the scoped graph reset (run from
+ * inside the stray workspace, which `ix reset --workspace` resolves to because
+ * the nearest registration wins) and then removing its entry by hand.
+ */
+export function checkNestedWorkspaces(
+  workspaces: WorkspaceConfig[],
+  isGitRoot: (root: string) => boolean,
+  configPath: string,
+): CheckResult {
+  const stray = findStrayNestedWorkspaces(workspaces, isGitRoot);
+  if (stray.length === 0) return { ok: true, detail: "no stray workspace registered inside another" };
+  const lines = stray.map(({ nested, parent }) =>
+    `'${nested.workspace_name}' (${nested.root_path}) is inside '${parent.workspace_name}' (${parent.root_path}) ` +
+    `and is not a git root, so reads under it resolve to it instead of '${parent.workspace_name}'. ` +
+    `Fix: cd "${nested.root_path}" && ix reset --workspace --yes, ` +
+    `then delete its entry (root_path: ${nested.root_path}) from ${configPath}`,
+  );
+  return {
+    ok: false,
+    warn: true,
+    detail:
+      `${stray.length} workspace(s) registered inside another, most likely left by \`ix ingest <path>\` ` +
+      `on a path below a mapped workspace, which older versions registered as a workspace of its own:\n  ` +
+      lines.join("\n  "),
+  };
+}
+
 export function registerDoctorCommand(program: Command): void {
   program
     .command("doctor")
@@ -232,6 +311,11 @@ export function registerDoctorCommand(program: Command): void {
             // clean pass and say nothing.
             return { ok: false, warn: true, detail: "none registered yet — run `ix map`" };
           },
+        },
+        {
+          name: "No stray nested workspaces",
+          run: async () =>
+            checkNestedWorkspaces(loadWorkspaces(), isGitTopLevel, pathJoin(ixHome(), "config.yaml")),
         },
         {
           // Ix#525: a partially committed graph still has nodes and edges, so

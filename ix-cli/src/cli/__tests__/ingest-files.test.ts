@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { ingestFiles } from "../commands/ingest.js";
-import { ingestMtimeCachePath, ingestRebuildPath } from "../config.js";
+import { ingestMtimeCachePath, ingestRebuildPath, loadConfig } from "../config.js";
+import { workspaceIdForPath } from "../system.js";
 
 /**
  * Integration tests that drive `ingestFiles` end to end against a fake backend.
@@ -48,6 +49,10 @@ class FakeBackend {
   readonly requests: Array<{ path: string; patches: number; code?: number }> = [];
   /** `source.uri` of every patch sent in a commit request, accepted or not. */
   readonly sourceUris: string[] = [];
+  /** `source.workspaceId` beside each of `sourceUris`, in the same order. */
+  readonly sourceWorkspaceIds: Array<string | undefined> = [];
+  /** The ops of the last patch sent for each `source.uri`. */
+  readonly lastOps = new Map<string, Array<Record<string, unknown>>>();
   /** Paths this fake does not implement. Asserted empty after every test. */
   readonly unknownPaths: string[] = [];
 
@@ -232,7 +237,11 @@ class FakeBackend {
     };
 
     if (path === "/v1/patches/bulk" || path === "/v1/patch") {
-      type SentPatch = { patchId?: string; source?: { uri?: string; sourceHash?: string; workspaceId?: string } };
+      type SentPatch = {
+        patchId?: string;
+        source?: { uri?: string; sourceHash?: string; workspaceId?: string };
+        ops?: Array<Record<string, unknown>>;
+      };
       let patches: SentPatch[] = [];
       try {
         const parsed = JSON.parse(body) as { patches?: SentPatch[] };
@@ -241,7 +250,12 @@ class FakeBackend {
         /* a body we cannot read is still a request */
       }
       this.requests.push({ path, patches: patches.length });
-      for (const { source } of patches) if (source?.uri) this.sourceUris.push(source.uri);
+      for (const { source, ops } of patches) {
+        if (!source?.uri) continue;
+        this.sourceUris.push(source.uri);
+        this.sourceWorkspaceIds.push(source.workspaceId);
+        this.lastOps.set(source.uri, ops ?? []);
+      }
       if (this.abortAfterCommits !== undefined && this.commitCount >= this.abortAfterCommits) {
         this.aborter.abort();
       }
@@ -1046,5 +1060,187 @@ describe("ingestFiles against a fake backend", () => {
     expect(summary.patchesApplied).toBe(12);
     expect(backend.bulkCount).toBe(1);
     expect(backend.singleCount, "the fan-out is for failures only").toBe(0);
+  });
+
+  // ── Which workspace a path belongs to ─────────────────────────────────
+  //
+  // `ix ingest <path>` used to treat the path as its own workspace root: `ix
+  // ingest src/a.ts` in a mapped repo registered `repo/src` as a second
+  // workspace, sent `a.ts` instead of `src/a.ts` under that workspace's id,
+  // and from then on every read under `src/` resolved to the hollow one.
+
+  /** Register `roots` in the config by hand, so no ingest has run yet. */
+  const register = (...roots: Array<{ root: string; isDefault?: boolean }>): void => {
+    mkdirSync(join(home, ".ix"), { recursive: true });
+    writeFileSync(join(home, ".ix", "config.yaml"), [
+      "endpoint: http://localhost:8090",
+      "format: text",
+      "workspaces:",
+      ...roots.flatMap(({ root, isDefault }) => [
+        `  - workspace_id: "${workspaceIdForPath(root)}"`,
+        `    workspace_name: ${root.split(/[\\/]/).pop()}`,
+        `    root_path: ${root}`,
+        `    default: ${isDefault === true}`,
+      ]),
+      "",
+    ].join("\n"));
+  };
+  const registered = () =>
+    (loadConfig().workspaces ?? []).map(w => ({ root: w.root_path, id: w.workspace_id, isDefault: w.default }));
+  const sent = () => backend.sourceUris.map((uri, i) => ({ uri, workspaceId: backend.sourceWorkspaceIds[i] }));
+  const quiet = { format: "text", suppressOutput: true, printSummary: false } as const;
+
+  it("ingests a file or subdirectory inside a registered workspace into THAT workspace", async () => {
+    fixture(2);
+    mkdirSync(join(repo, "src", "util"), { recursive: true });
+    writeFileSync(join(repo, "src", "util", "u.ts"), "export const u = 1;\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    // Registered, but deliberately NOT the default: a stray registration
+    // became the default whenever none was set.
+    register({ root: repo, isDefault: false });
+    const before = registered();
+    const repoId = workspaceIdForPath(repo);
+
+    await ingestFiles(join(repo, "src", "m001.ts"), { ...quiet, force: true });
+    expect(sent()).toEqual([{ uri: "src/m001.ts", workspaceId: repoId }]);
+
+    backend.sourceUris.length = 0;
+    backend.sourceWorkspaceIds.length = 0;
+    await ingestFiles(join(repo, "src", "util"), { ...quiet, force: true });
+    expect(sent()).toEqual([{ uri: "src/util/u.ts", workspaceId: repoId }]);
+
+    expect(registered(), "no workspace registered, and the default left alone").toEqual(before);
+  });
+
+  it("uses the git root for a path in a repository nobody has registered", async () => {
+    fixture(2);
+    await ingestFiles(join(repo, "src"), { ...quiet, force: true });
+
+    expect(registered()).toEqual([{ root: repo, id: workspaceIdForPath(repo), isDefault: true }]);
+    expect([...new Set(sent().map(s => `${s.workspaceId} ${s.uri}`))].sort()).toEqual([
+      `${workspaceIdForPath(repo)} src/m000.ts`,
+      `${workspaceIdForPath(repo)} src/m001.ts`,
+    ]);
+  });
+
+  it("still gives a path in no workspace and no repository a workspace of its own", async () => {
+    // `repo` here is a plain directory: no `fixture()`, so no `git init`.
+    const outside = join(repo, "loose");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "x.ts"), "export const x = 1;\n", "utf8");
+
+    await ingestFiles(join(outside, "x.ts"), { ...quiet, force: true });
+
+    expect(registered()).toEqual([{ root: outside, id: workspaceIdForPath(outside), isDefault: true }]);
+    expect(sent()).toEqual([{ uri: "x.ts", workspaceId: workspaceIdForPath(outside) }]);
+  });
+
+  it("leaves everything outside a subdirectory run alone: deletions, baseline, extractor, stitch", async () => {
+    fixture(2);
+    mkdirSync(join(repo, "lib"), { recursive: true });
+    writeFileSync(join(repo, "lib", "l0.ts"), "export const l0 = 0;\n", "utf8");
+    writeFileSync(join(repo, "lib", "l1.ts"), "export const l1 = 1;\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    backend.rememberHashes = true;
+    type Stored = { files: Record<string, number>; extractor?: string; lastIngestAt: string };
+    const stored = () => JSON.parse(readFileSync(ingestMtimeCachePath(repo), "utf8")) as Stored;
+
+    await ingestFiles(repo, quiet);
+    // An older extractor on record: a full run would re-ingest everything and
+    // record the new name; a run over `src/` has vouched for none of `lib/`.
+    writeFileSync(ingestMtimeCachePath(repo), JSON.stringify({ ...stored(), extractor: "tree-sitter/0.1" }));
+    const baselineBefore = stored();
+    const deleted = join(repo, "lib", "l0.ts");
+    expect(Object.keys(baselineBefore.files)).toContain(deleted);
+
+    // Gone from disk, so a run over the whole root would delete it. A run over
+    // `src/` must not: it says nothing about `lib/`. (Were it attempted, the
+    // reconcile's `GET /v1/patches/...` would land in `unknownPaths`.)
+    rmSync(deleted);
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    backend.resetRequests();
+    backend.sourceUris.length = 0;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      // --force, so nothing is skipped as unchanged: on the whole root that
+      // is exactly the run that re-registers the stitch.
+      await ingestFiles(join(repo, "src"), { ...quiet, force: true });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect([...new Set(backend.sourceUris)].sort()).toEqual(["src/m000.ts", "src/m001.ts"]);
+    expect(backend.stitchCount, "a slice of the repo is not its registration").toBe(0);
+    const after = stored();
+    expect(after.files[deleted], "the deletion is the next full map's").toBe(baselineBefore.files[deleted]);
+    expect(after.files[join(repo, "lib", "l1.ts")]).toBe(baselineBefore.files[join(repo, "lib", "l1.ts")]);
+    expect(Object.keys(after.files).sort()).toEqual(Object.keys(baselineBefore.files).sort());
+    expect(after.extractor, "the rest of the workspace keeps its extractor").toBe("tree-sitter/0.1");
+    expect(after.lastIngestAt, "the last full ingest is still the last full ingest").toBe(baselineBefore.lastIngestAt);
+    expect(existsSync(ingestRebuildPath(repo)), "no whole-workspace rebuild is started").toBe(false);
+  });
+
+  it("resolves a scoped run's edges against the whole workspace, not just the scope", async () => {
+    // `src/a.ts` imports `lib/b.ts`. A run over `src/` re-sends a.ts's patch,
+    // and resolving it against `src/` alone dropped the import edge from it.
+    mkdirSync(join(repo, "src"), { recursive: true });
+    mkdirSync(join(repo, "lib"), { recursive: true });
+    writeFileSync(join(repo, "lib", "b.ts"), "export function b(): number { return 1; }\n", "utf8");
+    writeFileSync(join(repo, "src", "a.ts"), "import { b } from '../lib/b';\nexport function a(): number { return b(); }\n", "utf8");
+    execFileSync("git", ["init", "-q"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    const edges = () => (backend.lastOps.get("src/a.ts") ?? [])
+      .filter(op => op.type === "UpsertEdge")
+      .map(op => `${String(op.predicate)} ${String(op.dst)}`)
+      .sort();
+
+    await ingestFiles(repo, { ...quiet, force: true });
+    const full = edges();
+    expect(full.some(e => e.startsWith("IMPORTS ")), "the fixture has an import edge to lose").toBe(true);
+
+    backend.lastOps.clear();
+    await ingestFiles(join(repo, "src"), { ...quiet, force: true });
+    expect(edges()).toEqual(full);
+  });
+
+  it("writes no baseline from a subdirectory run when the workspace has none", async () => {
+    // One written from `src/` alone would report the whole graph complete.
+    fixture(2);
+    mkdirSync(join(repo, "lib"), { recursive: true });
+    writeFileSync(join(repo, "lib", "l0.ts"), "export const l0 = 0;\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: repo, stdio: "ignore" });
+    register({ root: repo, isDefault: true });
+
+    await ingestFiles(join(repo, "src"), { ...quiet, force: true });
+
+    expect(existsSync(ingestMtimeCachePath(repo))).toBe(false);
+    expect(existsSync(ingestMtimeCachePath(join(repo, "src")))).toBe(false);
+  });
+
+  it("keeps a member repo's own workspace id, inside a registered system or on its own", async () => {
+    // `repo` is the plain folder holding two independently cloned repos.
+    for (const member of ["alpha", "beta"]) {
+      mkdirSync(join(repo, member), { recursive: true });
+      writeFileSync(join(repo, member, `${member}.ts`), `export const ${member} = 1;\n`, "utf8");
+      execFileSync("git", ["init", "-q"], { cwd: join(repo, member), stdio: "ignore" });
+      execFileSync("git", ["add", "-A"], { cwd: join(repo, member), stdio: "ignore" });
+    }
+    const alpha = join(repo, "alpha");
+    const alphaId = workspaceIdForPath(alpha);
+
+    // Standalone: nothing registered, so the member's git root -- exactly
+    // what `ix map` inside it produces.
+    await ingestFiles(join(alpha, "alpha.ts"), { ...quiet, force: true });
+    expect(sent()).toEqual([{ uri: "alpha.ts", workspaceId: alphaId }]);
+    expect(registered().map(w => w.root)).toEqual([alpha]);
+
+    // Inside the registered system: the system's workspace, with the uri the
+    // co-ingest gave the file and, still, the member's own id.
+    register({ root: repo, isDefault: true });
+    backend.sourceUris.length = 0;
+    backend.sourceWorkspaceIds.length = 0;
+    await ingestFiles(join(alpha, "alpha.ts"), { ...quiet, force: true });
+    expect(sent()).toEqual([{ uri: "alpha/alpha.ts", workspaceId: alphaId }]);
+    expect(registered().map(w => w.root)).toEqual([repo]);
   });
 });

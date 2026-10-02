@@ -1,0 +1,13 @@
+---
+// Copyright 2026 Ix Infrastructure Inc.
+
+// Replaces Starlight's ThemeProvider: the docs are dark only, like ix-infra.com,
+// whatever the operating system prefers. Inlined, as Starlight's is, so the page
+// never paints in the wrong theme first. ThemeSelect is replaced with nothing,
+// so there is no picker that could change it.
+---
+
+<script is:inline>
+	document.documentElement.dataset.theme = 'dark';
+	window.StarlightThemeProvider = { updatePickers() {} };
+</script>

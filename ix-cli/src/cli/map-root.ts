@@ -1,8 +1,9 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { realpathSync, statSync } from "node:fs";
-import { resolve } from "node:path";
-import { findWorkspaceForCwd, gitRootFor, resolveWorkspaceRoot } from "./config.js";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { canonicalWorkspacePath, findWorkspaceForCwd, gitRootFor, isPathInside, resolveWorkspaceRoot } from "./config.js";
 
 export function canonicalMapRoot(candidate: string): string {
   const resolved = resolve(candidate);
@@ -38,11 +39,66 @@ export function canonicalMapRoot(candidate: string): string {
 export function resolveMapRoot(pathArg?: string, cwd = process.cwd()): string {
   if (pathArg) return canonicalMapRoot(resolve(cwd, pathArg));
 
-  const nearest = findWorkspaceForCwd(cwd);
-  if (nearest) return canonicalMapRoot(nearest.root_path);
-
-  const gitRoot = gitRootFor(cwd);
-  if (gitRoot) return canonicalMapRoot(gitRoot);
+  const local = localRootFor(cwd);
+  if (local) return canonicalMapRoot(local);
 
   return canonicalMapRoot(resolveWorkspaceRoot(undefined, cwd));
+}
+
+/**
+ * Steps 2 and 3 of both cascades in this file: the registered workspace
+ * containing `dir`, else the git root of `dir`. Undefined when `dir` has
+ * neither. The nearest registration wins, so a repo registered inside another
+ * (a member of a multi-repo system mapped on its own) keeps its own root.
+ */
+export function localRootFor(dir: string): string | undefined {
+  return findWorkspaceForCwd(dir)?.root_path ?? gitRootFor(dir);
+}
+
+/**
+ * Which workspace does `ix ingest <path>` write to?
+ *
+ * Not simply the path. Treating it as its own root made `ix ingest src/a.ts`
+ * inside a mapped repo register `repo/src` as a second workspace, emit
+ * `a.ts` instead of `src/a.ts` under that workspace's id, and from then on
+ * route every read under `src/` to it. A path is a part of a workspace far
+ * more often than it is one, so:
+ *
+ *   1. an explicit `--root` (the path must be inside it)
+ *   2. the registered workspace containing the path
+ *   3. the path's git root, unless that is the home directory
+ *   4. the path itself for a directory, its directory for a file -- a path
+ *      in no workspace and no repository is ingested as its own workspace.
+ *
+ * Step 3 skips a git root at `$HOME` (a dotfiles repo): registering the whole
+ * home directory as a workspace would route every later read under it there.
+ * A workspace the user registered at `$HOME` is still honoured by step 2.
+ *
+ * The same local-first order as `resolveMapRoot`, minus its named/default
+ * workspace step: that one answers "which repo is cwd in", and a path the
+ * user named outside every workspace and repository belongs to none of them.
+ *
+ * A path below the returned root is a partial ingest of that workspace; see
+ * `ingestFiles`. Returned canonical (realpath'd), like the path ingest hands in.
+ */
+export function resolveIngestRoot(target: string, isDirectory: boolean, explicitRoot?: string): string {
+  const canonicalTarget = canonicalWorkspacePath(target);
+  if (explicitRoot) {
+    const root = canonicalWorkspacePath(explicitRoot);
+    let rootIsDirectory = false;
+    try { rootIsDirectory = statSync(root).isDirectory(); } catch { /* reported below */ }
+    if (!rootIsDirectory) throw new Error(`--root is not a directory: ${root}`);
+    if (!isPathInside(root, canonicalTarget)) {
+      throw new Error(`${canonicalTarget} is outside --root ${root}. Pass a path inside the root, or drop --root.`);
+    }
+    return root;
+  }
+  const probe = isDirectory ? canonicalTarget : dirname(canonicalTarget);
+  const registered = findWorkspaceForCwd(probe)?.root_path;
+  if (registered) return canonicalWorkspacePath(registered);
+  const gitRoot = gitRootFor(probe);
+  if (gitRoot && canonicalWorkspacePath(gitRoot) !== canonicalWorkspacePath(homedir())) {
+    return canonicalWorkspacePath(gitRoot);
+  }
+  return probe;
 }

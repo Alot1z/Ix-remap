@@ -24,10 +24,11 @@ export default defineConfig({
     starlight({
       title: 'Ix Docs',
       description: 'Documentation for Ix, the persistent codebase graph for humans and AI agents.',
-      logo: {
-        light: './src/assets/logo-light.png',
-        dark: './src/assets/logo-dark.png',
-        alt: 'Ix',
+      components: {
+        // ix-infra.com's look: its wordmark in the header, and dark only.
+        SiteTitle: './src/components/SiteTitle.astro',
+        ThemeProvider: './src/components/ThemeProvider.astro',
+        ThemeSelect: './src/components/ThemeSelect.astro',
       },
       favicon: '/favicon.png',
       head: [
@@ -54,7 +55,12 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting started',
-          items: ['getting-started/introduction', 'getting-started/installation', 'getting-started/quickstart'],
+          items: [
+            { label: 'Overview', link: '/' },
+            'getting-started/introduction',
+            'getting-started/installation',
+            'getting-started/quickstart',
+          ],
         },
         {
           label: 'Concepts',

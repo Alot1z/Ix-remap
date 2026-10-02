@@ -207,7 +207,7 @@ ix inventory --kind function --path auth.py
   degraded graph.
 
 - **The OSS↔Pro command boundary is derived at runtime, not declared.**
-  `cli.ts` (which `main.ts` loads) snapshots `ossCmdNames` immediately after `registerOssCommands()`;
+  `run-cli.ts` (which `main.ts` loads) snapshots `ossCmdNames` immediately after `registerOssCommands()`;
   the Pro probe (`tryLoadProCommands`) then diffs whatever commands exist
   against that set to decide which count as "Pro". Consequences:
   - Adding a `register*Command` call in `oss.ts` silently reclassifies that

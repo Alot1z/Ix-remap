@@ -155,7 +155,12 @@ const defaultConfig: IxConfig = {
 
 export function loadConfig(): IxConfig {
   const configPath = join(ixHome(), "config.yaml");
-  if (!existsSync(configPath)) return defaultConfig;
+  // A copy, here and below: callers edit what they get back and save it.
+  // Handing out the shared default let `getOrCreateWorkspace` write its new
+  // workspace into it, so every later load in the process that found no
+  // config file -- a fresh IX_HOME, a deleted file -- inherited workspaces
+  // that were never in either.
+  if (!existsSync(configPath)) return { ...defaultConfig };
   try {
     const raw = readFileSync(configPath, "utf-8");
     const parsed = parse(raw) as Partial<IxConfig>;
@@ -168,7 +173,7 @@ export function loadConfig(): IxConfig {
     }
     return { ...defaultConfig, ...parsed };
   } catch {
-    return defaultConfig;
+    return { ...defaultConfig };
   }
 }
 

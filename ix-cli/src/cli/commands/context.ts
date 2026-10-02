@@ -12,6 +12,7 @@ import {
 } from "../context-bundle-schema.js";
 
 import { IxClient } from "../../client/api.js";
+import { QUERY_CLIENT_OPTIONS } from "../../client/request-memo.js";
 import type {
   ConflictReport,
   DecisionReport,
@@ -36,6 +37,7 @@ import {
   type SymbolHit,
 } from "../explain/issue.js";
 import { collectRelatedFiles, MAX_RELATED, type RelatedRef } from "../explain/related-files.js";
+import { cachedBm25Ranker } from "../explain/bm25-cache.js";
 import { collectTextReferences, gitRepoAccess, type TextSource } from "../explain/text-references.js";
 import { coChangedFiles, gitRunner, recentCommits, type CommitRef } from "../explain/history.js";
 import { llmLine, llmShortId, printLlmLines } from "../llm.js";
@@ -454,7 +456,7 @@ export function registerContextCommand(program: Command): void {
         return;
       }
 
-      const client = new IxClient(getEndpoint());
+      const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
 
       const resolved = await resolveFileOrReport(client, target, {
         kind: opts.kind,
@@ -569,7 +571,7 @@ async function buildFreshBundle(
   budgets: BudgetSnapshot,
   format: string,
 ): Promise<ContextBundle | undefined> {
-  const client = new IxClient(getEndpoint());
+  const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
   const resolved = await resolveFileOrReport(client, target, {
     kind: opts.kind,
     path: opts.path,
@@ -1673,7 +1675,7 @@ async function buildIssueBundle(
 ): Promise<ContextBundle | undefined> {
   const text = await readIssueOrReport(arg, opts.format);
   if (text === undefined) return undefined;
-  const client = new IxClient(getEndpoint());
+  const client = new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS);
   const plan = await planIssueWith(client, text);
   // A path start has no node yet, and the graph may not have one either: it
   // does not index every tracked file. chooseCentre walks BM25 for one it does.
@@ -1754,8 +1756,12 @@ async function readIssueOrReport(arg: string, format: string | undefined): Promi
 async function planIssueWith(client: IxClient, text: string) {
   await ensureReadScope(client);
   const scope = activeReadScope();
+  const root = resolveWorkspaceRoot();
   return planIssue(text, {
-    repo: gitRepoAccess(resolveWorkspaceRoot()),
+    repo: gitRepoAccess(root),
+    // Through the on-disk term index (bm25-cache.ts): the same ranking, with
+    // only the files that differ from HEAD read again.
+    rank: cachedBm25Ranker(root),
     search: async (name) =>
       (await client.search(name, { limit: ISSUE_SEARCH_LIMIT, nameOnly: true, ...scope })).map(symbolHit),
   });
@@ -1770,7 +1776,7 @@ async function planIssueWith(client: IxClient, text: string) {
 async function emitLeanIssue(arg: string, opts: ContextOptions): Promise<void> {
   const text = await readIssueOrReport(arg, opts.format);
   if (text === undefined) return;
-  const view = leanIssueView(await planIssueWith(new IxClient(getEndpoint()), text));
+  const view = leanIssueView(await planIssueWith(new IxClient(getEndpoint(), undefined, QUERY_CLIENT_OPTIONS), text));
   if (opts.format === "json") {
     printJson({ kind: "issue_lean", ...view });
   } else if (opts.format === "llm") {

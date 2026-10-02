@@ -221,8 +221,10 @@ async function collectNeighbourMembers(
   const files = neighbours
     .filter(ref => ref.kind === "file" && ref.id !== targetId)
     .slice(0, MAX_NEIGHBOUR_FILES);
-  const found: EntityLocation[][] = [];
-  for (const file of files) {  // one file at a time: each ranks its own members
+  // Each file ranks its own members, so the files are independent and run
+  // together; `found` stays in file order however they finish. The requests
+  // they make are bounded by the query client's in-flight cap.
+  const found: EntityLocation[][] = await Promise.all(files.map(async (file) => {
     try {
       const result = await client.expand(file.id, { direction: "out", predicates: ["CONTAINS"] });
       const direct = structuralMemberOrder((result.nodes ?? [])
@@ -248,11 +250,11 @@ async function collectNeighbourMembers(
       // Ranked by measured use, like the target's own members: by size alone
       // `config.ts` offered `saveConfig` (48 lines, 5 users) ahead of
       // `resolveWorkspaceRoot` (20 lines, 12 users, and the answer).
-      found.push((await rankMembersByUse(client, candidates)).slice(0, MAX_NEIGHBOUR_MEMBERS));
+      return (await rankMembersByUse(client, candidates)).slice(0, MAX_NEIGHBOUR_MEMBERS);
     } catch {
-      found.push([]);  // one unreadable neighbour must not lose the others
+      return [];  // one unreadable neighbour must not lose the others
     }
-  }
+  }));
   // One member from each file before a second from any: the evidence budget cut
   // the tail, and four members of the first import crowded out every other
   // file's -- including the one holding the answer.
@@ -301,6 +303,52 @@ async function rankMembersByUse(client: IxClient, members: EntityLocation[]): Pr
       a.index - b.index)
     .map(({ m }) => m);
   return [...ranked, ...structural.slice(MEMBER_USE_POOL)];
+}
+
+/** The entity that contains the target, or undefined when it cannot be read. */
+async function lookUpContainer(client: IxClient, containerId: string): Promise<EntityLocation | undefined> {
+  try {
+    const containerDetails = await client.entity(containerId);
+    return toLocation(containerDetails.node);
+  } catch {
+    return undefined; // no container
+  }
+}
+
+/** The target's callees by name, one entity read each, in edge order. */
+function resolveCallList(client: IxClient, calleeEdges: any[]): Promise<EntityRef[]> {
+  return Promise.all(
+    calleeEdges.map(async (e: any): Promise<EntityRef> => {
+      try {
+        const callee = await client.entity(e.dst);
+        const calleeNode = callee.node as any;
+        const name = calleeNode.name || calleeNode.attrs?.name || "";
+        if (!name || isRawId(name)) {
+          return {
+            name: name || e.dst,
+            kind: calleeNode.kind,
+            resolved: false,
+            suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
+          };
+        }
+        return {
+          name,
+          kind: calleeNode.kind,
+          id: e.dst,
+          resolved: true,
+          path: relativePath(calleeNode.provenance?.source_uri ?? calleeNode.provenance?.sourceUri),
+          suggestedCommand: forMcp() ? toolCall("ix_explain", { symbol: name }) : `ix explain "${name}"`,
+        };
+      } catch {
+        return {
+          name: e.dst,
+          resolved: false,
+          diagnostic: "unresolved_call_target",
+          suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
+        } as EntityRef;
+      }
+    }),
+  );
 }
 
 /**
@@ -363,15 +411,6 @@ export async function collectFacts(
   const containsEdge = edges.find(
     (e: any) => e.predicate === "CONTAINS" && e.dst === targetId,
   );
-  let container: EntityLocation | undefined;
-  if (containsEdge) {
-    try {
-      const containerDetails = await client.entity(containsEdge.src);
-      container = toLocation(containerDetails.node);
-    } catch {
-      /* no container */
-    }
-  }
 
   // Deduplicate dependents by node ID
   const seenIds = new Set<string>();
@@ -380,12 +419,6 @@ export async function collectFacts(
     seenIds.add(n.id);
     return true;
   });
-
-  // Members. `ix context` ranks them by use; `ix explain` keeps graph order.
-  const memberRefs = forExplain
-    ? membersResult.nodes.map(toLocation)
-    : await rankMembersByUse(client, membersResult.nodes.map(toLocation));
-  const memberNames = memberRefs.map((m) => m.name);
 
   // Named usage examples (up to 3 resolved names from callers/dependents)
   const extractRefs = (nodes: any[], limit: number): EntityLocation[] => {
@@ -414,55 +447,37 @@ export async function collectFacts(
       Number(a?.kind !== "file") - Number(b?.kind !== "file")),
     MAX_IMPORT_REFS);
   const calleeRefs = outward(calleesResult.nodes, MAX_CALLEE_REFS);
-  // One level into the files around the target -- imports first, then the
-  // files that import it. `ix explain` describes one entity and does not need
-  // it, so it is not paid for there.
-  const neighbourRefs = forExplain
-    ? undefined
-    : await collectNeighbourMembers(client, [...importRefs, ...topDependentRefs], targetId);
-  const topCallers = topCallerRefs.map((r) => r.name);
-  const topDependents = topDependentRefs.map((r) => r.name);
 
   // Build callList from outgoing CALLS edges (reuse logic from explain.ts)
   const calleeEdges = edges.filter(
     (e: any) => e.predicate === "CALLS" && e.src === targetId,
   );
-  let callList: EntityRef[] | undefined;
-  if (forExplain && calleeEdges.length > 0 && calleeEdges.length <= 20) {
-    const refs = await Promise.all(
-      calleeEdges.map(async (e: any): Promise<EntityRef> => {
-        try {
-          const callee = await client.entity(e.dst);
-          const calleeNode = callee.node as any;
-          const name = calleeNode.name || calleeNode.attrs?.name || "";
-          if (!name || isRawId(name)) {
-            return {
-              name: name || e.dst,
-              kind: calleeNode.kind,
-              resolved: false,
-              suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
-            };
-          }
-          return {
-            name,
-            kind: calleeNode.kind,
-            id: e.dst,
-            resolved: true,
-            path: relativePath(calleeNode.provenance?.source_uri ?? calleeNode.provenance?.sourceUri),
-            suggestedCommand: forMcp() ? toolCall("ix_explain", { symbol: name }) : `ix explain "${name}"`,
-          };
-        } catch {
-          return {
-            name: e.dst,
-            resolved: false,
-            diagnostic: "unresolved_call_target",
-            suggestedCommand: forMcp() ? toolCall("ix_text", { pattern: e.dst.slice(0, 8) }) : `ix text "${e.dst.slice(0, 8)}"`,
-          } as EntityRef;
-        }
-      }),
-    );
-    callList = refs;
-    const unresolvedCount = refs.filter((r) => !r.resolved).length;
+
+  // The second round of reads. Each step needs only the first round, not the
+  // others, so they run together: this used to be three or four round trips
+  // one after another, plus one per neighbouring file.
+  const [container, memberRefs, neighbourRefs, callList] = await Promise.all([
+    containsEdge ? lookUpContainer(client, containsEdge.src) : Promise.resolve(undefined),
+    // Members. `ix context` ranks them by use; `ix explain` keeps graph order.
+    forExplain
+      ? Promise.resolve(membersResult.nodes.map(toLocation))
+      : rankMembersByUse(client, membersResult.nodes.map(toLocation)),
+    // One level into the files around the target -- imports first, then the
+    // files that import it. `ix explain` describes one entity and does not need
+    // it, so it is not paid for there.
+    forExplain
+      ? Promise.resolve(undefined)
+      : collectNeighbourMembers(client, [...importRefs, ...topDependentRefs], targetId),
+    forExplain && calleeEdges.length > 0 && calleeEdges.length <= 20
+      ? resolveCallList(client, calleeEdges)
+      : Promise.resolve(undefined),
+  ]);
+  const memberNames = memberRefs.map((m) => m.name);
+  const topCallers = topCallerRefs.map((r) => r.name);
+  const topDependents = topDependentRefs.map((r) => r.name);
+
+  if (callList) {
+    const unresolvedCount = callList.filter((r) => !r.resolved).length;
     if (unresolvedCount > 0) {
       diagnostics.push({
         code: "unresolved_call_target",
