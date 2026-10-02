@@ -12,6 +12,7 @@ import { parseBudgetOption } from "../options.js";
 import { isQuiet } from "../output-shape.js";
 import { stderr } from "../stderr.js";
 import { SourceFiles } from "../edge-sites.js";
+import { canonicalPath } from "../hook/session.js";
 import {
   AroundError, DEFAULT_CAPS, DEFAULT_TOKEN_BUDGET, fitToBudget, gatherAround, parseAroundTarget,
   type AroundCaps, type AroundResult,
@@ -52,6 +53,17 @@ export function resolveAroundFile(file: string, root: string, cwd = process.cwd(
   return fs.existsSync(fromCwd) ? fromCwd : fromRoot;
 }
 
+/**
+ * `abs` relative to the workspace root, `/`-separated, or undefined when it is
+ * outside it. Both sides in their canonical spelling: an absolute path through
+ * a link (macOS's /tmp, a symlinked checkout) names a file inside a root
+ * registered under the other spelling.
+ */
+export function aroundRelPath(abs: string, root: string): string | undefined {
+  const rel = path.relative(canonicalPath(root), canonicalPath(abs)).split(path.sep).join("/");
+  return rel.startsWith("..") || path.isAbsolute(rel) ? undefined : rel;
+}
+
 export function capsFor(limit: number): AroundCaps {
   return {
     ...DEFAULT_CAPS,
@@ -86,8 +98,8 @@ Examples:
       }
       const root = resolveWorkspaceRoot();
       const abs = resolveAroundFile(parsed.file, root);
-      const relPath = path.relative(root, abs).split(path.sep).join("/");
-      if (relPath.startsWith("..") || path.isAbsolute(relPath)) {
+      const relPath = aroundRelPath(abs, root);
+      if (relPath === undefined) {
         reportError("path_outside_workspace", `${abs} is outside the workspace root ${root}.`, opts.format);
         return;
       }

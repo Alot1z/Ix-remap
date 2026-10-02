@@ -1,6 +1,6 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
 } from "../around.js";
 import { aroundJson, renderAroundLlm, renderAroundText } from "../around-render.js";
 import { SourceFiles } from "../edge-sites.js";
+import { aroundRelPath } from "../commands/around.js";
 
 describe("parseAroundTarget", () => {
   it("reads a path, a line, and a range", () => {
@@ -28,6 +29,23 @@ describe("parseAroundTarget", () => {
     expect(parseAroundTarget("C:\\a.ts")).toEqual({ file: "C:\\a.ts" });
     expect(parseAroundTarget("a.ts:20-12")).toBeUndefined();
     expect(parseAroundTarget("a.ts:0")).toBeUndefined();
+  });
+});
+
+describe("aroundRelPath", () => {
+  it("places an absolute path reached through a link inside the workspace", () => {
+    const base = mkdtempSync(join(tmpdir(), "ix-around-link-"));
+    try {
+      const root = join(base, "repo");
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src/a.ts"), "export const a = 1;\n");
+      symlinkSync(root, join(base, "link"), "dir");
+      expect(aroundRelPath(join(base, "link/src/a.ts"), root)).toBe("src/a.ts");
+      expect(aroundRelPath(join(root, "src/a.ts"), join(base, "link"))).toBe("src/a.ts");
+      expect(aroundRelPath(join(base, "elsewhere.ts"), root)).toBeUndefined();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 
