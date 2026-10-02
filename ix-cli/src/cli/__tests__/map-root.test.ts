@@ -230,6 +230,18 @@ describe("ingest root resolution", () => {
     expect(resolveIngestRoot(join(loose, "x.ts"), false)).toBe(loose);
   });
 
+  it("does not adopt a git repository at $HOME as the workspace of a loose path", () => {
+    const realHome = realpathSync.native(home);
+    mkdirSync(join(realHome, "notes", "dir"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: realHome });
+
+    expect(resolveIngestRoot(join(realHome, "notes", "dir"), true)).toBe(join(realHome, "notes", "dir"));
+
+    // A workspace the user registered at $HOME on purpose is still used.
+    writeWorkspaces(realHome);
+    expect(resolveIngestRoot(join(realHome, "notes", "dir"), true)).toBe(realHome);
+  });
+
   it("takes --root first, and refuses a path outside it", () => {
     const repo = realpathSync.native(fixture());
     const other = realpathSync.native(fixture());

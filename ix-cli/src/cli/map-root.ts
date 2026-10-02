@@ -1,6 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { canonicalWorkspacePath, findWorkspaceForCwd, gitRootFor, isPathInside, resolveWorkspaceRoot } from "./config.js";
 
@@ -65,9 +66,13 @@ export function localRootFor(dir: string): string | undefined {
  *
  *   1. an explicit `--root` (the path must be inside it)
  *   2. the registered workspace containing the path
- *   3. the path's git root
+ *   3. the path's git root, unless that is the home directory
  *   4. the path itself for a directory, its directory for a file -- a path
  *      in no workspace and no repository is ingested as its own workspace.
+ *
+ * Step 3 skips a git root at `$HOME` (a dotfiles repo): registering the whole
+ * home directory as a workspace would route every later read under it there.
+ * A workspace the user registered at `$HOME` is still honoured by step 2.
  *
  * The same local-first order as `resolveMapRoot`, minus its named/default
  * workspace step: that one answers "which repo is cwd in", and a path the
@@ -89,5 +94,11 @@ export function resolveIngestRoot(target: string, isDirectory: boolean, explicit
     return root;
   }
   const probe = isDirectory ? canonicalTarget : dirname(canonicalTarget);
-  return canonicalWorkspacePath(localRootFor(probe) ?? probe);
+  const registered = findWorkspaceForCwd(probe)?.root_path;
+  if (registered) return canonicalWorkspacePath(registered);
+  const gitRoot = gitRootFor(probe);
+  if (gitRoot && canonicalWorkspacePath(gitRoot) !== canonicalWorkspacePath(homedir())) {
+    return canonicalWorkspacePath(gitRoot);
+  }
+  return probe;
 }
