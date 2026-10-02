@@ -1,7 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseHookArgs, runPostEditHook, type EntryDeps } from "../hook/entry.js";
 import { postToolUseOutput, withDeadline } from "../hook/io.js";
 import { fingerprint, loadState, parseUnifiedDiff, statePath } from "../hook/session.js";
-import { reportToolEdit, summarize, type PostToolUseInput } from "../hook/claude-post-edit.js";
+import { HOOK_CAPS, reportToolEdit, summarize, type PostToolUseInput } from "../hook/claude-post-edit.js";
 import { estimateTokens, type AroundRequest, type AroundResult, type AroundSymbol } from "../around.js";
 import { WorkspaceNotMappedError } from "../errors.js";
 
@@ -343,5 +343,51 @@ describe("output", () => {
     expect(await withDeadline(new Promise((r) => setTimeout(() => r("late"), 200)), 10)).toBeUndefined();
     expect(await withDeadline(Promise.reject(new Error("x")), 50)).toBeUndefined();
     expect(await withDeadline(Promise.resolve("ok"), 50)).toBe("ok");
+  });
+});
+
+describe("the hook's row caps and its log", () => {
+  it("asks for the hook's caps: the nearest two callers and users, one test", async () => {
+    edit("  return y * 2;", "  return y * 3;");
+    const calls: AroundRequest[] = [];
+    await run(bash(), deps(calls));
+    expect(calls[0].caps).toEqual(HOOK_CAPS);
+    expect(HOOK_CAPS).toMatchObject({ callers: 2, users: 2, tests: 1 });
+  });
+
+  const logged = (file: string) => readFileSync(file, "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+
+  it("logs one line per call saying why nothing was printed, or what was", async () => {
+    const log = join(stateDir, "hook.log");
+    const env = { IX_HOOK_STATE_DIR: stateDir, IX_HOOK_LOG: log };
+    const calls: AroundRequest[] = [];
+    await runPostEditHook(bash(), { env }, deps(calls)); // nothing changed yet
+    edit("  return y * 2;", "  return y * 3;");
+    await runPostEditHook(bash(), { env }, deps(calls)); // reports beta
+    await runPostEditHook(bash(), { env }, deps(calls)); // same diff again
+    const lines = logged(log);
+    expect(lines.map((l) => l.path)).toEqual(["no_changes", "reported", "diff_unchanged"]);
+    expect(lines[1].notes).toContain("src/lib.js#beta: reported");
+    expect(lines[1].chars).toBeGreaterThan(0);
+    expect(lines[1]).toMatchObject({ session: "s1", tool: "Bash", files: 1 });
+    expect(typeof lines[1].ms).toBe("number");
+  });
+
+  it("logs a symbol with no dependents as the reason for silence", async () => {
+    const log = join(stateDir, "hook.log");
+    edit("  return y * 2;", "  return y * 3;");
+    const calls: AroundRequest[] = [];
+    const out = await runPostEditHook(bash(), { env: { IX_HOOK_STATE_DIR: stateDir, IX_HOOK_LOG: log } },
+      deps(calls, { gather: fakeGather(calls, { noDependents: ["beta"] }) }));
+    expect(out).toBeUndefined();
+    const [line] = logged(log);
+    expect(line.path).toBe("silent");
+    expect(line.notes).toContain("src/lib.js#beta: no_dependents");
+  });
+
+  it("writes no log without IX_HOOK_LOG", async () => {
+    edit("  return y * 2;", "  return y * 3;");
+    await run(bash(), deps([]));
+    expect(() => readFileSync(join(stateDir, "hook.log"))).toThrow();
   });
 });

@@ -11,7 +11,7 @@ vi.mock("../resolve.js", () => ({
 }));
 
 import {
-  CONTAINER_KINDS, declarationLines, DEFAULT_CAPS, estimateTokens, findUseInImporter, fitToBudget, gatherAround, importStatementText, isTestFile,
+  CONTAINER_KINDS, declarationLines, DEFAULT_CAPS, localityRank, estimateTokens, findUseInImporter, fitToBudget, gatherAround, importStatementText, isTestFile,
   outermostDefs, parseAroundTarget, placeDefs, selectEdited, type AroundResult, type FileDef,
 } from "../around.js";
 import { aroundJson, renderAroundLlm, renderAroundText } from "../around-render.js";
@@ -367,5 +367,22 @@ describe("renderers", () => {
     expect(renderAroundText(r)).toContain("Graph is degraded");
     expect(renderAroundLlm(r)[1]).toMatch(/^graph status=degraded reason=hollow/);
     expect(aroundJson(r).graph).toMatchObject({ status: "degraded" });
+  });
+});
+
+describe("localityRank", () => {
+  it("puts the edited file's own directory first, then the nearest", () => {
+    const edited = "src/main/java/a/b/Foo.java";
+    expect(localityRank(edited, "src/main/java/a/b/Bar.java")).toBe(0);
+    expect(localityRank(edited, "src/main/java/a/b/c/Baz.java")).toBe(1);
+    expect(localityRank(edited, "src/main/java/a/x/Qux.java")).toBe(2);
+    expect(localityRank(edited, "other/module/Z.java")).toBeGreaterThan(localityRank(edited, "src/main/java/a/x/Qux.java"));
+  });
+
+  it("orders a list nearest first", () => {
+    const edited = "lib/plugins/aws/deploy.js";
+    const sorted = ["lib/classes/Service.js", "lib/plugins/aws/package.js", "lib/plugins/print.js"]
+      .sort((a, b) => localityRank(edited, a) - localityRank(edited, b));
+    expect(sorted).toEqual(["lib/plugins/aws/package.js", "lib/plugins/print.js", "lib/classes/Service.js"]);
   });
 });
