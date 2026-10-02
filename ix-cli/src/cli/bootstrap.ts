@@ -127,9 +127,9 @@ export function ensureWorkspaceRegistered(cwd = process.cwd()): { registered: bo
  * map/ingest flow uses `migrated` to force a full re-ingest under the new id and
  * `previousWorkspaceId` to delete the old id's orphaned nodes afterward.
  */
-export function ensureWorkspaceIdState(cwd = process.cwd()): { workspaceId: string; migrated: boolean; previousWorkspaceId?: string } {
-  const { ws, migrated, previousWorkspaceId } = getOrCreateWorkspace(cwd);
-  return { workspaceId: ws.workspace_id, migrated, previousWorkspaceId };
+export function ensureWorkspaceIdState(cwd = process.cwd()): { workspaceId: string; migrated: boolean; previousWorkspaceId?: string; created: boolean; name: string } {
+  const { ws, migrated, previousWorkspaceId, created } = getOrCreateWorkspace(cwd);
+  return { workspaceId: ws.workspace_id, migrated, previousWorkspaceId, created, name: ws.workspace_name };
 }
 
 /**
