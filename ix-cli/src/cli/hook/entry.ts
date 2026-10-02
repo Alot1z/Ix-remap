@@ -90,11 +90,11 @@ async function runPostEditHookInner(
     }
 
     const diff = (deps.gitDiffHead ?? gitDiffHead)(repoRoot);
-    if (!diff.trim()) { record.path = "no_changes"; return undefined; }
+    if (!diff.trim()) { record.path = "no_changes"; debug("no tracked changes"); return undefined; }
     const fp = fingerprint(diff);
     const file = statePath(input.session_id, repoRoot, env);
     const state = loadState(file);
-    if (state.fingerprint === fp) { record.path = "diff_unchanged"; return undefined; }
+    if (state.fingerprint === fp) { record.path = "diff_unchanged"; debug("diff unchanged since last report"); return undefined; }
 
     const files = parseUnifiedDiff(diff);
     const heavy = await import("./claude-post-edit.js");
@@ -113,6 +113,26 @@ async function runPostEditHookInner(
     debug(`failed: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
+}
+
+/**
+ * The hook's answer, or undefined once `ms` have passed. A call the deadline
+ * cuts off never writes its own `IX_HOOK_LOG` line -- the process exits before
+ * `runPostEditHook` finishes -- so it is logged here: a timeout is one of the
+ * reasons the hook is silent, and the log is where that is looked up.
+ */
+export async function answerWithin(raw: string, opts: HookOptions, ms: number, deps: EntryDeps = {}): Promise<string | undefined> {
+  const started = Date.now();
+  let settled = false;
+  const work = runPostEditHook(raw, opts, deps).finally(() => { settled = true; });
+  const out = await withDeadline(work, ms);
+  if (!settled) {
+    deps.debug?.(`no answer within ${ms} ms`);
+    appendHookLog((opts.env ?? process.env).IX_HOOK_LOG || undefined, {
+      ts: new Date(started).toISOString(), path: "timeout", ms: Date.now() - started, chars: 0, notes: [],
+    });
+  }
+  return out;
 }
 
 /** `--graph-root <dir>`, `--worktree=<dir>`, `--budget <n>`; anything else is ignored. */
@@ -145,7 +165,7 @@ export async function runHookProcess(opts: HookOptions): Promise<void> {
   try {
     const raw = await readStdin(timeout);
     const left = Math.max(0, timeout - (Date.now() - started));
-    out = await withDeadline(runPostEditHook(raw, opts, { debug }), left);
+    out = await answerWithin(raw, opts, left, { debug });
   } catch (err) {
     debug(`failed: ${err instanceof Error ? err.message : String(err)}`);
     out = undefined;

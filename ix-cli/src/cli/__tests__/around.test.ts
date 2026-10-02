@@ -302,6 +302,14 @@ describe("gatherAround", () => {
     expect(result.importers.total).toBe(2);
   });
 
+  it("counts the edited definitions it was told to leave out", async () => {
+    const req = { relPath: "src/lib.ts", ranges: [{ start: 2, end: 2 }], anchorLines: FILES["src/lib.ts"], files: new SourceFiles(root) };
+    const result = await gatherAround(mockClient() as any, { ...req, exclude: new Set(["d-target"]) });
+    expect(result.symbols).toEqual([]);
+    expect(result.excluded).toBe(1);
+    expect((await gatherAround(mockClient() as any, req)).excluded).toBeUndefined();
+  });
+
   it("caps callers and keeps the total", async () => {
     const result = await gatherAround(mockClient(20) as any, {
       relPath: "src/lib.ts",

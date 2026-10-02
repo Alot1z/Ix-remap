@@ -337,7 +337,7 @@ export function summarize(results: AroundResult[], budget: number): HookOutcome 
   let complete = true;
   for (const r of results) {
     const keep = [];
-    if (r.symbols.length === 0) notes.push(`${r.path}: no_definition_covers`);
+    if (r.symbols.length === 0) notes.push(`${r.path}: ${r.excluded ? "already_reported" : "no_definition_covers"}`);
     for (const s of r.symbols) {
       const deps = s.callers.total + s.users.total + s.tests.total;
       if (deps === 0) { reported.push(symbolKey(r.path, s.id)); notes.push(`${r.path}#${s.name}: no_dependents`); continue; }

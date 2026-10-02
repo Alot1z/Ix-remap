@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parseHookArgs, runPostEditHook, type EntryDeps } from "../hook/entry.js";
+import { answerWithin, parseHookArgs, runPostEditHook, type EntryDeps } from "../hook/entry.js";
 import { postToolUseOutput, withDeadline } from "../hook/io.js";
 import { fingerprint, loadState, parseUnifiedDiff, pruneStates, statePath } from "../hook/session.js";
 import { HOOK_CAPS, reportToolEdit, summarize, type PostToolUseInput } from "../hook/claude-post-edit.js";
@@ -445,6 +445,33 @@ describe("the hook's row caps and its log", () => {
     const [line] = logged(log);
     expect(line.path).toBe("silent");
     expect(line.notes).toContain("src/lib.js#beta: no_dependents");
+  });
+
+  it("still says why on IX_HOOK_DEBUG when nothing changed", async () => {
+    const said: string[] = [];
+    await run(bash(), deps([], { debug: (m) => said.push(m) }));
+    edit("  return y * 2;", "  return y * 3;");
+    await run(bash(), deps([], { debug: (m) => said.push(m) }));
+    await run(bash(), deps([], { debug: (m) => said.push(m) }));
+    expect(said).toContain("no tracked changes");
+    expect(said).toContain("diff unchanged since last report");
+  });
+
+  it("logs an edit inside a symbol it already reported as that, not as outside every definition", () => {
+    const empty = { symbols: [], importers: { total: 0, tests: 0, rows: [] } };
+    expect(summarize([{ path: "src/a.ts", ...empty, excluded: 1 }], 300).notes).toEqual(["src/a.ts: already_reported"]);
+    expect(summarize([{ path: "src/a.ts", ...empty }], 300).notes).toEqual(["src/a.ts: no_definition_covers"]);
+  });
+
+  it("logs a call the deadline cut off", async () => {
+    const log = join(stateDir, "hook.log");
+    edit("  return y * 2;", "  return y * 3;");
+    const never = vi.fn(() => new Promise<AroundResult>(() => {}));
+    const out = await answerWithin(bash(), { env: { IX_HOOK_STATE_DIR: stateDir, IX_HOOK_LOG: log } }, 50,
+      deps([], { gather: never }));
+    expect(out).toBeUndefined();
+    expect(never).toHaveBeenCalled();
+    expect(logged(log).map((l) => l.path)).toEqual(["timeout"]);
   });
 
   it("writes no log without IX_HOOK_LOG", async () => {

@@ -141,6 +141,12 @@ export interface AroundResult {
   symbols: AroundSymbol[];
   /** Every importer of the file, at its import line. */
   importers: AroundSection & { tests: number };
+  /**
+   * Edited definitions left out because the request excluded them (the hook's
+   * "already told"); absent when none were. Lets the hook's log tell an edit
+   * outside every definition from one inside a definition it already reported.
+   */
+  excluded?: number;
 }
 
 export interface AroundCaps {
@@ -499,10 +505,12 @@ export async function gatherAround(client: AroundClient, req: AroundRequest): Pr
   // Which definitions to report on.
   let chosen: PlacedDef[];
   const preloaded = new Map<string, any[]>();
+  let alreadyReported = 0;
   if (req.ranges && req.ranges.length > 0) {
-    chosen = selectEdited(anchorPlaced, req.ranges, Number.MAX_SAFE_INTEGER)
-      .filter((d) => !req.exclude?.has(d.id))
-      .slice(0, caps.symbols);
+    const edited = selectEdited(anchorPlaced, req.ranges, Number.MAX_SAFE_INTEGER);
+    const fresh = edited.filter((d) => !req.exclude?.has(d.id));
+    alreadyReported = edited.length - fresh.length;
+    chosen = fresh.slice(0, caps.symbols);
   } else {
     // The whole file: its outermost definitions, the most-called first, so a
     // capped answer keeps the ones with dependents.
@@ -626,6 +634,7 @@ export async function gatherAround(client: AroundClient, req: AroundRequest): Pr
     graph: isUnhealthy(health) ? health : undefined,
     symbols,
     importers,
+    ...(alreadyReported > 0 ? { excluded: alreadyReported } : {}),
   };
 }
 
