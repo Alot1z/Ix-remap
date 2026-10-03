@@ -12,9 +12,9 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/ix-infrastructure/Ix" alt="Stars" />
-  <img src="https://img.shields.io/github/license/ix-infrastructure/Ix" alt="License" />
-  <img src="https://img.shields.io/github/actions/workflow/status/ix-infrastructure/Ix/ci.yml?label=tests" alt="Tests" />
-  <img src="https://img.shields.io/badge/platform-windows%20%7C%20macOS%20%7C%20linux-lightgrey" alt="Platforms" />
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ix-infrastructure/Ix" alt="License" /></a>
+  <a href="https://github.com/ix-infrastructure/Ix/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ix-infrastructure/Ix/ci.yml?branch=main&amp;label=CI" alt="CI" /></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-windows%20%7C%20macOS%20%7C%20linux-lightgrey" alt="Platforms" /></a>
   <a href="https://github.com/sponsors/ix-infrastructure"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-db61a2" alt="Sponsor Ix" /></a>
 </p>
 
@@ -48,6 +48,8 @@ Kartr is in alpha and onboarding early users.
 ```bash
 curl -fsSL https://ix-infra.com/install.sh | sh    # macOS / Linux
 ```
+
+On Windows, use the PowerShell installer under [Install](#install).
 
 <p align="center">
   <img src="./assets/demo.gif" width="90%" alt="Ix mapping and querying a repository" />
@@ -146,8 +148,8 @@ codex mcp add ix-memory -- ix mcp
 
 [`skills/ix/`](skills/ix/SKILL.md) teaches any LLM agent to drive the CLI. It follows the
 [Claude Code skill format](https://code.claude.com/docs/en/skills) and the
-[agents.md](https://agents.md) standard, so Claude Code, Agents, Codex and Cursor all
-load the same tree from their own skills directory.
+[agents.md](https://agents.md) standard, so Claude Code, Codex, Cursor and any agent
+that reads `~/.agents/skills` all load the same tree from their own skills directory.
 
 ```bash
 bash scripts/install-skill.sh   # deploy to every harness found (--dry-run to preview)
@@ -180,8 +182,12 @@ curl -fsSL https://raw.githubusercontent.com/ix-infrastructure/ix-opencode-plugi
 curl -fsSL https://raw.githubusercontent.com/ix-infrastructure/ix-cursor-plugin/main/install.sh | bash
 ```
 
-Each also publishes a Windows PowerShell installer. Swap `install.sh | bash` for
-`install.ps1 | iex` via `irm`.
+On Windows, the Codex, OpenCode and Cursor installers each have a PowerShell
+version at the same URL, with `.ps1` in place of `.sh`:
+
+```powershell
+irm https://ix-infra.com/codex-install.ps1 | iex
+```
 
 ---
 
@@ -231,6 +237,28 @@ directories it creates, see [docs/prerequisites.md](./docs/prerequisites.md).
 
 </details>
 
+**Upgrade**
+
+```bash
+ix upgrade --check   # see whether an update is available
+ix upgrade           # upgrade the CLI, backend and components
+```
+
+**Uninstall**
+
+```bash
+curl -fsSL https://ix-infra.com/uninstall.sh | sh    # macOS / Linux
+```
+
+```powershell
+irm https://ix-infra.com/uninstall.ps1 | iex         # Windows
+```
+
+This removes the CLI and the backend containers along with their data. To keep the
+graph volume, set `IX_KEEP_DATA=1` for the script: `… | IX_KEEP_DATA=1 sh`, or
+`$env:IX_KEEP_DATA = "1"` before the PowerShell line. If you installed with
+Homebrew, run `brew uninstall ix` instead.
+
 ---
 
 ### Commands
@@ -251,12 +279,15 @@ Set `IX_DEBUG=1` for full stack traces on any error.
 ```bash
 ix map .           # map this repo
 ix watch           # re-map on change
+ix reset --workspace   # wipe this repo's graph (asks first)
+ix reset              # wipe every repo on the backend (--code keeps goals, plans and decisions)
 ```
 
 **Understand**
 
 ```bash
 ix search <term>       # find an entity by name
+ix text <term>         # plain text search across the repo (ripgrep)
 ix locate <symbol>     # jump to a definition
 ix explain <symbol>    # what it is and what it touches
 ix overview <target>   # one-shot structural summary
@@ -270,6 +301,8 @@ ix read <target>       # read source, by symbol or path:line-range
 ix trace <symbol>      # follow a flow up and down
 ix callers <symbol>    # what calls this
 ix callees <symbol>    # what this calls
+ix depends <symbol>    # everything that depends on this, as a tree
+ix imports <symbol>    # what this imports (ix imported-by for the reverse)
 ix rank --by dependents --top 10   # find the load-bearing code
 ix inventory --kind function       # list components
 ix history <target>    # how an entity changed
@@ -280,6 +313,7 @@ ix diff <from> <to>    # compare two revisions
 
 ```bash
 ix view            # open the Compass visualizer
+ix subsystems      # the architectural map saved by ix map
 ix stats           # graph statistics
 ix smells          # detect structural issues
 ```
