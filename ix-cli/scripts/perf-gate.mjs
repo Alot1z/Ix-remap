@@ -172,7 +172,12 @@ async function main() {
   if (opts.update) {
     // A command's own tolerance survives an update; context's fan-out is not
     // deterministic yet, so it starts looser than the default.
-    const previous = existsSync(BUDGETS) ? JSON.parse(readFileSync(BUDGETS, "utf8")).budgets ?? {} : {};
+    let previous = {};
+    try {
+      previous = JSON.parse(readFileSync(BUDGETS, "utf8")).budgets ?? {};
+    } catch {
+      // No budgets yet: start from this run.
+    }
     const budgets = Object.fromEntries(Object.entries(results).map(([name, m]) => {
       const tolerance = previous[name]?.tolerance ?? (name.startsWith("context") ? 1.25 : undefined);
       return [name, tolerance ? { ...m, tolerance } : m];
