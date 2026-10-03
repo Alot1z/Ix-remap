@@ -1,7 +1,9 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 import { describe, it, expect } from "vitest";
+import { Command } from "commander";
 import { buildHelpText } from "../help-text.js";
+import { registerOssCommands } from "../register/oss.js";
 
 /**
  * Verify that buildHelpText output mentions all core commands.
@@ -54,5 +56,28 @@ describe("help coverage", () => {
     expect(proHelp).toContain("plan");
     expect(proHelp).toContain("Manage plans");
     expect(proHelp).toContain("goal");
+  });
+});
+
+/**
+ * `ix --help` is a hand-written list, so a new command was easy to leave out:
+ * `context`, the command agents are told to use first, was missing. Every
+ * command the OSS build registers and does not hide has to be in it.
+ */
+/** Registered but deliberately not listed: deprecated, or not a command people run. */
+const UNLISTED = new Set(["query", "init", "help", "hook"]);
+
+describe("help coverage against the registrations", () => {
+  it("lists every non-hidden OSS command", () => {
+    const program = new Command();
+    registerOssCommands(program);
+    const help = buildHelpText();
+    const listed = (name: string) => new RegExp(`^\\s{2}${name}\\b`, "m").test(help);
+    const visible = program.commands
+      .filter((c) => !(c as unknown as { _hidden?: boolean })._hidden)
+      .map((c) => c.name())
+      .filter((name) => !UNLISTED.has(name));
+    expect(visible.length).toBeGreaterThan(20);
+    expect(visible.filter((name) => !listed(name))).toEqual([]);
   });
 });
