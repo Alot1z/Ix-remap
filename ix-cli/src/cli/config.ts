@@ -1,7 +1,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync, mkdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
+import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync, mkdirSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { parse, stringify } from "yaml";
@@ -326,15 +326,43 @@ export function isReadablePath(candidate: string, explicitRoot?: string): boolea
   );
 }
 
+/**
+ * Is `dir` the root of a linked git worktree (`git worktree add`)? Its `.git`
+ * is a file pointing into the main repository's `.git/worktrees/<name>`. A
+ * submodule's `.git` file points into `.git/modules/` instead and is not one:
+ * a submodule is part of the repository that contains it.
+ */
+export function isLinkedWorktreeRoot(dir: string): boolean {
+  const dotGit = join(dir, ".git");
+  try {
+    if (!statSync(dotGit).isFile()) return false;
+    const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf-8"))?.[1];
+    return !!gitdir && /[\\/]worktrees[\\/]/.test(gitdir);
+  } catch {
+    return false;
+  }
+}
+
 export function selectWorkspaceForCwd(
   workspaces: WorkspaceConfig[],
   cwd: string,
 ): WorkspaceConfig | undefined {
   const canonicalCwd = canonicalWorkspacePath(cwd);
-  return workspaces
+  const match = workspaces
     .map(workspace => ({ workspace, root: canonicalWorkspacePath(workspace.root_path) }))
     .filter(({ root }) => isPathInside(root, canonicalCwd))
-    .sort((a, b) => b.root.length - a.root.length)[0]?.workspace;
+    .sort((a, b) => b.root.length - a.root.length)[0];
+  if (!match) return undefined;
+  // A linked worktree nested inside a registered repository (Claude Code puts
+  // them at <repo>/.claude/worktrees/<name>) is a separate checkout, usually
+  // on another branch. Answering for it from the enclosing repo's workspace
+  // read and mapped the wrong tree; it is unmapped until it is registered,
+  // exactly like a sibling worktree. Lexically below the match, so a few stats.
+  for (let dir = canonicalCwd; dir !== match.root; dir = dirname(dir)) {
+    if (isLinkedWorktreeRoot(dir)) return undefined;
+    if (dirname(dir) === dir) break;
+  }
+  return match.workspace;
 }
 
 export function findWorkspaceForCwd(cwd: string): WorkspaceConfig | undefined {
