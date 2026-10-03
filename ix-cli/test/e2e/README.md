@@ -121,6 +121,28 @@ the smoke test, against the pinned image on the default ports, and is part of
 stacks' logs. A backend fix reaches this job only once its image is released
 and the pin is moved to it, normally by the Dependabot PR.
 
+## Performance gate
+
+`scripts/perf-gate.mjs` runs on the same stack. For a fixed fixture, Ix itself
+at `v0.12.0`, it measures backend requests, response bytes and wall time for
+these commands: a fresh map, a no-op map, a one-line edit then map, an
+added file then map, `context`, `context --from-issue`, `impact`, `rank` and
+`callers`. Each runs three times, and it compares the medians with
+`test/perf/budgets.json`.
+
+```sh
+git clone --depth 1 --branch v0.12.0 https://github.com/ix-infrastructure/Ix /tmp/perf-fixture
+IX_E2E=1 node scripts/perf-gate.mjs /tmp/perf-fixture            # check against the budgets
+IX_E2E=1 node scripts/perf-gate.mjs /tmp/perf-fixture --update   # rewrite them from this run
+```
+
+Requests and bytes are deterministic for a fixed fixture and backend image, so
+the gate fails when either is more than 10% over budget. That is what an added
+N+1 or a doubled payload looks like. Wall time is only reported. A change that
+makes a command cheaper should lower its budget in the same PR (`--update`,
+then commit the file), so the gain can't be lost again unnoticed. In CI it is a
+step of job `e2e`, and its results are uploaded as `perf-results`.
+
 ## Fixtures
 
 `fixtures/polyglot/` has 23 files: Python with cross-file calls (`app/`),
