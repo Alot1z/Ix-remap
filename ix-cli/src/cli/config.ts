@@ -1,6 +1,6 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync, mkdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, chmodSync, renameSync, realpathSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -333,10 +333,10 @@ export function isReadablePath(candidate: string, explicitRoot?: string): boolea
  * a submodule is part of the repository that contains it.
  */
 export function isLinkedWorktreeRoot(dir: string): boolean {
-  const dotGit = join(dir, ".git");
   try {
-    if (!statSync(dotGit).isFile()) return false;
-    const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf-8"))?.[1];
+    // Read, not stat-then-read: a .git directory throws EISDIR here, which is
+    // the "not a linked worktree" answer anyway.
+    const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(join(dir, ".git"), "utf-8"))?.[1];
     return !!gitdir && /[\\/]worktrees[\\/]/.test(gitdir);
   } catch {
     return false;
