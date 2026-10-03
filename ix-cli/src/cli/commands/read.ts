@@ -348,6 +348,10 @@ Examples:
 
       // --- Step 2: Try exact file path ---
       const resolvedPath = path.isAbsolute(rawTarget) ? rawTarget : path.resolve(root, rawTarget);
+      // A path-shaped target is checked before it is stat'ed: refusing only
+      // the paths that exist told a caller which files exist outside the
+      // workspace. A bare name resolves inside the root and passes.
+      if (/[\\/]/.test(rawTarget) && !guardReadable(resolvedPath, opts.root, "file", opts.format)) return;
       if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
         if (!guardReadable(resolvedPath, opts.root, "file", opts.format)) return;
         const stale = checkStale(resolvedPath);
