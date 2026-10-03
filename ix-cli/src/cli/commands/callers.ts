@@ -66,9 +66,13 @@ export function registerCallersCommand(program: Command): void {
         // Fallback to text search
         try {
           const root = resolveWorkspaceRoot();
+          // -F and -e: the name is a literal pattern, never a regex or a flag
+          // (a symbol named `--pre=x` would otherwise run an rg preprocessor).
+          // `--` ends the options before the root; the timeout bounds a search
+          // that rg could otherwise run for ever.
           const { stdout } = await execFileAsync("rg", [
-            "--json", "--max-count", "10", target.name, root,
-          ], { maxBuffer: 5 * 1024 * 1024 });
+            "--json", "--max-count", "10", "-F", "-e", target.name, "--", root,
+          ], { maxBuffer: 5 * 1024 * 1024, timeout: 10_000 });
 
           const allTextResults: any[] = [];
           for (const line of stdout.split("\n")) {
@@ -90,6 +94,9 @@ export function registerCallersCommand(program: Command): void {
             } catch { /* skip malformed lines */ }
           }
 
+          // rg searches files in parallel, so match order varies between runs;
+          // sort first so the ranking, and the output, do not.
+          allTextResults.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : x.line - y.line));
           // Calls first and the definition out: an unranked fallback led with
           // import lines and the target's own signature.
           const ranked = rankTextUses(

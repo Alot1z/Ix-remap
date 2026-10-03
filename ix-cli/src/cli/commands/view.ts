@@ -185,6 +185,23 @@ function readAlivePid(): number | null {
   }
 }
 
+/**
+ * Does `port` answer like this visualizer? An unknown `/__ix/` route gets the
+ * server's own JSON 404, which nothing else on a port is likely to send. Used
+ * before acting on the PID file: a PID outlives its process and can be reused
+ * by an unrelated one, which `stop` would otherwise SIGTERM.
+ */
+export async function isVisualizerOnPort(port: number, timeoutMs = 1500): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/__ix/ping`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.status !== 404) return false;
+    const body = (await res.json()) as { ok?: unknown; error?: unknown };
+    return body.ok === false && typeof body.error === "string" && body.error.startsWith("not found: /__ix/ping");
+  } catch {
+    return false;
+  }
+}
+
 /** Check whether a port is already in use. */
 function isPortInUse(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -803,10 +820,19 @@ export function registerViewCommand(program: Command): void {
   view
     .command("stop")
     .description("Stop the visualizer")
-    .action(() => {
+    .action(async () => {
       const pid = readAlivePid();
       if (!pid) {
         console.log("[ok] Visualizer is not running.");
+        return;
+      }
+      // Only signal a PID that is still the visualizer. An instance started
+      // before the port was recorded has nothing to check against and keeps
+      // the old behaviour.
+      const port = readRunningPort();
+      if (port !== null && !(await isVisualizerOnPort(port))) {
+        removeCompassState();
+        console.log(`[ok] Visualizer is not running (PID ${pid} now belongs to another process; left alone).`);
         return;
       }
 

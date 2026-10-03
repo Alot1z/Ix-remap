@@ -724,7 +724,9 @@ export function printResolved(target: ResolvedEntity): void {
 
 /** Check if a string looks like a raw UUID (not a human-readable name). */
 export function isRawId(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s)
+  // Anchored at both ends: a UUID followed by anything else (`<uuid>/../health`)
+  // is a name to search for, not an id to put into a URL path.
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
     || /^[0-9a-f]{32,}$/i.test(s);
 }
 
