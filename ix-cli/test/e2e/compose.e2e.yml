@@ -3,11 +3,12 @@
 # Throwaway backend for the real-backend harness (test/e2e). Every scenario
 # resets this database, so it gets its own compose project and ports and must
 # never be pointed at a stack anything else uses. See test/e2e/README.md.
+# Start and stop it with `npm run e2e:up` / `npm run e2e:down` (stack.mjs).
 #
 #   IX_E2E_PROJECT        compose project name      (default ix-e2e)
 #   IX_E2E_BACKEND_PORT   host port of memory-layer (default 8290)
 #   IX_E2E_ARANGO_PORT    host port of ArangoDB     (default 8729)
-#   IX_E2E_BACKEND_IMAGE  memory-layer image        (default: v1.0.31, pinned by digest)
+#   IX_E2E_BACKEND_IMAGE  memory-layer image        (default: the pin below; see stack.mjs)
 #
 # Memory is capped: ArangoDB's caches otherwise size themselves from host RAM
 # (a 9 GB block cache on a 30 GB host). The whole stack stays under ~2.7 GB.
@@ -47,7 +48,9 @@ services:
       retries: 15
 
   memory-layer:
-    image: ${IX_E2E_BACKEND_IMAGE:-ghcr.io/ix-infrastructure/ix-memory-layer:1.0.31@sha256:7f972fb084d9667ef1b7cd7e7c40b24aad76fb4cb38d1cc07a0319444c0ab979}
+    # Literal, so Dependabot can propose bumps. Set IX_E2E_BACKEND_IMAGE to run
+    # another image (stack.mjs then adds compose.image-override.yml).
+    image: ghcr.io/ix-infrastructure/ix-memory-layer:1.0.31@sha256:7f972fb084d9667ef1b7cd7e7c40b24aad76fb4cb38d1cc07a0319444c0ab979
     networks: [backend]
     ports:
       - "127.0.0.1:${IX_E2E_BACKEND_PORT:-8290}:8090"
