@@ -22,7 +22,7 @@ import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
 import { loadIngestionModules } from './ingestion-loader.js';
 import { declaredPackageDirs } from '../package-dirs.js';
-import { ensureWorkspaceIdState } from '../bootstrap.js';
+import { ensureWorkspaceIdState, workspaceStateFor } from '../bootstrap.js';
 import { detectSystem, repoWorkspaceIdFor, lookupPackage, readPackageNames, readPackageDeps } from '../system.js';
 import { CLIENT_EXPECTED_SCHEMA_VERSION } from '../backend-status.js';
 import { admitStitchWaiting, connectionNeverEstablished, type StitchRefusal } from '../stitch-guard.js';
@@ -1549,16 +1549,15 @@ export async function ingestFiles(
   // discovery, deletion and the stitch are limited to it, and the rest of the
   // workspace's baseline is carried forward untouched.
   const workspaceRoot = resolveIngestRoot(resolvedPath, fs.statSync(resolvedPath).isDirectory(), opts.root);
+  // A new workspace is only registered once a commit lands (below, before the
+  // summary): see workspaceStateFor.
   const {
     workspaceId,
     migrated: workspaceMigrated,
     previousWorkspaceId,
-    created: workspaceCreated,
     name: workspaceName,
-  } = ensureWorkspaceIdState(workspaceRoot);
-  if (workspaceCreated && !opts.suppressOutput && opts.format === 'text') {
-    process.stderr.write(chalk.dim(`Registered workspace "${workspaceName}" (${workspaceRoot}).\n`));
-  }
+    pending: registrationPending,
+  } = workspaceStateFor(workspaceRoot);
   // What this run discovers. A migrated workspace is widened to its root: the
   // re-key below re-ingests everything under the new id and then deletes the
   // old id's graph, which after a scoped run would leave the rest of the
@@ -3763,6 +3762,15 @@ export async function ingestFiles(
   }
 
   const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+
+  // A new workspace is registered only now, and only if the backend took
+  // something: see workspaceStateFor.
+  if (registrationPending && patchesTheBackendTook > 0) {
+    ensureWorkspaceIdState(workspaceRoot);
+    if (!opts.suppressOutput && opts.format === 'text') {
+      process.stderr.write(chalk.dim(`Registered workspace "${workspaceName}" (${workspaceRoot}).\n`));
+    }
+  }
 
   // Reported before the suppressOutput return, and thrown when nothing landed.
   //

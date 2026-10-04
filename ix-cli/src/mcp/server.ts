@@ -5,9 +5,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 
 import { z } from "zod";
+import { isReadablePath } from "../cli/config.js";
 
 import {
   createProtocolStdout,
@@ -657,6 +658,19 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       if (typeof input.path === "string" && typeof input.github === "string") {
         return textResult(
           JSON.stringify({ error: "path and github are mutually exclusive; provide only one", tool: "ix_ingest" }),
+          true,
+        );
+      }
+      // Confined like ix_read. An ingested path's workspace becomes a root
+      // ix_read may open files from, so an unconfined path let a caller turn
+      // any directory into a readable one (ix_ingest, then ix_read).
+      if (typeof input.path === "string" && !isReadablePath(resolvePath(process.cwd(), input.path))) {
+        return textResult(
+          JSON.stringify({
+            error: "path_outside_workspace",
+            message: `Refusing to ingest a path outside the workspace: ${input.path}. Run ix map in that directory to make it a workspace.`,
+            tool: "ix_ingest",
+          }),
           true,
         );
       }
