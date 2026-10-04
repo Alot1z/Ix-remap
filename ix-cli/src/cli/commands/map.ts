@@ -207,7 +207,10 @@ export function describeEmptyCompletedMap(
   // backend cannot build a hierarchy for skips its 99 clean files, and one
   // reverted file whose content was ingested before commits as `Idempotent` —
   // giving patches === 1, idempotentPatches === 1, file_count === 0 with a
-  // graph that is perfectly intact and a 24-hour wait that changes nothing.
+  // graph that is not empty, and a 24-hour wait that changes nothing here. That
+  // graph is not intact either: the revert was never applied, so it still
+  // shows the file's content in between. The ingest reports that one itself,
+  // as `replayedChanges` (F-01).
   // A real #527 run skips nothing: the DB-reset guard clears the mtime cache
   // and the hash lookup comes back empty, so every file is re-submitted.
   if (patches > 0 && ingest.idempotentPatches >= patches && ingest.filesSkippedAsUnchanged === 0) {
