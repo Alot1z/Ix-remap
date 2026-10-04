@@ -383,6 +383,17 @@ describe("view server (/__ix/remap)", () => {
     });
   });
 
+  it("proxies only /v1 paths, after resolving dot segments", async () => {
+    await withBackend({ IX_VIEW_BACKEND_TOKEN: "tok-123" }, async (seen) => {
+      for (const path of ["/v1/../admin", "/v1/%2e%2e/admin", "/v1/%2E%2E/admin", "/v1x", "/v1.."]) {
+        expect(await rawStatus("GET", path, { host: `127.0.0.1:${port}` })).toBe(404);
+      }
+      expect(seen).toHaveLength(0);
+      expect(await rawStatus("GET", "/v1/a/../health?x=1", { host: `127.0.0.1:${port}` })).toBe(200);
+      expect(seen).toHaveLength(1);
+    });
+  });
+
   it("forwards no Authorization at all while there is no token", async () => {
     await withBackend({ IX_VIEW_BACKEND_TOKEN: "" }, async (seen) => {
       const res = await fetch(`http://127.0.0.1:${port}/v1/health`, { headers: { authorization: "Bearer caller" } });

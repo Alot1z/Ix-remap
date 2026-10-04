@@ -413,7 +413,18 @@ const server = http.createServer((req, res) => {
 
   // Proxy /v1 requests to backend
   if (pathname.startsWith("/v1")) {
-    const backendUrl = BACKEND + pathname + (parsed.search || "");
+    // The path the backend will actually be asked for: the URL API resolves
+    // dot segments, encoded ones included, exactly as the request will. Only
+    // /v1 is proxied, so /v1/../x or /v1x never reaches another backend route
+    // carrying this server's token.
+    const target = new URL(pathname + (parsed.search || ""), BACKEND);
+    if (target.pathname !== "/v1" && !target.pathname.startsWith("/v1/")) {
+      req.resume();
+      res.writeHead(404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: false, error: "not found: " + pathname }));
+      return;
+    }
+    const backendUrl = target.href;
     const proxyHeaders = { ...req.headers, host: "localhost:8090" };
     // The backend authenticates this server, not the browser: never forward a
     // caller's own credentials or origin, and add the token when there is one.
