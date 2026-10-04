@@ -19,7 +19,7 @@ import { ixHome } from "./ix-home.js";
 // guarantee holds no matter what launches it (hook, watcher, manual, CI). The
 // first invocation for a workspace takes the lock; any concurrent invocation
 // sees a live holder and exits quietly (coalesces) instead of piling on. A
-// stale lock (dead holder, or older than IX_MAP_LOCK_MAX_MS) is stolen so a
+// stale lock (dead holder, or untouched for IX_MAP_LOCK_MAX_MS) is stolen so a
 // crashed map never wedges future runs.
 //
 // Keeping the authority in the CLI (rather than only in a shell-hook lock)
@@ -139,9 +139,10 @@ function isStale(meta: LockMeta | null, path?: string): boolean {
  * Returns a LockHandle on success, or null if another live invocation already
  * holds it — in which case the caller should coalesce (skip its own run).
  *
- * Acquisition is atomic via O_CREAT|O_EXCL ('wx'); the classic create-exclusive
- * lockfile. On contention we inspect the holder: a stale lock is removed and
- * acquisition retried once.
+ * Acquisition is atomic via link(): the meta is written to a private file and
+ * hard-linked into place, which fails if the lock exists, like O_EXCL. On
+ * contention we inspect the holder: a stale lock is removed and acquisition
+ * retried once.
  */
 export function acquireMapLock(workspaceRoot: string, label: string): LockHandle | null {
   return acquireLockAt(lockPathFor(workspaceRoot), label);
