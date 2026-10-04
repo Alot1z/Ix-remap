@@ -305,6 +305,8 @@ jobs:
             || { echo "::error::cli/dist/cli/main.js missing from staging — the tarball would contain no CLI at all"; exit 1; }
           test -f "$STAGING/cli/package.json" && test -d "$STAGING/cli/node_modules" \
             || { echo "::error::cli/package.json or cli/node_modules missing from staging — the CLI would not start"; exit 1; }
+          test -f "$STAGING/cli/dist/docker-compose.standalone.yml" \
+            || { echo "::error::cli/dist/docker-compose.standalone.yml missing from staging — ix docker start would have no backend compose file"; exit 1; }
           cp -rL ix-cli/scripts/render-logo.mjs ix-cli/scripts/render-logo.d.mts "$STAGING/cli/scripts/"
           cp -rL ix-cli/assets/logo.png "$STAGING/cli/assets/"
           test -f "$STAGING/cli/scripts/render-logo.mjs" && test -f "$STAGING/cli/assets/logo.png" \
