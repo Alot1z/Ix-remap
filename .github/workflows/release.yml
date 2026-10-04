@@ -187,10 +187,15 @@ jobs:
           else
             TAG="${INPUT_TAG:-$REF_NAME}"
             echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-            # What is built must be exactly the tag that names it.
-            AT=$(git describe --exact-match --tags HEAD 2>/dev/null || true)
-            if [ "$AT" != "$TAG" ]; then
-              echo "::error::HEAD is ${AT:-not at a tag}, not $TAG. Refusing to build $TAG from another commit."
+            # What is built must be exactly the tag that names it. Any of the
+            # tags on HEAD, not `git describe --exact-match`: describe names one
+            # tag per commit, so a commit carrying several (v0.10.0-rc.1 to
+            # rc.4 share one) would refuse every tag on it but that one.
+            # Captured first, not piped into `grep -q`: under pipefail an early
+            # grep exit can fail the pipeline on git's SIGPIPE.
+            AT=$(git tag --points-at HEAD)
+            if ! grep -Fxq -- "$TAG" <<<"$AT"; then
+              echo "::error::HEAD $(git rev-parse --short HEAD) is not tagged $TAG (its tags: ${AT:-none}). Refusing to build $TAG from another commit."
               exit 1
             fi
           fi
