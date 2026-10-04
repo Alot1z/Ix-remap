@@ -81,3 +81,26 @@ describe("help coverage against the registrations", () => {
     expect(visible.filter((name) => !listed(name))).toEqual([]);
   });
 });
+
+describe("help argument shapes match the registrations", () => {
+  it("marks an argument optional in the help exactly when the command does", () => {
+    const program = new Command();
+    registerOssCommands(program);
+    const wrong: string[] = [];
+    for (const line of buildHelpText().split("\n")) {
+      const match = /^\s{2}(\S+)((?:\s+[<[][^\s>\]]+[>\]])*)/.exec(line);
+      if (!match) continue;
+      const command = program.commands.find((c) => c.name() === match[1]);
+      // Commands with subcommands show the subcommand in the slot (`docker <action>`).
+      if (!command || command.commands.length > 0) continue;
+      const shown = match[2].trim().split(/\s+/).filter(Boolean);
+      shown.forEach((token, i) => {
+        const registered = command.registeredArguments[i];
+        if (!registered || registered.required !== token.startsWith("<")) {
+          wrong.push(`${match[1]} ${token}`);
+        }
+      });
+    }
+    expect(wrong).toEqual([]);
+  });
+});
