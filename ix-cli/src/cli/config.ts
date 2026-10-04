@@ -442,7 +442,8 @@ export function resolveWorkspaceRoot(explicitRoot?: string, cwd = process.cwd())
  */
 export function gitRootFor(cwd: string): string | undefined {
   try {
-    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    // -c: never run a core.fsmonitor command the repository's config names.
+    const out = execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],

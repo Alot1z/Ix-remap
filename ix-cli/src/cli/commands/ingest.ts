@@ -325,7 +325,9 @@ export function tryGitLsFiles(
   try {
     const result = spawnSync(
       'git',
-      ['ls-files', '--cached', '--others', '--exclude-standard'],
+      // -c: a cloned repository's own .git/config can name a core.fsmonitor
+      // command, which ls-files would run. Never let it.
+      ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'ls-files', '--cached', '--others', '--exclude-standard'],
       {
         cwd: dir,
         encoding: 'utf-8',
