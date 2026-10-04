@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, lstatSync, renameSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, lstatSync, realpathSync, renameSync, readdirSync } from "fs";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -184,6 +184,17 @@ function splitVersion(v: string): [number[], string[]] {
  * identifiers left to right, numeric ones numerically and below alphanumeric
  * ones, and a longer identifier list wins when all preceding fields are equal.
  */
+/** Is the running CLI's entry point inside a Homebrew Cellar? */
+export function homebrewInstall(entryPoint: string): boolean {
+  let real = entryPoint;
+  try {
+    real = realpathSync(entryPoint);
+  } catch {
+    // keep the path as given
+  }
+  return /[\\/]Cellar[\\/]ix[\\/]/.test(real);
+}
+
 export function isNewer(latest: string, current: string): boolean {
   const [lNums, lPre] = splitVersion(latest);
   const [cNums, cPre] = splitVersion(current);
@@ -1451,7 +1462,11 @@ export function registerUpgradeCommand(program: Command): void {
         outstanding.push(`CLI ${current} → ${latest}`);
         console.log(`New CLI version available: ${chalk.green(latest)}`);
 
-        if (!opts.check) {
+        if (!opts.check && homebrewInstall(process.argv[1] ?? "")) {
+          // Unpacking a release over a Homebrew keg would replace files brew
+          // owns, and the next `brew upgrade` would undo it. Brew updates it.
+          console.log(`  This ix was installed with Homebrew. Update it with: ${chalk.cyan("brew upgrade ix")}`);
+        } else if (!opts.check) {
           const platform = detectPlatform();
           const isWindows = platform.startsWith("windows");
           const archiveName = isWindows
