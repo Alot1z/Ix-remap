@@ -9,6 +9,7 @@ import { homedir } from "os";
 import chalk from "chalk";
 import { BACKEND_IMAGE, checkBackendImage, isNonStandardBackend } from "../backend-status.js";
 import { canRenderProgress } from "../stderr.js";
+import { ChecksumError, attestationCommand, downloadVerified, verifyAttestation } from "../integrity.js";
 import type { IxClient } from "../../client/api.js";
 import {
   BACKEND_VERSION_FILE,
@@ -1477,12 +1478,16 @@ export function registerUpgradeCommand(program: Command): void {
           console.log(`Downloading ix ${latest} for ${platform}...`);
 
           try {
-            execFileSync(
-              "curl",
-              ["-fsSL", "--progress-bar", url, "-o", tmpFile],
-              { stdio: ["ignore", "inherit", "inherit"], timeout: 300000 }
-            );
-          } catch {
+            // Checked against the release's published .sha256 before anything
+            // extracts or runs it; a missing checksum fails closed.
+            downloadVerified(url, tmpFile, { timeoutMs: 300000, progress: true });
+          } catch (err) {
+            if (err instanceof ChecksumError) {
+              console.error(`[error] ${err.message}`);
+              console.error("  The download was not installed. Your existing install is untouched.");
+              rmQuiet(tmpDirRaw);
+              process.exit(1);
+            }
             console.error(`[error] Failed to download ${url}`);
             console.error("  You can also upgrade manually:");
             console.error(
@@ -1494,6 +1499,20 @@ export function registerUpgradeCommand(program: Command): void {
             // replace the actionable message above with a raw EPERM.
             rmQuiet(tmpDirRaw);
             process.exit(1);
+          }
+
+          // Provenance, when the GitHub CLI is there to check it. Reported, not
+          // enforced: the checksum above is the gate (see verifyAttestation).
+          const attestation = verifyAttestation(tmpFile, `${GITHUB_ORG}/${GITHUB_REPO}`);
+          if (attestation.status === "verified") {
+            console.log("[ok] Checksum and build provenance verified");
+          } else {
+            console.log("[ok] Checksum verified");
+            const [ghCmd, ghArgs] = attestationCommand(archiveName, `${GITHUB_ORG}/${GITHUB_REPO}`);
+            if (attestation.status === "failed") {
+              console.error(`[!!] Build provenance could not be verified: ${attestation.detail}`);
+            }
+            console.log(chalk.dim(`  To check build provenance yourself: ${ghCmd} ${ghArgs.join(" ")}`));
           }
 
           console.log("Installing...");
@@ -1807,10 +1826,12 @@ export function registerUpgradeCommand(program: Command): void {
           const compassBackup = join(IX_HOME, `.compass-backup-${process.pid}`);
           let stage = "download";
           try {
-            execFileSync("curl", ["-fsSL", compassUrl, "-o", compassTar], {
-              stdio: ["ignore", "inherit", "inherit"],
-              timeout: 60000,
-            });
+            try {
+              downloadVerified(compassUrl, compassTar, { timeoutMs: 60000 });
+            } catch (err) {
+              if (err instanceof ChecksumError) stage = "checksum";
+              throw err;
+            }
             stage = "extract";
             installCompassBundle(compassTar, COMPASS_DIR, compassStaging, compassBackup);
             // Its own stage: a failure here is a bundle that installed fine and
