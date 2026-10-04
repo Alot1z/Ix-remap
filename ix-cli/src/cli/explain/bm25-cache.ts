@@ -83,11 +83,15 @@ export function bm25IndexPath(root: string): string {
 /**
  * HEAD and the files that differ from it, or undefined outside a checkout (or
  * on an unborn branch). `--no-optional-locks` because this runs in whatever
- * checkout the user is in, and a read must not rewrite its index file.
+ * checkout the user is in, and a read must not rewrite its index file. `-c`
+ * because `diff HEAD` reads the index, which runs a core.fsmonitor command the
+ * repository's own config names.
  */
 export function readGitState(root: string): GitState | undefined {
   try {
-    const run = (args: string[]) => execFileSync("git", ["--no-optional-locks", ...args], {
+    const run = (args: string[]) => execFileSync("git", [
+      "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args,
+    ], {
       cwd: root, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
     });
     const head = run(["rev-parse", "--verify", "-q", "HEAD"]).trim();
