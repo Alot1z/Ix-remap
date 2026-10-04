@@ -144,7 +144,10 @@ async function main() {
         }
         sc.prepare?.(co, i);
         const r = measure(base, co, sc.args(co), log);
-        if (sc.name.startsWith("map") && r.status !== 0) throw new Error(`${sc.name} failed (exit ${r.status}): ${r.stderr}`);
+        // Every command, not only the maps: a read that errors out (a renamed
+        // symbol, a crash) makes fewer requests and fewer bytes, which the
+        // budgets alone would score as an improvement.
+        if (r.status !== 0) throw new Error(`${sc.name} failed (exit ${r.status}): ${r.stderr}`);
         runs.push(r);
       }
       results[sc.name] = {
