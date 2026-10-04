@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, lstatSync, renameSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, mkdtempSync, lstatSync, realpathSync, renameSync, readdirSync } from "fs";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -168,6 +168,17 @@ function splitVersion(v: string): [number[], string[]] {
     return Number.isFinite(parsed) ? parsed : 0;
   });
   return [nums, pre ? pre.split(".") : []];
+}
+
+/** Is the running CLI's entry point inside a Homebrew Cellar? */
+export function homebrewInstall(entryPoint: string): boolean {
+  let real = entryPoint;
+  try {
+    real = realpathSync(entryPoint);
+  } catch {
+    // keep the path as given
+  }
+  return /[\\/]Cellar[\\/]ix[\\/]/.test(real);
 }
 
 /**
@@ -1444,6 +1455,9 @@ export function registerUpgradeCommand(program: Command): void {
       // is up to date` and exit 0, which is what a script or a user skimming
       // the last line believed.
       const failures: string[] = [];
+      // A Homebrew install whose CLI this run declined to touch. The closing
+      // line must not then say "[ok] ix is up to date" under the brew hint.
+      let cliLeftToBrew = false;
 
       const cliUpToDate = !isNewer(latest, current);
       if (cliUpToDate) {
@@ -1452,7 +1466,12 @@ export function registerUpgradeCommand(program: Command): void {
         outstanding.push(`CLI ${current} → ${latest}`);
         console.log(`New CLI version available: ${chalk.green(latest)}`);
 
-        if (!opts.check) {
+        if (!opts.check && homebrewInstall(process.argv[1] ?? "")) {
+          // Unpacking a release over a Homebrew keg would replace files brew
+          // owns, and the next `brew upgrade` would undo it. Brew updates it.
+          cliLeftToBrew = true;
+          console.log(`  This ix was installed with Homebrew. Update it with: ${chalk.cyan("brew upgrade ix")}`);
+        } else if (!opts.check) {
           const platform = detectPlatform();
           const isWindows = platform.startsWith("windows");
           const archiveName = isWindows
@@ -1888,16 +1907,17 @@ export function registerUpgradeCommand(program: Command): void {
 
       console.log("");
       // Two independent reasons the run may not end clean, and they cannot
-      // both apply: `backendUpgradeSkipped` requires an install run, while
-      // `closingStatus` only reports outstanding work under `--check`. The
-      // skipped-backend case is checked first because it describes work this
-      // run declined to do, which outranks work it merely found.
+      // both apply: `backendUpgradeSkipped` and `cliLeftToBrew` require an
+      // install run, while `closingStatus` only reports outstanding work under
+      // `--check`. The declined steps are checked first because they describe
+      // work this run declined to do, which outranks work it merely found.
       const closing = closingStatus(opts.check, outstanding, failures);
       if (closing.failed) {
         console.log(`[!!] ix upgrade did not complete: ${closing.summary} failed (see above)`);
         process.exitCode = 1;
-      } else if (backendUpgradeSkipped) {
-        console.log("[!!] ix upgrade finished with the backend unchanged");
+      } else if (cliLeftToBrew || backendUpgradeSkipped) {
+        if (cliLeftToBrew) console.log("[!!] ix upgrade finished with the CLI unchanged: run brew upgrade ix");
+        if (backendUpgradeSkipped) console.log("[!!] ix upgrade finished with the backend unchanged");
       } else if (closing.upToDate) {
         console.log("[ok] ix is up to date");
       } else {
