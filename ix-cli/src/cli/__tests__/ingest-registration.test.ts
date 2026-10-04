@@ -70,11 +70,12 @@ afterEach(() => {
   fs.rmSync(t, { recursive: true, force: true });
 });
 
-async function run(register: (p: Command) => void, args: string[]): Promise<{ out: string; exitCode: number }> {
+async function run(register: (p: Command) => void, args: string[]): Promise<{ out: string; err: string; exitCode: number }> {
   const out: string[] = [];
+  const err: string[] = [];
   vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => { out.push(a.join(" ")); });
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { err.push(a.join(" ")); });
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => { err.push(String(chunk)); return true; });
   vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => { out.push(String(chunk)); return true; });
   vi.spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`exit ${code ?? 0}`); }) as never);
   process.exitCode = undefined;
@@ -84,13 +85,14 @@ async function run(register: (p: Command) => void, args: string[]): Promise<{ ou
   try {
     await program.parseAsync(args, { from: "user" });
     exitCode = Number(process.exitCode ?? 0);
-  } catch (err) {
-    const m = /^exit (\d+)$/.exec((err as Error).message);
+  } catch (thrown) {
+    const m = /^exit (\d+)$/.exec((thrown as Error).message);
+    if (!m) err.push((thrown as Error).message);
     exitCode = m ? Number(m[1]) : 1;
   }
   process.exitCode = undefined;
   vi.restoreAllMocks();
-  return { out: out.join("\n"), exitCode };
+  return { out: out.join("\n"), err: err.join("\n"), exitCode };
 }
 
 describe("ix ingest registers a workspace only once something was ingested", () => {
@@ -101,7 +103,11 @@ describe("ix ingest registers a workspace only once something was ingested", () 
     const first = await run(registerReadCommand, ["read", secret, "--root", ws, "--format", "json"]);
     expect(first.out).toContain("path_outside_workspace");
 
-    await run(registerIngestCommand, ["ingest", path.join(outside, "x.json")]);
+    const ingest = await run(registerIngestCommand, ["ingest", path.join(outside, "x.json")]);
+    // It got as far as the commit, which is where a registration made up
+    // front would already be on disk. (An ingest that cannot load its parser
+    // -- core-ingestion not built -- fails earlier and would prove nothing.)
+    expect(ingest.err).toContain("committed nothing");
     expect(fs.readFileSync(config, "utf8")).toBe(before);
 
     const second = await run(registerReadCommand, ["read", secret, "--root", ws, "--format", "json"]);

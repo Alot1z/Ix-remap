@@ -3762,6 +3762,15 @@ export async function ingestFiles(
 
   const elapsed = ((performance.now() - start) / 1000).toFixed(2);
 
+  // A new workspace is registered only now, and only if the backend took
+  // something: see workspaceStateFor.
+  if (registrationPending && patchesTheBackendTook > 0) {
+    ensureWorkspaceIdState(workspaceRoot);
+    if (!opts.suppressOutput && opts.format === 'text') {
+      process.stderr.write(chalk.dim(`Registered workspace "${workspaceName}" (${workspaceRoot}).\n`));
+    }
+  }
+
   // Reported before the suppressOutput return, and thrown when nothing landed.
   //
   // `ix map` passes suppressOutput unconditionally, so every commit failure
@@ -3771,12 +3780,6 @@ export async function ingestFiles(
   // left the agent believing the graph was current while `ix search` and
   // `ix impact` answered from a stale one. A wrong answer nobody can see is
   // worse than a failed command.
-  if (registrationPending && patchesTheBackendTook > 0) {
-    ensureWorkspaceIdState(workspaceRoot);
-    if (!opts.suppressOutput && opts.format === 'text') {
-      process.stderr.write(chalk.dim(`Registered workspace "${workspaceName}" (${workspaceRoot}).\n`));
-    }
-  }
   const commitReport = describeCommitOutcome(
     commitErrors,
     patchesApplied,
