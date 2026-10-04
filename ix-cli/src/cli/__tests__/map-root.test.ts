@@ -235,6 +235,40 @@ describe("nested linked worktrees", () => {
     expect(findWorkspaceForCwd(clone)?.workspace_id).toBe("ws-0");
   });
 
+  it("ingests a file in a nested worktree into the worktree, not the enclosing repo", () => {
+    const { wt } = repoWithWorktree(join(".claude", "worktrees", "i"));
+    expect(resolveIngestRoot(join(wt, "a.ts"), false)).toBe(wt);
+  });
+
+  it("treats a sibling worktree as unmapped while only the main checkout is registered", () => {
+    const { wt } = repoWithWorktree(join("..", `sibling-${Date.now()}`));
+    fixtures.push(wt);
+    expect(findWorkspaceForCwd(wt)).toBeUndefined();
+    expect(resolveMapRoot(undefined, wt)).toBe(wt);
+  });
+
+  it("keeps a real submodule, in the main checkout and in a registered worktree, in its workspace", () => {
+    const upstream = realpathSync.native(fixture());
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args], { cwd, stdio: "ignore" });
+    git(upstream, "init", "-q", "-b", "main");
+    git(upstream, "commit", "-q", "--allow-empty", "-m", "sub");
+
+    const { repo } = repoWithWorktree(join(".claude", "worktrees", "s"));
+    git(repo, "submodule", "add", "-q", upstream, join("libs", "sub"));
+    git(repo, "commit", "-q", "-m", "submodule");
+    // A worktree created after the submodule, so it checks the submodule out
+    // too. Its .git file points into .git/worktrees/<wt>/modules/, which is
+    // still a submodule and not a worktree boundary.
+    const wt = join(repo, ".claude", "worktrees", "t");
+    git(repo, "worktree", "add", "-q", "-b", "with-sub", wt);
+    git(wt, "submodule", "update", "--init", "-q");
+    register(repo, realpathSync.native(wt));
+
+    expect(findWorkspaceForCwd(join(repo, "libs", "sub"))?.workspace_id).toBe("ws-0");
+    expect(findWorkspaceForCwd(join(wt, "libs", "sub"))?.workspace_id).toBe("ws-1");
+  });
+
   it("still answers for the main checkout and its subdirectories", () => {
     const { repo } = repoWithWorktree(join(".claude", "worktrees", "w"));
     expect(findWorkspaceForCwd(repo)?.workspace_id).toBe("ws-0");

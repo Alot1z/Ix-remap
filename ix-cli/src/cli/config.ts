@@ -328,16 +328,20 @@ export function isReadablePath(candidate: string, explicitRoot?: string): boolea
 
 /**
  * Is `dir` the root of a linked git worktree (`git worktree add`)? Its `.git`
- * is a file pointing into the main repository's `.git/worktrees/<name>`. A
- * submodule's `.git` file points into `.git/modules/` instead and is not one:
- * a submodule is part of the repository that contains it.
+ * is a file pointing at the main repository's `.git/worktrees/<name>`, a git
+ * directory that holds a `commondir` file -- git's own mark of a linked
+ * worktree. A submodule's `.git` file points at a full git directory with no
+ * `commondir`, even when it lives under `.git/worktrees/<wt>/modules/` (a
+ * submodule checked out in a worktree), and is not one: a submodule is part
+ * of the repository that contains it.
  */
 export function isLinkedWorktreeRoot(dir: string): boolean {
   try {
     // Read, not stat-then-read: a .git directory throws EISDIR here, which is
     // the "not a linked worktree" answer anyway.
     const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(join(dir, ".git"), "utf-8"))?.[1];
-    return !!gitdir && /[\\/]worktrees[\\/]/.test(gitdir);
+    // Relative when written with worktree.useRelativePaths (git 2.48+).
+    return !!gitdir && existsSync(join(resolvePath(dir, gitdir), "commondir"));
   } catch {
     return false;
   }
