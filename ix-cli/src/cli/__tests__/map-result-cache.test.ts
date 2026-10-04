@@ -25,7 +25,8 @@ import {
   saveCachedMap,
   type MapCacheSlot,
 } from "../map-result-cache.js";
-import { lockPathForTest } from "../single-flight.js";
+import { acquireMapLock, lockPathForTest, requestMapRerun, takeMapRerun } from "../single-flight.js";
+import { createHash } from "node:crypto";
 
 /**
  * `ix map` reuses its last `/v1/map` response when a run ingested nothing and
@@ -51,6 +52,8 @@ class FakeBackend {
   revisionRecord = false;
   release = "1.0.30";
   systemId: string | null = null;
+  /** Run on the next commit request, then cleared. */
+  onCommit: (() => void) | undefined;
   readonly hashes = new Map<string, { workspaceId: string | null; uri: string; hash: string }>();
   private readonly patches = new Map<string, unknown[]>();
   private server: Server | undefined;
@@ -88,6 +91,10 @@ class FakeBackend {
     };
 
     if (path === "/v1/patches/bulk" || path === "/v1/patch") {
+      // Fired once, mid-run: what happens in the world while a map commits.
+      const hook = this.onCommit;
+      this.onCommit = undefined;
+      hook?.();
       type SentPatch = { patchId?: string; source?: { uri?: string; sourceHash?: string; workspaceId?: string }; intent?: string; ops?: unknown[] };
       let patches: SentPatch[] = [];
       try {
@@ -234,6 +241,45 @@ describe("ix map reuses an unchanged map", () => {
       home = "";
       repo = "";
     }
+  });
+
+  describe("a map that coalesces is not lost", () => {
+    const hashOf = (text: string) => createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+    const stored = (uri: string) => [...backend.hashes.values()].find(row => row.uri === uri)?.hash;
+
+    it("a coalescing map leaves a rerun request for the holder", async () => {
+      const holder = acquireMapLock(repo, "holder")!;
+      try {
+        await map("--silent");
+        expect(takeMapRerun(repo)).toBe(true);
+      } finally {
+        holder.release();
+      }
+    });
+
+    it("the holder runs once more for an edit made while it was committing", async () => {
+      await map("--silent");
+      writeFileSync(join(repo, "src", "m1.ts"), "export const changed = 1;\n", "utf8");
+      const late = "export const late = 2;\n";
+      // Mid-commit: an edit lands after this run read the tree, and the
+      // editor's own `ix map` coalesces.
+      backend.onCommit = () => {
+        writeFileSync(join(repo, "src", "m2.ts"), late, "utf8");
+        requestMapRerun(repo);
+      };
+
+      await map("--silent");
+
+      expect(stored("src/m2.ts"), "the late edit reached the backend in this invocation").toBe(hashOf(late));
+      expect(takeMapRerun(repo), "the request was consumed").toBe(false);
+    });
+
+    it("a request left before a map starts is satisfied by that map, not rerun", async () => {
+      requestMapRerun(repo);
+      await map("--silent");
+      const commits = backend.requests.filter(p => p === "/v1/patches/bulk" || p === "/v1/patch").length;
+      expect(commits, "one ingest, not two").toBe(1);
+    });
   });
 
   it("makes no map request for an unchanged repo, and prints the same thing", async () => {
