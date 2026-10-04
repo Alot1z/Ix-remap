@@ -459,8 +459,8 @@ export function stampDisagreesWithPull(trackedVersion: string, pulled: string): 
  *
  * The premise of stamping after a pull is that `--pull always` fetched the
  * current release — which holds only if the file being started actually tracks
- * `:latest`. `ix docker start` falls back to any `docker-compose.yml` in the
- * working directory, so it may well not: a compose that pins `:1.0.13`, pins a
+ * `:latest`. The user may have edited ~/.ix/backend/docker-compose.yml, so it
+ * may well not: a compose that pins `:1.0.13`, pins a
  * digest, or points at a locally-built image pulls something that is not the
  * latest release, and stamping it would put a version in the file that the
  * running container does not have.
