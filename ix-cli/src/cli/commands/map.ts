@@ -913,7 +913,6 @@ async function runMapCommand(pathArg: string | undefined, opts: { format: string
   // cloud ingestion doesn't require a local Ix backend.
   const ingestStart = performance.now();
   let localIngest: IngestFilesSummary | undefined;
-  held.local = !cloudReady;
   if (cloudReady) {
     const runner = getRemoteRunner()!; // isCloudReady guarantees non-null
     try {
@@ -954,6 +953,9 @@ async function runMapCommand(pathArg: string | undefined, opts: { format: string
       process.exitCode = 1;
       return;
     }
+    // Only a local ingest that got through earns the rerun: after a failed
+    // one the backend was just seen to be down or out of time.
+    held.local = true;
   }
   const ingestMs = Math.round(performance.now() - ingestStart);
 
@@ -1141,6 +1143,9 @@ async function rerunIfRequested(root: string, local: boolean, opts: { silent?: b
       printSummary: false,
       suppressOutput: true,
       mapMode: mapModeForIngest(),
+      // Bounded like the run it follows: its own budget, since the first
+      // run's may be all but spent.
+      deadlineSignal: mapDeadlineSignal(),
     });
   } catch (err: any) {
     if (opts.silent !== true && opts.format !== "json" && opts.format !== "llm") {
