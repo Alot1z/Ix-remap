@@ -65,9 +65,23 @@ async function reset(base) {
   if (!res.ok) throw new Error(`POST /v1/reset: ${res.status}`);
 }
 
+/**
+ * Where every copy of the fixture is made: the same absolute path on every run
+ * and every machine whose temp directory is /tmp, CI included.
+ *
+ * Node ids are hashed from the workspace's absolute path (workspaceIdForPath),
+ * and context's fan-out follows the backend's order of a node's neighbours,
+ * which follows those ids. A fresh random directory per run therefore drew a
+ * different set of walk seeds each time, and `context` response bytes moved
+ * by tens of percent between identical runs of the same commit.
+ */
+const CHECKOUT_ROOT = join(tmpdir(), "ix-perf-gate-checkout");
+
 /** A fresh copy of the fixture (same directory name) and an empty IX_HOME. */
-function checkout(fixture, scratch) {
-  const root = mkdtempSync(join(scratch, "run-"));
+function checkout(fixture) {
+  const root = CHECKOUT_ROOT;
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
   const dir = join(root, basename(fixture));
   cpSync(fixture, dir, { recursive: true });
   const ixHome = join(root, "ix-home");
@@ -140,7 +154,7 @@ async function main() {
         let co = co0;
         if (sc.fresh) {
           await reset(base);
-          co = checkout(fixture, scratch);
+          co = checkout(fixture);
         }
         sc.prepare?.(co, i);
         const r = measure(base, co, sc.args(co), log);
@@ -162,13 +176,14 @@ async function main() {
 
     // Then one mapped copy shared by every other scenario, in order.
     await reset(base);
-    const shared = checkout(fixture, scratch);
+    const shared = checkout(fixture);
     const first = measure(base, shared, ["map", shared.dir, "--silent"], log);
     if (first.status !== 0) throw new Error(`initial map failed (exit ${first.status}): ${first.stderr}`);
     for (const sc of all.filter((s) => !s.fresh)) await measureRuns(sc, shared);
   } finally {
     await reset(base).catch(() => {});
     rmSync(scratch, { recursive: true, force: true });
+    rmSync(CHECKOUT_ROOT, { recursive: true, force: true });
   }
 
   if (opts.out) writeFileSync(opts.out, JSON.stringify(results, null, 2) + "\n");

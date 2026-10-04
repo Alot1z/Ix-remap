@@ -22,14 +22,14 @@
       "wallMs": 14162
     },
     "context IxClient": {
-      "requests": 110,
-      "bytes": 5630913,
+      "requests": 106,
+      "bytes": 6221598,
       "wallMs": 2214,
       "tolerance": 1.25
     },
     "context --from-issue": {
-      "requests": 115,
-      "bytes": 2770336,
+      "requests": 118,
+      "bytes": 2959562,
       "wallMs": 1356,
       "tolerance": 1.25
     },

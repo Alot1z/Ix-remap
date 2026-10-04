@@ -143,6 +143,13 @@ makes a command cheaper should lower its budget in the same PR (`--update`,
 then commit the file), so the gain can't be lost again unnoticed. In CI it is a
 step of job `e2e`, and its results are uploaded as `perf-results`.
 
+Every copy of the fixture is made at one fixed path
+(`$TMPDIR/ix-perf-gate-checkout/<fixture name>`). Node ids are hashed from the
+workspace's absolute path, and `context` picks its walk seeds in the backend's
+neighbour order, which follows those ids: from a random directory per run, its
+response bytes moved by tens of percent between runs of the same commit. Run
+one gate at a time per machine.
+
 ## Fixtures
 
 `fixtures/polyglot/` has 23 files: Python with cross-file calls (`app/`),
