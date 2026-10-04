@@ -50,7 +50,7 @@ services:
   memory-layer:
     # Literal, so Dependabot can propose bumps. Set IX_E2E_BACKEND_IMAGE to run
     # another image (stack.mjs then adds compose.image-override.yml).
-    image: ghcr.io/ix-infrastructure/ix-memory-layer:1.0.31@sha256:7f972fb084d9667ef1b7cd7e7c40b24aad76fb4cb38d1cc07a0319444c0ab979
+    image: ghcr.io/ix-infrastructure/ix-memory-layer:1.0.32@sha256:4923d043a31d6dac5edae4ef55b05367dcf6575652a421c4c6b5e83bcebf92c9
     networks: [backend]
     ports:
       - "127.0.0.1:${IX_E2E_BACKEND_PORT:-8290}:8090"
