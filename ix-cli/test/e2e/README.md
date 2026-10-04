@@ -36,13 +36,18 @@ endpoint that is not loopback or that uses a port of a stack with real data:
 | `IX_E2E_PROJECT` | `ix-e2e` | compose project name |
 | `IX_E2E_BACKEND_PORT` | `8290` | compose and harness: host port of the memory-layer |
 | `IX_E2E_ARANGO_PORT` | `8729` | compose and harness: host port of ArangoDB |
-| `IX_E2E_BACKEND_IMAGE` | `ghcr.io/ix-infrastructure/ix-memory-layer:1.0.31@sha256:7f972fb0…` | compose: the backend under test |
+| `IX_E2E_BACKEND_IMAGE` | the pin in `compose.e2e.yml` (1.0.31 by digest) | `stack.mjs`: run this image instead |
 | `IX_E2E_ENDPOINT` | `http://127.0.0.1:$IX_E2E_BACKEND_PORT` | harness: backend URL, overrides the port |
 | `IX_E2E_ARANGO_URL` | `http://127.0.0.1:$IX_E2E_ARANGO_PORT` | harness and `graph-sig.mjs`: ArangoDB URL |
 | `IX_E2E_DIFF_DIR` | unset | harness: write every graph difference to `<dir>/<scenario>.txt` |
 | `IX_TOKEN` | unset | harness: sent as `Authorization: Bearer` on the reset call |
 
 Set the same `IX_E2E_*` values for `e2e:up`, `test:e2e` and `e2e:down`.
+
+`e2e:up` and `e2e:down` run `stack.mjs`, which calls `docker compose` on
+`compose.e2e.yml` and adds `compose.image-override.yml` when
+`IX_E2E_BACKEND_IMAGE` is set. The pin itself is a literal line so Dependabot
+can propose bumps (`.github/dependabot.yml`, ecosystem `docker-compose`).
 
 ### Several stacks at once
 
@@ -107,6 +112,14 @@ removes its own id from the title and the list. Any other error, such as a
 crashed `ix map` or an unreachable database, fails the run either way.
 
 To see what a marked scenario still gets wrong, set `IX_E2E_DIFF_DIR`.
+
+## In CI
+
+Job `e2e` in `.github/workflows/ci.yml` runs the scenarios on every PR after
+the smoke test, against the pinned image on the default ports, and is part of
+`CI Passed`. On failure it uploads the graph diffs (`e2e-graph-diffs`) and both
+stacks' logs. A backend fix reaches this job only once its image is released
+and the pin is moved to it, normally by the Dependabot PR.
 
 ## Fixtures
 
