@@ -324,8 +324,11 @@ export interface InProcessRunnerOptions {
  * process. In a server that never exits they are leaks, and each of them makes
  * the next tool call answer from something stale rather than fail loudly.
  */
-function invalidateAfter(args: string[]): void {
-  if (SCOPE_CHANGING_COMMANDS.has(args[0] ?? "")) resetReadScope();
+function invalidateAfter(args: string[], failed = false): void {
+  // A failed read is often "no workspace here"; whatever the user does next
+  // (map, cd, register) should be looked up fresh rather than answered from
+  // the scope that just failed.
+  if (failed || SCOPE_CHANGING_COMMANDS.has(args[0] ?? "")) resetReadScope();
 }
 
 /**
@@ -350,7 +353,7 @@ function releaseLocksOf(run: ActiveRun): void {
 /**
  * Replace the CLI's fatal error handlers for the lifetime of the server.
  *
- * `main.ts` installs `unhandledRejection`/`uncaughtException` handlers whose
+ * `run-cli.ts` installs `unhandledRejection`/`uncaughtException` handlers whose
  * every path ends in `process.exit(1)`. That is right for one command in one
  * process and fatal for a server: a stray rejection from any command's
  * fire-and-forget work would either exit outright, or — once the in-process
@@ -450,7 +453,7 @@ async function executeInProcess(
     activeRun = null;
 
     if (commandSettled) {
-      invalidateAfter(args);
+      invalidateAfter(args, failure !== null || (commandExitCode !== undefined && commandExitCode !== 0));
       releaseLocksOf(run);
     } else {
       liveOrphans.add(finished);

@@ -2,7 +2,7 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
 // The entry point, kept to what must happen before the CLI's own modules load.
-// Static imports are evaluated before a module's body runs, so the two steps
+// Static imports are evaluated before a module's body runs, so the steps
 // below could not live in `run-cli.ts`: by the time its first line ran, the
 // ~200 modules behind the command registry would already be loaded.
 
@@ -36,4 +36,18 @@ try {
   // A cache that cannot be opened only costs speed.
 }
 
-await import("./run-cli.js");
+// Everything but one invocation goes straight to the CLI (`run-cli.ts`). The
+// exception is `ix hook claude-post-edit`, which an agent harness runs after
+// every hooked tool call -- every Bash command included -- and which almost
+// always has nothing to say. Loading the CLI's command tree costs ~140 ms
+// before a single line of it runs; the hook's "nothing changed" answer costs a
+// git call. So the hook is dispatched here, before that tree is loaded, and
+// loads the graph code itself only when there is an edit to report.
+// `--help` still goes through the CLI, where the command is documented.
+const args = process.argv.slice(2);
+if (args[0] === "hook" && args[1] === "claude-post-edit" && !args.some((a) => a === "-h" || a === "--help")) {
+  const { parseHookArgs, runHookProcess } = await import("./hook/entry.js");
+  await runHookProcess(parseHookArgs(args.slice(2)));
+} else {
+  await import("./run-cli.js");
+}

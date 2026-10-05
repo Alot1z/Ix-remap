@@ -119,6 +119,19 @@ before a command name — `ix --version`, not `ix map --version`.
 | --- | --- | --- | --- |
 | `--version` | — | off | Print the CLI version and exit (`-V`) |
 
+### `ix around <target>`
+
+Show who depends on the code at a file location: callers, importers, tests. `<target>` is `path[:line[-end]]`, relative to the workspace root or absolute.
+
+| Flag | Value | Default | Effect |
+|---|---|---|---|
+| `--limit` | `<n>` | `8` | Max rows per list (callers; users, tests and importers cap at 5) |
+| `--budget` | `<tokens>` | `300` | Token budget for text/llm output (~4 chars a token); rows are cut to fit, totals are kept. json is not cut |
+| `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
+| `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
+| `--quiet` | — | off | Drop headers, section titles and advisory hints (text: the importer rows) |
+| `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
+
 ### `ix callees <symbol>`
 
 Show methods/functions called by the given symbol (cross-file).
@@ -373,6 +386,22 @@ Show provenance chain for a file or entity.
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
 | `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
+
+### `ix hook`
+
+Entry points an agent harness runs on its own events; not typed by hand. One subcommand per (harness, event), since each has its own stdin/stdout contract.
+
+No flags.
+
+#### `ix hook claude-post-edit`
+
+Claude Code PostToolUse hook, matcher `Edit|MultiEdit|Write|Bash`. Reads the hook JSON on stdin and the working tree's `git diff -U0 HEAD`, so an edit made through a Bash script counts as much as one made with Edit or Write; each hunk's old side locates the edited symbols in HEAD's text, which is what the graph indexed. Prints `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}` naming the changed symbols' callers, importers that use them, and tests that reach them -- each symbol once per session (state per `session_id` in `IX_HOOK_STATE_DIR`, default `<IX_HOME>/hook-state`, dropped after a week unused). A call whose diff is empty or unchanged since the last report answers from one git call, without loading the CLI. Always exits 0; any failure (backend down, unmapped workspace, file not in the graph, non-code or untracked file, `IX_HOOK_TIMEOUT_MS`, default 3000, exceeded) prints nothing. Outside a git repository it falls back to the Edit/Write tool's own patch. `IX_HOOK_DEBUG=1` says why on stderr; `IX_HOOK_LOG=<file>` appends one JSON line per call with what it did (`no_changes`, `diff_unchanged`, `reported`, `silent`, `timeout`; `tool-edit` outside git) and why.
+
+| Flag | Value | Default | Effect |
+|---|---|---|---|
+| `--graph-root` | `<dir>` | — | Mapped workspace to query (default: the one containing the edited file) |
+| `--worktree` | `<dir>` | — | Checkout the agent edits (default: the git root of the hook's `cwd`); its paths map to the same relative paths in `--graph-root` |
+| `--budget` | `<tokens>` | `300` | Token budget for the context it adds (~4 chars a token) |
 
 ### `ix impact <target>`
 
