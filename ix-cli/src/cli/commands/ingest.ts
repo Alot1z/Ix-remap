@@ -4294,7 +4294,9 @@ async function ingestGitHub(opts: {
 
   const patch: GraphPatchPayload = {
     patchId: deterministicId(`github://${repo.owner}/${repo.repo}:${since}:${Date.now()}`),
-    actor: 'ix/github-ingest',
+    // IX_PATCH_ACTOR="" lets a kOS cloud backend stamp the verified principal
+    // (it 403s a non-empty actor that differs from it); see core-ingestion patchActor().
+    actor: process.env.IX_PATCH_ACTOR ?? 'ix/github-ingest',
     timestamp: new Date().toISOString(),
     source: {
       uri: `github://${repo.owner}/${repo.repo}`,
