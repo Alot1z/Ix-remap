@@ -39,6 +39,21 @@
       "where": "ix-opencode-plugin/tests/tools.test.ts",
       "match": "ix unavailable",
       "why": "prose in an expected message"
+    },
+    {
+      "where": "ix-openclaw-plugin/tests/real-ix/tools.test.mjs",
+      "match": "ix failed to spawn",
+      "why": "error message prose in a test assertion"
+    },
+    {
+      "where": "ix-openclaw-plugin/tests/real-ix/tools.test.mjs",
+      "match": "ix was killed",
+      "why": "error message prose in a test assertion"
+    },
+    {
+      "where": "ix-opencode-plugin/tests/real-ix.test.ts",
+      "match": "ix rejected an argv",
+      "why": "error message prose in a test assertion"
     }
   ]
 }
