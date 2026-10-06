@@ -67,6 +67,12 @@ again.
 - `IX_PARSE_WORKERS=N` — the most parse workers `ix map` / `ix ingest` starts
   (default 8, never more than the cores less one). Each loads every grammar,
   so a small edit starts one; raise it for a faster first map on a large machine.
+- `IX_PATCH_ACTOR=<actor>` — the `actor` on each graph patch `ix map` / `ix ingest`
+  sends (default `ix/ingestion`; GitHub ingest uses `ix/github-ingest`). Set it
+  empty (`IX_PATCH_ACTOR=`) for a backend that authenticates writers and stamps
+  the verified principal itself; such a backend answers 403 `body actor ...
+  conflicts with verified principal` to a non-empty actor that differs from it.
+  Any other value is sent as the actor.
 
 ## Harness presence (hermetic reproduction)
 
