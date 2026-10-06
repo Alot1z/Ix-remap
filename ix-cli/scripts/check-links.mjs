@@ -17,7 +17,20 @@
 //                                without a browser)
 //   network failure              warning (flaky CI network; not a fact)
 //
-// Skipped: localhost/127.0.0.1/0.0.0.0 (dev servers), mailto:, #anchors.
+// Skipped: localhost/127.0.0.1/0.0.0.0 (dev servers), mailto:. Anchors are
+// checked too: a #fragment must match a heading slug on the target page,
+// using GitHub-style slugs — the same ones GitHub and Starlight render.
+//
+// Two surfaces, one pass. Files under docs-site/src/content/docs/ render as
+// site routes, so a root-relative target there is checked against the route
+// space — the tracked content tree plus the pages sync-reference.mjs
+// generates (declared in docs-site/.gitignore) and the api/endpoints/* pages
+// starlight-openapi generates from docs/api/openapi.yaml. Everywhere else a
+// root-relative target is checked against the repo root, which is where
+// GitHub resolves it. `.mdx` files are scanned like `.md`: the docs-site
+// pages are MDX, and their markdown links and component href attributes were
+// invisible to this gate while the filter was `.md` only.
+//
 // Fenced code blocks are scanned like prose: install instructions and
 // documented endpoints live in fences (docs/prerequisites.md carries the
 // egress allowlist entirely inside one), so dropping them hid exactly the
@@ -30,6 +43,7 @@
 // that no longer appears in any scanned file is itself an ERROR — a stale
 // allowlist must not rot silently.
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -72,9 +86,10 @@ function extractUrls(text) {
   return [...out];
 }
 
-// Relative link targets, in the three forms this repo's markdown uses:
-// `[text](path)`, `[ref]: path`, and HTML attributes — `<img src="path">`,
-// `<a href="path">`.
+// Link targets in the three forms this repo's markdown uses: `[text](path)`,
+// `[ref]: path`, and HTML attributes — `<img src="path">`, `<a href="path">`.
+// Root-relative targets are kept: they are site routes in docs content and
+// repo-root paths everywhere else, and both are checked (see checkReference).
 //
 // The HTML form is not a nicety. A README opens with a centred `<p>` block
 // because markdown cannot centre an image, so every banner, logo and demo in
@@ -85,18 +100,20 @@ function extractUrls(text) {
 // wherever it appears — so this closes the relative half only.
 function extractRelativeTargets(text) {
   const targets = [];
-  const take = (raw) => {
+  const take = (raw, image = false) => {
     const t = raw.trim();
-    if (isExternal(t) || t.startsWith('#')) return;
-    targets.push(t);
+    if (isExternal(t)) return;
+    targets.push({ target: t, image });
   };
-  for (const m of text.matchAll(/\]\(([^)]+)\)/g)) take(m[1]);
+  for (const m of text.matchAll(/(!?)\[[^\]]*\]\(([^)]+)\)/g)) take(m[2], m[1] === '!');
   for (const m of text.matchAll(/^\[[^\]]*\]:\s*(\S+)/gm)) take(m[1].replace(/^<|>$/g, ''));
-  for (const m of text.matchAll(/<[a-zA-Z][^>]*?\s(?:src|href)\s*=\s*["']([^"']+)["']/g)) take(m[1]);
+  for (const m of text.matchAll(/<[a-zA-Z][^>]*?\s(src|href)\s*=\s*["']([^"']+)["']/g)) take(m[2], m[1] === 'src');
   return targets;
 }
 function isExternal(t) {
-  return !t || t.startsWith('//') || t.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(t);
+  // Protocol-relative (//host) and scheme URLs (https:, mailto:, …) are not
+  // filesystem targets. A single leading `/` is one, so it is not skipped.
+  return !t || t.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(t);
 }
 
 async function probe(url) {
@@ -115,7 +132,7 @@ async function probe(url) {
 }
 
 const allFiles = trackedFiles();
-const mdFiles = allFiles.filter((f) => f.endsWith('.md'));
+const mdFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
 const allSet = new Set(allFiles);
 const allLower = new Set(allFiles.map((f) => f.toLowerCase()));
 
@@ -130,6 +147,118 @@ function targetExists(target, file) {
   // A directory target is fine if any tracked file lives under it.
   const prefix = resolved.endsWith('/') ? resolved : resolved + '/';
   return [...allLower].some((f) => f.startsWith(prefix.toLowerCase()));
+}
+
+// ---- docs-site route space -------------------------------------------------
+// A link inside docs-site content is a site link, not a repo path. The site
+// is built from the content tree plus generated pages, so root-relative and
+// page-relative targets there resolve against routes, not files. The
+// generated-page list lives in docs-site/.gitignore (tracked), which is the
+// one place sync-reference.mjs's outputs are declared.
+const DOCS_CONTENT = 'docs-site/src/content/docs/';
+const OPENAPI_ROUTE_PREFIX = '/api/endpoints/';
+const docsRoutes = new Set();
+const docsRouteFile = new Map();
+
+function docsRouteOf(contentRel) {
+  let r = contentRel.replace(/\.(md|mdx)$/, '');
+  if (r === 'index') r = '';
+  else if (r.endsWith('/index')) r = r.slice(0, -'/index'.length);
+  return '/' + r + (r ? '/' : '');
+}
+
+for (const f of allFiles) {
+  if (!f.startsWith(DOCS_CONTENT) || !/\.(md|mdx)$/.test(f)) continue;
+  const route = docsRouteOf(f.slice(DOCS_CONTENT.length));
+  docsRoutes.add(route);
+  docsRouteFile.set(route, f);
+}
+if (allSet.has('docs-site/.gitignore')) {
+  for (const line of readFileSync('docs-site/.gitignore', 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^src\/content\/docs\/(.+)\.md$/);
+    if (m) docsRoutes.add(docsRouteOf(m[1] + '.md'));
+  }
+}
+const docsRouteExists = (route) => docsRoutes.has(route) || route.startsWith(OPENAPI_ROUTE_PREFIX);
+
+// Heading slugs for the anchor check. GitHub drops punctuation, lowercases,
+// and turns each space into a dash — `## Authentication & Scoping` becomes
+// `#authentication--scoping`, the dropped ampersand leaving two dashes — and
+// Starlight renders the same slugs. Fences are skipped so headings inside
+// examples do not count.
+function headingSlugs(text) {
+  const slugs = new Set();
+  let fenced = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (!m) continue;
+    const slug = m[1].replace(/[*_`]/g, '').toLowerCase()
+      .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-');
+    if (slug) slugs.add(slug);
+  }
+  return slugs;
+}
+
+// Returns an error string for a reference that cannot resolve, or null.
+function checkReference(raw, image, file, text) {
+  const hashAt = raw.indexOf('#');
+  const pathPart = hashAt === -1 ? raw : raw.slice(0, hashAt);
+  const frag = hashAt === -1 ? null : raw.slice(hashAt + 1);
+
+  // A pure fragment is an anchor within this page.
+  if (!pathPart) {
+    if (!frag) return null;
+    return headingSlugs(text).has(frag) ? null : `${raw} (anchor, in ${file})`;
+  }
+
+  if (file.startsWith(DOCS_CONTENT) && !image) {
+    // Site surface: root-relative is a site route, anything else resolves
+    // against the page's route directory.
+    const base = docsRouteOf(file.slice(DOCS_CONTENT.length)).replace(/^\//, '').replace(/\/$/, '');
+    let route;
+    try {
+      route = pathPart.startsWith('/')
+        ? pathPart
+        : '/' + path.posix.normalize(path.posix.join(base, decodeURIComponent(pathPart)));
+    } catch { return null; } // malformed escape — leave to a parser
+    route = route.replace(/\/+$/, '') || '/';
+    if (route !== '/') route += '/';
+    if (!docsRouteExists(route)) return `${raw} (docs-site route, in ${file})`;
+    if (frag) {
+      const targetFile = docsRouteFile.get(route);
+      // Generated routes have no committed file here; their fragments belong
+      // to the source page sync-reference.mjs copies from.
+      if (targetFile && !headingSlugs(readFileSync(targetFile, 'utf8')).has(frag)) {
+        return `${raw} (anchor, in ${file})`;
+      }
+    }
+    return null;
+  }
+
+  // Repo surface (and images, which resolve against the file on both
+  // surfaces). A leading `/` resolves at the repo root, where GitHub sends it.
+  const rootRel = pathPart.startsWith('/');
+  const target = rootRel ? pathPart.slice(1) : pathPart;
+  if (!targetExists(target, rootRel ? '' : file)) {
+    return `${raw} (relative, in ${file})`;
+  }
+  if (frag) {
+    let resolved = null;
+    if (rootRel) {
+      resolved = allSet.has(target) ? target : allLower.get(target.toLowerCase()) ?? null;
+    } else {
+      try {
+        const r = path.posix.normalize(path.posix.join(path.posix.dirname(file), decodeURIComponent(target)));
+        resolved = allSet.has(r) ? r : allLower.get(r.toLowerCase()) ?? null;
+      } catch { resolved = null; }
+    }
+    if (resolved && /\.(md|mdx)$/.test(resolved) && !headingSlugs(readFileSync(resolved, 'utf8')).has(frag)) {
+      return `${raw} (anchor, in ${file})`;
+    }
+  }
+  return null;
 }
 
 const errors = [];
@@ -153,11 +282,10 @@ for (const file of mdFiles) {
     }
   }
 
-  for (const target of extractRelativeTargets(text)) {
+  for (const { target, image } of extractRelativeTargets(text)) {
     checked++;
-    if (!targetExists(target, file)) {
-      errors.push(`${target} (relative, in ${file})`);
-    }
+    const problem = checkReference(target, image, file, text);
+    if (problem) errors.push(problem);
   }
 }
 
