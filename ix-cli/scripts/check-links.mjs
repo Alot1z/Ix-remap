@@ -38,7 +38,8 @@
 // URLs that matter. Genuine illustrations that die get an allowlist entry,
 // and the stale-entry check removes it once the URL leaves the tree.
 //
-// Built-dist mode: `--dist <dir>` (opt-in) additionally crawls a BUILT
+// Built-dist mode: `--dist <dir>` (opt-in, also accepted as `--dist=<dir>`)
+// additionally crawls a BUILT
 // docs-site dist/ — the shipped output — so a route the build dropped or a
 // page the template broke is caught even when every tracked source resolves.
 // Allowlist: only links known-dead with a tracked replacement. Keys are
@@ -264,17 +265,52 @@ function slugAdder(into) {
   };
 }
 
+// Fragment targets that are not headings. `<a id="x">` and `<h2 id="x">` are
+// the obvious ones; the trap is that `\b(?:id|name)\s*=` also matches attributes
+// that are not anchors at all — `<meta name="description">`, `data-id="…"`, and a
+// form control's `name` — which quietly made `#description` a valid anchor on
+// every built page. So the attributes are read off parsed open tags, with two
+// rules:
+//
+//   * `id` counts on any element: in HTML, any element with an id is a fragment
+//     target.
+//   * `name` counts only on `<a>`. That is the legacy anchor form there, and a
+//     form field's name everywhere else — precisely the class of non-target this
+//     replaced.
+//
+// `(?<![\w-])` keeps `data-id=` and `data-name=` out: a word character or `-`
+// immediately before the attribute name means it is a different attribute. `<meta>`
+// and `<link>` describe the document rather than its content, so their ids are not
+// anchors anyone links to, and they are skipped.
+const OPEN_TAG = /<([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g;
+const ID_ATTR = /(?<![\w-])id\s*=\s*["']([^"']+)["']/g;
+const NAME_ATTR = /(?<![\w-])name\s*=\s*["']([^"']+)["']/g;
+
+function tagAnchors(text, into) {
+  for (const m of text.matchAll(OPEN_TAG)) {
+    const tag = m[1].toLowerCase();
+    if (tag === 'meta' || tag === 'link') continue;
+    for (const a of m[2].matchAll(ID_ATTR)) into.add(a[1]);
+    if (tag === 'a') for (const a of m[2].matchAll(NAME_ATTR)) into.add(a[1]);
+  }
+}
+
 function collectAnchors(text) {
   const anchors = new Set();
   const addHeading = slugAdder(anchors);
+  const body = [];
   let fenced = false;
   for (const line of text.split(/\r?\n/)) {
     if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
     if (fenced) continue;
+    body.push(line);
     const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-    if (m) { addHeading(slugifyHeading(m[1])); continue; }
-    for (const a of line.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) anchors.add(a[1]);
+    if (m) addHeading(slugifyHeading(m[1]));
   }
+  // Non-fenced text only: tags inside a fenced example do not count, the same
+  // rule the headings follow. Joined, so an anchor tag split across lines still
+  // resolves.
+  tagAnchors(body.join('\n'), anchors);
   return anchors;
 }
 
@@ -395,18 +431,32 @@ for (const [url] of ALLOW) {
 // that actually ships. `--dist <dir>` (pass it after the "Build docs site" CI
 // job) crawls a built docs-site dist/: every href/src in every .html must
 // resolve to a file inside the dist (or to a _redirects source), and every
-// #fragment must match an id or a GitHub-style heading slug on the target
-// page. Without --dist none of this runs, so the default gate is untouched.
-const argvDist = process.argv.slice(2);
-const distFlagAt = argvDist.indexOf('--dist');
-if (distFlagAt !== -1 && !argvDist[distFlagAt + 1]) {
-  console.error('usage: check-links.mjs [--dist <built-dist-dir>]');
-  process.exit(2);
+// #fragment must match a fragment-target id/name or a GitHub-style heading slug
+// on the target page. A built page too large to scan is an error, never a silent
+// skip. Without --dist none of this runs, so the default gate is untouched.
+// Flags are parsed, not searched for. `--dist=dir` used to fall through
+// `indexOf('--dist')` and be ignored without a word, so an invocation that meant
+// to crawl a build ran the default gate instead and reported green — the worst
+// possible answer, because it looks like the build was checked.
+const USAGE = 'usage: check-links.mjs [--dist <built-dist-dir>]';
+let distArg;
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i];
+  if (arg === '--dist') distArg = process.argv[++i];
+  else if (arg.startsWith('--dist=')) distArg = arg.slice('--dist='.length);
+  else { console.error(`unknown argument: ${arg}\n${USAGE}`); process.exit(2); }
+  if (!distArg) { console.error(`--dist needs a built-dist directory\n${USAGE}`); process.exit(2); }
 }
-const distArg = distFlagAt === -1 ? undefined : argvDist[distFlagAt + 1];
 if (distArg) {
-  const MAX_DIST_FILES = 5000;      // crawl bound: a runaway walk is a bug
-  const MAX_HTML_BYTES = 512 * 1024; // per-file bound for the attribute scan
+  const MAX_DIST_FILES = 5000; // crawl bound: a runaway walk is a bug
+  // Per-page bound, and an ERROR when exceeded rather than a quiet skip. Real
+  // built pages run from tens to a few hundred KB, so this sits far above any
+  // real page: exceeding it means the build is wrong, not that the page is big.
+  // It was 512 KB and a warning, which left a page over the cap with its links
+  // unread while the gate still reported green — and 512 KB is inside the range a
+  // large generated API page can reach, so this was a live false negative, not
+  // only a runaway guard.
+  const MAX_HTML_BYTES = 4 * 1024 * 1024;
   const distRoot = path.resolve(distArg);
   const distFiles = new Set(); // dist-relative posix paths of every file
   let distEntries = 0;
@@ -440,18 +490,17 @@ if (distArg) {
     }
   }
 
-  // Anchor universe of a built page: every id/name token plus GitHub-style
-  // slugs of h1–h6 text. Same helpers as the source-level check — slugifyHeading
-  // and slugAdder above — because Starlight renders those slugs as ids but a
-  // hand-written page may not, and the two surfaces must not disagree about
-  // what a heading is called.
+  // Anchor universe of a built page: every fragment-target attribute plus
+  // GitHub-style slugs of h1–h6 text. Same helpers as the source-level check —
+  // tagAnchors, slugifyHeading and slugAdder above — so the two surfaces cannot
+  // disagree about what a page exposes as an anchor.
   const distIdsCache = new Map();
   const distIdsOf = (rel) => {
     if (!distIdsCache.has(rel)) {
       const ids = new Set();
       const addHeading = slugAdder(ids);
       const html = readFileSync(path.join(distRoot, rel), 'utf8');
-      for (const m of html.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) ids.add(m[1]);
+      tagAnchors(html, ids);
       for (const m of html.matchAll(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi)) addHeading(slugifyHeading(m[2]));
       distIdsCache.set(rel, ids);
     }
@@ -463,7 +512,11 @@ if (distArg) {
     const abs = path.join(distRoot, htmlRel);
     let html;
     try { html = readFileSync(abs, 'utf8'); } catch { warnings.push(`cannot read dist file ${htmlRel}`); continue; }
-    if (Buffer.byteLength(html) > MAX_HTML_BYTES) { warnings.push(`dist file over ${MAX_HTML_BYTES} bytes, attribute scan skipped: ${htmlRel}`); continue; }
+    const htmlBytes = Buffer.byteLength(html);
+    if (htmlBytes > MAX_HTML_BYTES) {
+      errors.push(`dist page over ${MAX_HTML_BYTES} bytes (${htmlBytes}) — its links were not read, so it cannot pass as checked: ${htmlRel}`);
+      continue;
+    }
     // URL directory this page's relative links resolve against: Astro emits
     // clean routes as <dir>/index.html, whose URL is <dir>/.
     const pageDir = htmlRel === 'index.html' ? ''
