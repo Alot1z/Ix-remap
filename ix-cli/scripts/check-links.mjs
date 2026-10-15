@@ -18,8 +18,9 @@
 //   network failure              warning (flaky CI network; not a fact)
 //
 // Skipped: localhost/127.0.0.1/0.0.0.0 (dev servers), mailto:. Anchors are
-// checked too: a #fragment must match a heading slug on the target page,
-// using GitHub-style slugs — the same ones GitHub and Starlight render.
+// checked too: a #fragment must match an anchor on the target page — a
+// GitHub-style heading slug (the same ones GitHub and Starlight render,
+// duplicate suffixes included) or an explicit id/name attribute.
 //
 // Two surfaces, one pass. Files under docs-site/src/content/docs/ render as
 // site routes, so a root-relative target there is checked against the route
@@ -141,6 +142,11 @@ const allFiles = trackedFiles();
 const mdFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
 const allSet = new Set(allFiles);
 const allLower = new Set(allFiles.map((f) => f.toLowerCase()));
+// Case-insensitive resolution needs the REAL spelling back, not just a yes/no.
+// allLower answers "is there a file matching this case-insensitively?"; a caller
+// that wants the actual path must ask this Map. Asking the Set instead was a
+// live crash — `TypeError: allLower.get is not a function`.
+const lowerToActual = new Map(allFiles.map((f) => [f.toLowerCase(), f]));
 
 function targetExists(target, file) {
   let t = target.split('#')[0].split('?')[0];
@@ -187,24 +193,99 @@ if (allSet.has('docs-site/.gitignore')) {
 }
 const docsRouteExists = (route) => docsRoutes.has(route) || route.startsWith(OPENAPI_ROUTE_PREFIX);
 
+// ---- one anchor universe ---------------------------------------------------
 // Heading slugs for the anchor check. GitHub drops punctuation, lowercases,
 // and turns each space into a dash — `## Authentication & Scoping` becomes
 // `#authentication--scoping`, the dropped ampersand leaving two dashes — and
 // Starlight renders the same slugs. Fences are skipped so headings inside
 // examples do not count.
-function headingSlugs(text) {
-  const slugs = new Set();
+//
+// Every surface goes through slugifyHeading() so the source pass and the
+// built-dist pass cannot drift, and every anchor a page exposes is collected
+// here: heading slugs AND explicit id/name attributes. Three things the first
+// cut of this check got wrong, each one a false CI failure on a valid anchor:
+//
+//   * a repeated heading. GitHub suffixes duplicates per base slug, so a second
+//     `## Setup` renders as `#setup-1` — and `#setup-1` is a real anchor, not a
+//     typo.
+//   * an explicit HTML anchor. `<a id="custom-anchor"></a>` has no heading at
+//     all, so slug-matching alone could never see it.
+//   * collapsing whitespace runs. Each space is its own dash, so `A & B` is
+//     `a--b`, not `a-b`.
+//
+// stripTags is a single left-to-right scan, never a regex that deletes
+// `<[^>]+>` and hopes nothing survives it. Deleting a match can CREATE the
+// pattern it was matching — `<scr<script>ipt>` loses `<scr<script>` in one pass
+// and leaves `<script>` behind, which is exactly the
+// js/incomplete-multi-character-sanitization finding this replaced. The scan has
+// no second pass to miss and no fixed point to reach: a `<` that opens a tag
+// drops the whole region through the next `>`, nesting and overlap included. A
+// `<` that cannot open a tag (`a < b` in prose) or that never closes is literal
+// text and is kept — truncating there would silently mangle a valid slug. The
+// allowlist alphabet in slugifyHeading then admits only letters, digits,
+// whitespace, `-` and `_`, so no markup can reach a slug key even in principle.
+function stripTags(s) {
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const lt = s.indexOf('<', i);
+    if (lt === -1) { out += s.slice(i); break; }
+    const gt = s.indexOf('>', lt + 1);
+    if (gt === -1 || !/[A-Za-z/!]/.test(s[lt + 1] ?? '')) {
+      out += s.slice(i, lt + 1); // a literal `<`, not a tag opener
+      i = lt + 1;
+      continue;
+    }
+    out += s.slice(i, lt);
+    i = gt + 1;
+  }
+  return out;
+}
+
+function slugifyHeading(raw) {
+  return stripTags(raw).replace(/[*_`]/g, '').toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-');
+}
+
+// GitHub's per-page duplicate numbering: the slugs added are `setup`, `setup-1`,
+// `setup-2`, … counting only slugs this collector minted, so an unrelated
+// `id="setup"` attribute cannot demote the first `<h2>Setup</h2>` to `setup-1`.
+function slugAdder(into) {
+  const counts = new Map();
+  const seen = new Set();
+  return (base) => {
+    if (!base) return;
+    let n = counts.get(base) ?? 0;
+    let slug = n === 0 ? base : `${base}-${n}`;
+    while (seen.has(slug)) { n += 1; slug = `${base}-${n}`; }
+    counts.set(base, n + 1);
+    seen.add(slug);
+    into.add(slug);
+  };
+}
+
+function collectAnchors(text) {
+  const anchors = new Set();
+  const addHeading = slugAdder(anchors);
   let fenced = false;
   for (const line of text.split(/\r?\n/)) {
     if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
     if (fenced) continue;
     const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-    if (!m) continue;
-    const slug = m[1].replace(/[*_`]/g, '').toLowerCase()
-      .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-');
-    if (slug) slugs.add(slug);
+    if (m) { addHeading(slugifyHeading(m[1])); continue; }
+    for (const a of line.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) anchors.add(a[1]);
   }
-  return slugs;
+  return anchors;
+}
+
+// A page is parsed once and the result kept: a fragment check used to re-read
+// and re-parse the target file for every anchor on every page.
+const anchorsCache = new Map();
+function anchorsOf(file) {
+  if (!anchorsCache.has(file)) {
+    anchorsCache.set(file, collectAnchors(readFileSync(file, 'utf8')));
+  }
+  return anchorsCache.get(file);
 }
 
 // Returns an error string for a reference that cannot resolve, or null.
@@ -216,7 +297,7 @@ function checkReference(raw, image, file, text) {
   // A pure fragment is an anchor within this page.
   if (!pathPart) {
     if (!frag) return null;
-    return headingSlugs(text).has(frag) ? null : `${raw} (anchor, in ${file})`;
+    return anchorsOf(file).has(frag) ? null : `${raw} (anchor, in ${file})`;
   }
 
   if (file.startsWith(DOCS_CONTENT) && !image) {
@@ -236,7 +317,7 @@ function checkReference(raw, image, file, text) {
       const targetFile = docsRouteFile.get(route);
       // Generated routes have no committed file here; their fragments belong
       // to the source page sync-reference.mjs copies from.
-      if (targetFile && !headingSlugs(readFileSync(targetFile, 'utf8')).has(frag)) {
+      if (targetFile && !anchorsOf(targetFile).has(frag)) {
         return `${raw} (anchor, in ${file})`;
       }
     }
@@ -251,16 +332,22 @@ function checkReference(raw, image, file, text) {
     return `${raw} (relative, in ${file})`;
   }
   if (frag) {
-    let resolved = null;
+    // Only the decode can throw. Keeping the lookup outside the try is
+    // deliberate: this used to swallow every error in the block — including a
+    // `TypeError` from asking a Set for `.get()` — and the anchor check then
+    // disappeared without a word.
+    let rel = null;
     if (rootRel) {
-      resolved = allSet.has(target) ? target : allLower.get(target.toLowerCase()) ?? null;
+      rel = target;
     } else {
       try {
-        const r = path.posix.normalize(path.posix.join(path.posix.dirname(file), decodeURIComponent(target)));
-        resolved = allSet.has(r) ? r : allLower.get(r.toLowerCase()) ?? null;
-      } catch { resolved = null; }
+        rel = path.posix.normalize(path.posix.join(path.posix.dirname(file), decodeURIComponent(target)));
+      } catch { rel = null; }
     }
-    if (resolved && /\.(md|mdx)$/.test(resolved) && !headingSlugs(readFileSync(resolved, 'utf8')).has(frag)) {
+    const resolved = rel === null
+      ? null
+      : (allSet.has(rel) ? rel : lowerToActual.get(rel.toLowerCase()) ?? null);
+    if (resolved && /\.(md|mdx)$/.test(resolved) && !anchorsOf(resolved).has(frag)) {
       return `${raw} (anchor, in ${file})`;
     }
   }
@@ -276,6 +363,7 @@ for (const file of mdFiles) {
   let text;
   try { text = await readFile(file, 'utf8'); } catch { warnings.push(`cannot read ${file}`); continue; }
   allContent += text + '\n';
+  anchorsCache.set(file, collectAnchors(text)); // parse each page once
 
   for (const url of extractUrls(text)) {
     checked++;
@@ -353,20 +441,18 @@ if (distArg) {
   }
 
   // Anchor universe of a built page: every id/name token plus GitHub-style
-  // slugs of h1–h6 text — the same slug rules the source-level check applies
-  // (headingSlugs above), because Starlight renders those slugs as ids but a
-  // hand-written page may not.
+  // slugs of h1–h6 text. Same helpers as the source-level check — slugifyHeading
+  // and slugAdder above — because Starlight renders those slugs as ids but a
+  // hand-written page may not, and the two surfaces must not disagree about
+  // what a heading is called.
   const distIdsCache = new Map();
   const distIdsOf = (rel) => {
     if (!distIdsCache.has(rel)) {
       const ids = new Set();
+      const addHeading = slugAdder(ids);
       const html = readFileSync(path.join(distRoot, rel), 'utf8');
       for (const m of html.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) ids.add(m[1]);
-      for (const m of html.matchAll(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi)) {
-        const slug = m[2].replace(/<[^>]+>/g, '').replace(/[*_`]/g, '').trim()
-          .toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s+/g, '-');
-        if (slug) ids.add(slug);
-      }
+      for (const m of html.matchAll(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi)) addHeading(slugifyHeading(m[2]));
       distIdsCache.set(rel, ids);
     }
     return distIdsCache.get(rel);
