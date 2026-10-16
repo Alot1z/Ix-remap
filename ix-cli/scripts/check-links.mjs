@@ -35,18 +35,12 @@
 // Fenced code blocks are scanned like prose: install instructions and
 // documented endpoints live in fences (docs/prerequisites.md carries the
 // egress allowlist entirely inside one), so dropping them hid exactly the
-// URLs that matter. Genuine illustrations that die get an allowlist entry,
-// and the stale-entry check removes it once the URL leaves the tree.
+// URLs that matter.
 //
 // Built-dist mode: `--dist <dir>` (opt-in, also accepted as `--dist=<dir>`)
 // additionally crawls a BUILT
 // docs-site dist/ — the shipped output — so a route the build dropped or a
 // page the template broke is caught even when every tracked source resolves.
-// Allowlist: only links known-dead with a tracked replacement. Keys are
-// normalized through the same URL normalization the extractor uses, so a
-// trailing-slash variant of an allowed URL cannot false-fail. An allow entry
-// that no longer appears in any scanned file is itself an ERROR — a stale
-// allowlist must not rot silently.
 import { execFileSync } from 'node:child_process';
 import {
   readFileSync,
@@ -55,28 +49,8 @@ import {
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-// Empty, and that is the intended steady state.
-//
-// It carried two entries while #582 and #589 were open — the dead backend-repo
-// link in CONTRIBUTING.md and the dead Docs nav link in README.md. Both merged,
-// so both URLs are gone from the tree, and the stale-entry check below did
-// exactly what it exists to do: it failed this branch until the entries were
-// removed. Anything added here must name the PR that retires it, because an
-// entry that outlives its URL is itself an error.
-const ALLOW = new Map([]);
-
 const SKIP_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 const TIMEOUT_MS = 10000;
-
-// One normalization owner: both the allowlist keys and the extracted URLs go
-// through this, so `…/docs` and `…/docs/` are the same reference (GitHub
-// treats them as one page). A single trailing slash is stripped; the root
-// keeps its slash.
-const normUrl = (u) => {
-  const h = new URL(u).href;
-  return h.endsWith('/') && new URL(h).pathname !== '/' ? h.slice(0, -1) : h;
-};
-const ALLOW_NORM = new Map([...ALLOW].map(([k, reason]) => [normUrl(k), reason]));
 
 function trackedFiles() {
   return execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
@@ -142,11 +116,10 @@ async function probe(url) {
 const allFiles = trackedFiles();
 const mdFiles = allFiles.filter((f) => f.endsWith('.md') || f.endsWith('.mdx'));
 const allSet = new Set(allFiles);
-const allLower = new Set(allFiles.map((f) => f.toLowerCase()));
-// Case-insensitive resolution needs the REAL spelling back, not just a yes/no.
-// allLower answers "is there a file matching this case-insensitively?"; a caller
-// that wants the actual path must ask this Map. Asking the Set instead was a
-// live crash — `TypeError: allLower.get is not a function`.
+// One owner for case-insensitive lookup, keyed lowercase, and it answers both
+// questions: `.has()` for "does this exist" and `.get()` for the real spelling.
+// Two structures over one key space is what produced the live crash —
+// `TypeError: allLower.get is not a function` — so there is deliberately one.
 const lowerToActual = new Map(allFiles.map((f) => [f.toLowerCase(), f]));
 
 function targetExists(target, file) {
@@ -156,10 +129,10 @@ function targetExists(target, file) {
   try {
     resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), decodeURIComponent(t)));
   } catch { return true; } // malformed escape — leave to a link checker that parses
-  if (allSet.has(resolved) || allLower.has(resolved.toLowerCase())) return true;
+  if (allSet.has(resolved) || lowerToActual.has(resolved.toLowerCase())) return true;
   // A directory target is fine if any tracked file lives under it.
   const prefix = resolved.endsWith('/') ? resolved : resolved + '/';
-  return [...allLower].some((f) => f.startsWith(prefix.toLowerCase()));
+  return [...lowerToActual.keys()].some((f) => f.startsWith(prefix.toLowerCase()));
 }
 
 // ---- docs-site route space -------------------------------------------------
@@ -393,21 +366,17 @@ function checkReference(raw, image, file, text) {
 const errors = [];
 const warnings = [];
 let checked = 0;
-let allContent = '';
-
 for (const file of mdFiles) {
   let text;
   try { text = await readFile(file, 'utf8'); } catch { warnings.push(`cannot read ${file}`); continue; }
-  allContent += text + '\n';
   anchorsCache.set(file, collectAnchors(text)); // parse each page once
 
   for (const url of extractUrls(text)) {
     checked++;
     const res = await probe(url);
-    const allowed = ALLOW_NORM.has(normUrl(url));
-    if ((res.status === 404 || res.status === 410) && !allowed) {
+    if (res.status === 404 || res.status === 410) {
       errors.push(`${url} (in ${file})`);
-    } else if (res.network || (res.status >= 400 && !allowed)) {
+    } else if (res.network || res.status >= 400) {
       warnings.push(`${url} — ${res.network ? `network: ${res.error}` : `HTTP ${res.status}`} (in ${file})`);
     }
   }
@@ -416,13 +385,6 @@ for (const file of mdFiles) {
     checked++;
     const problem = checkReference(target, image, file, text);
     if (problem) errors.push(problem);
-  }
-}
-
-// Allowlist must justify itself: an entry that matches nothing is stale.
-for (const [url] of ALLOW) {
-  if (!allContent.includes(url)) {
-    errors.push(`stale allowlist entry ${url} no longer appears in any scanned file — remove it (${ALLOW.get(url)})`);
   }
 }
 
