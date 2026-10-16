@@ -272,10 +272,34 @@ function collectAnchors(text) {
   const anchors = new Set();
   const addHeading = slugAdder(anchors);
   const body = [];
-  let fenced = false;
+  // Fenced blocks, by CommonMark's rule: a block opens with a run of three or
+  // more backticks or tildes and is closed only by a run of the SAME character
+  // at least as long as the opening one, with nothing after it. Flipping a
+  // boolean on any delimiter instead treated a shorter run inside a longer one as
+  // the end of the block — and a longer fence quoting a shorter one is how docs
+  // show a fence at all — so the block state inverted and everything after it was
+  // read backwards: a real heading reported as broken (the false CI failure this
+  // check exists to avoid) while a heading-shaped line of code was accepted as an
+  // anchor. The built page is rendered by a CommonMark parser, so the source pass
+  // has to apply the same rule or the two surfaces disagree about what is code.
+  let fenceChar = null; // null = not inside a fence
+  let fenceLen = 0;
   for (const line of text.split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
-    if (fenced) continue;
+    const delims = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (fenceChar === null) {
+      // A backtick fence's info string may not contain a backtick — a line like
+      // ``` `x` ``` is prose, not the start of a block.
+      if (delims && !(delims[1][0] === '`' && delims[2].includes('`'))) {
+        fenceChar = delims[1][0];
+        fenceLen = delims[1].length;
+        continue;
+      }
+    } else if (delims && delims[1][0] === fenceChar
+      && delims[1].length >= fenceLen && delims[2].trim() === '') {
+      fenceChar = null;
+      continue;
+    }
+    if (fenceChar !== null) continue;
     body.push(line);
     const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
     if (m) addHeading(slugifyHeading(m[1]));
@@ -513,7 +537,14 @@ if (distArg) {
           : path.posix.normalize(path.posix.join(pageDir, p));
         const rel2 = joined.replace(/\/+$/, '');
         if (distFiles.has(rel2)) { hit = rel2; break; }
-        if (distFiles.has(rel2 + '/index.html')) { hit = rel2 + '/index.html'; break; }
+        // A directory target resolves to its index.html. At the dist root that is
+        // `index.html`, not `'/index.html'`: every key here comes from
+        // path.relative and carries no leading slash, so the concatenation could
+        // never match and the root's own index.html — the page a host serves for
+        // `/` — was invisible. The source surface already treats a bare `/` as the
+        // repo root, so this is the same reference, not a second policy.
+        const idxRel = rel2 === '' ? 'index.html' : rel2 + '/index.html';
+        if (distFiles.has(idxRel)) { hit = idxRel; break; }
       }
       if (hit === 'redirect') continue;
       if (!hit) { errors.push(`${raw} (dist href, in ${htmlRel}#L${line})`); continue; }
